@@ -1,0 +1,5 @@
+# Source PDFs exported from Teams (data, not code — keep out of git)
+papers_pdfs/
+
+# macOS
+.DS_Store
