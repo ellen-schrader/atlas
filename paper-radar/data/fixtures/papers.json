@@ -1,0 +1,62 @@
+[
+  {
+    "url": "https://www.nature.com/articles/s41586-023-06124-2",
+    "title": "Spatial multi-omic map of human breast tissue",
+    "authors": ["W. Kumar", "S. Nirmal", "P. Robson"],
+    "venue": "Nature",
+    "year": 2023,
+    "posted_by": "Ada Lovelace",
+    "summary": "Builds a spatial reference of the human breast integrating transcriptomics, proteomics, and imaging across normal and tumor-adjacent tissue, resolving epithelial, stromal, and immune niches.",
+    "tags": ["spatial-transcriptomics", "breast", "multi-omics", "tumor-microenvironment", "atlas"],
+    "code_url": "https://github.com/example-lab/breast-spatial-atlas",
+    "data_url": "https://data.example.org/breast-atlas"
+  },
+  {
+    "url": "https://arxiv.org/abs/2306.11207",
+    "title": "Cell-cell communication inference from spatial transcriptomics",
+    "authors": ["J. Chen", "M. Rossi", "L. Fischer"],
+    "venue": "arXiv",
+    "year": 2023,
+    "posted_by": "Alan Turing",
+    "summary": "Proposes a graph-based method to infer ligand-receptor signaling between neighboring cells in spatial data, benchmarked on breast and lung tumor sections.",
+    "tags": ["spatial-transcriptomics", "cell-communication", "graph-neural-network", "method"],
+    "code_url": "https://github.com/example-lab/spatial-ccc",
+    "data_url": null
+  },
+  {
+    "url": "https://www.cell.com/cell/fulltext/S0092-8674(22)00220-6",
+    "title": "The immune microenvironment of triple-negative breast cancer",
+    "authors": ["R. Okafor", "D. Petrov"],
+    "venue": "Cell",
+    "year": 2022,
+    "posted_by": "Ada Lovelace",
+    "summary": "Characterizes immune cell states and their spatial organization in triple-negative breast cancer, linking T-cell exclusion patterns to response to checkpoint blockade.",
+    "tags": ["breast", "immunology", "tumor-microenvironment", "TNBC", "spatial"],
+    "code_url": null,
+    "data_url": "https://data.example.org/tnbc-immune"
+  },
+  {
+    "url": "https://doi.org/10.1038/s41592-021-01264-7",
+    "title": "Squidpy: a scalable framework for spatial omics analysis",
+    "authors": ["G. Palla", "H. Spitzer", "F. Theis"],
+    "venue": "Nature Methods",
+    "year": 2022,
+    "posted_by": "Grace Hopper",
+    "summary": "Introduces a Python toolkit for storing, analyzing, and visualizing spatial single-cell data, including neighborhood enrichment and spatial statistics used widely in tumor microenvironment studies.",
+    "tags": ["spatial-transcriptomics", "software", "tooling", "python", "method"],
+    "code_url": "https://github.com/scverse/squidpy",
+    "data_url": null
+  },
+  {
+    "url": "https://www.biorxiv.org/content/10.1101/2024.02.10.579743v1",
+    "title": "Fibroblast niches shape drug response in breast tumors",
+    "authors": ["N. Haddad", "E. Moreau", "T. Yamamoto"],
+    "venue": "bioRxiv",
+    "year": 2024,
+    "posted_by": "Alan Turing",
+    "summary": "Uses spatial transcriptomics and organoid co-cultures to show that cancer-associated fibroblast niches modulate chemotherapy response in breast tumors, nominating stromal targets.",
+    "tags": ["breast", "fibroblasts", "tumor-microenvironment", "drug-response", "spatial", "preprint"],
+    "code_url": "https://github.com/example-lab/fibroblast-niches",
+    "data_url": "https://data.example.org/fibroblast-niches"
+  }
+]

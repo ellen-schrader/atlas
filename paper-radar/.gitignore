@@ -1,0 +1,31 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Ingested PDFs and generated artifacts (fixtures under data/fixtures ARE tracked)
+data/*.pdf
+data/*.index
+data/faiss.index
+data/umap.npy
+
+# Model / HF caches
+.cache/
+model_cache/
+*.pt
+
+# OS
+.DS_Store
