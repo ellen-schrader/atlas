@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* IDE-minimal palette (plan §4): cool neutrals, one restrained-blue accent,
+   dark-first with both themes first-class. */
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-2: #f4f5f7;
+  --border: #e5e7eb;
+  --fg: #1f2333;
+  --muted: #6b7280;
+  --accent: #3b6cff;
+  --accent-fg: #ffffff;
+  --danger: #dc2626;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2230;
+  --border: #2a2e37;
+  --fg: #e6e8ee;
+  --muted: #9aa0b0;
+  --accent: #6b8bff;
+  --accent-fg: #0b0e14;
+  --danger: #f87171;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
