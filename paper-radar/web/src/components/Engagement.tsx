@@ -139,14 +139,25 @@ function Comments({ paperId, teamId, userId }: Ctx) {
   const teammates = (members ?? []).filter((m) => m.user_id !== userId);
 
   async function saveEdit(id: string) {
-    const { error: err } = await supabase
+    setError(null);
+    // .select() returns the updated rows — an empty result means the write
+    // matched nothing (e.g. the comment-edit RLS policy isn't applied yet),
+    // which would otherwise fail silently.
+    const { data, error: err } = await supabase
       .from("comments")
       .update({ body: editBody.trim() })
-      .eq("id", id);
-    if (!err) {
-      setEditingId(null);
-      await qc.invalidateQueries({ queryKey: commentsKey });
+      .eq("id", id)
+      .select("id");
+    if (err) {
+      setError(err.message);
+      return;
     }
+    if (!data || data.length === 0) {
+      setError("Couldn’t save — the comment-edit permission isn’t applied. Run `supabase db push`.");
+      return;
+    }
+    setEditingId(null);
+    await qc.invalidateQueries({ queryKey: commentsKey });
   }
 
   async function submit(e: FormEvent) {
@@ -212,6 +223,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
                     Cancel
                   </Button>
                 </div>
+                {error && <p className="text-xs text-danger">{error}</p>}
               </div>
             ) : (
               <>

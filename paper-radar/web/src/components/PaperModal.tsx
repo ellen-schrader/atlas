@@ -32,7 +32,7 @@ export function PaperModalProvider({
     queryFn: async (): Promise<PaperPost | null> => {
       const { data, error } = await supabase
         .from("paper_posts")
-        .select("id, posted_at, note, posted_by, posted_by_label, papers(*)")
+        .select("id, posted_at, note, posted_by, posted_by_label, tags, papers(*)")
         .eq("team_id", teamId)
         .eq("paper_id", paperId!)
         .maybeSingle();
@@ -46,7 +46,7 @@ export function PaperModalProvider({
       {children}
       <Modal open={paperId !== null} onClose={() => setPaperId(null)}>
         {post ? (
-          <PaperDetail post={post} teamId={teamId} userId={userId} />
+          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} />
         ) : (
           <div className="p-6 text-sm text-muted">{isLoading ? "Loading…" : "Paper not available."}</div>
         )}

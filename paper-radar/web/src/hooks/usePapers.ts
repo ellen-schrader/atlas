@@ -10,7 +10,7 @@ export function usePapers(teamId: string) {
     queryFn: async (): Promise<PaperPost[]> => {
       const { data, error } = await supabase
         .from("paper_posts")
-        .select("id, posted_at, note, posted_by, posted_by_label, papers(*)")
+        .select("id, posted_at, note, posted_by, posted_by_label, tags, papers(*)")
         .eq("team_id", teamId)
         .order("posted_at", { ascending: false });
       if (error) throw error;

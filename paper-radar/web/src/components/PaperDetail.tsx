@@ -1,4 +1,8 @@
+import { type FormEvent, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
 import { PaperEngagement } from "@/components/Engagement";
+import { supabase } from "@/lib/supabase";
 import type { PaperPost } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
@@ -12,7 +16,7 @@ export function PaperDetail({
   userId: string;
 }) {
   const p = post.papers;
-  const tags = [...new Set([...p.tags, ...p.keywords])];
+  const canonical = [...new Set([...p.tags, ...p.keywords])];
   return (
     <div className="p-6">
       <h2 className="pr-8 text-base font-semibold">{p.title ?? p.url}</h2>
@@ -27,18 +31,7 @@ export function PaperDetail({
       ) : (
         <p className="mt-4 text-sm italic text-muted">No abstract available.</p>
       )}
-      {tags.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {tags.map((t) => (
-            <span
-              key={t}
-              className="rounded-full border border-border px-2 py-0.5 font-mono text-xs text-muted"
-            >
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
+      <PaperTags postId={post.id} teamId={teamId} initial={post.tags} canonical={canonical} />
       <div className="mt-5 flex flex-wrap gap-4 text-sm">
         <a href={p.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
           Paper ↗
@@ -61,6 +54,78 @@ export function PaperDetail({
       </div>
 
       <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
+    </div>
+  );
+}
+
+function PaperTags({
+  postId,
+  teamId,
+  initial,
+  canonical,
+}: {
+  postId: string;
+  teamId: string;
+  initial: string[];
+  canonical: string[];
+}) {
+  const qc = useQueryClient();
+  const [tags, setTags] = useState<string[]>(initial);
+  const [input, setInput] = useState("");
+
+  async function persist(next: string[]) {
+    setTags(next);
+    await supabase.from("paper_posts").update({ tags: next }).eq("id", postId);
+    qc.invalidateQueries({ queryKey: ["papers", teamId] });
+    qc.invalidateQueries({ queryKey: ["paper-post"] });
+  }
+
+  function add(e: FormEvent) {
+    e.preventDefault();
+    const t = input.trim().toLowerCase();
+    setInput("");
+    if (t && !tags.includes(t)) void persist([...tags, t]);
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">Tags</div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.map((t) => (
+          <span
+            key={t}
+            className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 font-mono text-xs text-accent"
+          >
+            {t}
+            <button
+              type="button"
+              aria-label={`Remove ${t}`}
+              onClick={() => void persist(tags.filter((x) => x !== t))}
+              className="hover:text-danger"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        {canonical
+          .filter((t) => !tags.includes(t))
+          .map((t) => (
+            <span
+              key={t}
+              className="rounded-full border border-border px-2 py-0.5 font-mono text-xs text-muted"
+            >
+              {t}
+            </span>
+          ))}
+        <form onSubmit={add}>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="+ tag"
+            className="w-20 rounded-full border border-border bg-surface px-2 py-0.5 font-mono text-xs placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-accent"
+          />
+        </form>
+      </div>
     </div>
   );
 }
