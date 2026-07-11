@@ -1,0 +1,13 @@
+# Baseline Streamlit theme. The finer styling (cards, pills, avatars, buttons)
+# is layered on top via injected CSS in app/theme.py. Pinned to the light base
+# so the custom palette renders consistently regardless of the OS setting.
+[theme]
+base = "light"
+primaryColor = "#4f46e5"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f5fb"
+textColor = "#1f2333"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
