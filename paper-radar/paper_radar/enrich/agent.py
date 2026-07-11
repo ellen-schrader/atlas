@@ -4,7 +4,12 @@ This is intentionally left unimplemented. The signatures and docstrings define
 the contract; fill in the bodies yourself.
 
 Intended flow:
-    raw text (from the paper URL / PDF) -> Claude -> PaperEnrichment
+    grounding text (the resolved abstract, falling back to title) -> Claude
+    -> PaperEnrichment
+
+The ingest stage now resolves each paper's abstract (via PubMed / Europe PMC /
+publisher citation tags), so ``source_text`` is normally the real abstract --
+far better grounding for the summary and tags than the title alone.
 
 Use the ``anthropic`` SDK with structured output (tool use / JSON schema derived
 from ``PaperEnrichment``). Read the API key and model name from ``get_settings()``;

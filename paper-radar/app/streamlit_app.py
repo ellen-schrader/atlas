@@ -52,8 +52,10 @@ def _matches(paper: dict, query: str) -> bool:
         for x in (
             paper.get("title"),
             paper.get("summary"),
+            paper.get("abstract"),
             " ".join(paper.get("authors") or []),
             " ".join(paper.get("tags") or []),
+            " ".join(paper.get("keywords") or []),
             paper.get("venue"),
         )
         if x
@@ -93,16 +95,26 @@ def _render_card(paper: dict) -> None:
             when = f" on {posted_at}" if posted_at else ""
             st.caption(f"📌 Shared by **{who}**{when}")
 
+        # LLM summary (enrich stage) if present; otherwise fall back to the abstract.
         if paper.get("summary"):
             st.write(paper["summary"])
+        elif paper.get("abstract"):
+            with st.expander("Abstract"):
+                st.write(paper["abstract"])
 
         tags = paper.get("tags") or []
         if tags:
             st.markdown(" ".join(f"`{t}`" for t in tags))
 
+        keywords = paper.get("keywords") or []
+        if keywords:
+            st.caption("🔑 " + " · ".join(keywords[:8]))
+
         links = []
         if paper.get("url"):
             links.append(f"[paper]({paper['url']})")
+        if paper.get("doi"):
+            links.append(f"[doi](https://doi.org/{paper['doi']})")
         if paper.get("code_url"):
             links.append(f"[code]({paper['code_url']})")
         if paper.get("data_url"):

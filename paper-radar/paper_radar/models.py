@@ -38,6 +38,11 @@ class Paper(SQLModel, table=True):
     posted_by: str | None = None
     posted_at: datetime | None = None
 
+    # Source metadata resolved at ingest (arXiv/Crossref/PubMed/Europe PMC/pages).
+    doi: str | None = Field(default=None, index=True)
+    abstract: str | None = None
+    keywords: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
     # Enrichment (filled in by the enrich stage).
     summary: str | None = None
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))

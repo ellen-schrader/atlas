@@ -67,6 +67,9 @@ def ingest(
                         paper.authors = meta.authors
                         paper.venue = meta.venue
                         paper.year = meta.year
+                        paper.doi = meta.doi
+                        paper.abstract = meta.abstract
+                        paper.keywords = meta.keywords
                         if meta.title:
                             enriched += 1
                 session.add(paper)
@@ -102,7 +105,8 @@ def enrich(
             return
         for paper in papers:
             try:
-                enrichment = enrich_paper(paper, source_text=paper.title or paper.url)
+                grounding = paper.abstract or paper.title or paper.url
+                enrichment = enrich_paper(paper, source_text=grounding)
                 apply_enrichment(paper, enrichment)
                 session.add(paper)
             except NotImplementedError:

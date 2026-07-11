@@ -6,8 +6,8 @@ Paper discovery + recommendation for a PhD lab studying the **spatial architectu
 
 Papers arrive as PDFs exported from the lab's Teams channel. paper-radar:
 
-1. **Ingests** — pulls the (untruncated) URLs out of those PDFs and records who shared each one.
-2. **Enriches** — uses Claude to write a short summary, assign domain tags, and find linked code/data repos. *(stub — you implement)*
+1. **Ingests** — pulls the (untruncated) URLs out of those PDFs, records who shared each one, and resolves bibliographic metadata (title, authors, venue, year, DOI, **abstract**, keywords) from arXiv / Crossref / PubMed / Europe PMC / publisher citation tags.
+2. **Enriches** — uses Claude (grounded on the resolved abstract) to write a short summary, assign domain tags, and find linked code/data repos. *(stub — you implement)*
 3. **Embeds** — computes local sentence-transformer embeddings, builds a FAISS index for semantic search, and a UMAP 2-D map of the collection.
 4. **Ranks** — a "taste model" scores papers by how interesting they are to the lab. *(stub — you implement)*
 5. **Serves** — a Streamlit app to search, filter, and browse.

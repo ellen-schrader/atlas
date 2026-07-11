@@ -3,12 +3,80 @@
 from __future__ import annotations
 
 from paper_radar.ingest.metadata import (
+    _clean_text,
     _doi,
     _nature_doi,
     _pmid,
     fetch_metadata,
     parse_citation_html,
+    parse_crossref,
+    parse_europepmc,
+    parse_pubmed_efetch,
 )
+
+
+def test_clean_text_strips_jats_and_whitespace():
+    out = _clean_text("<jats:p>Abstract: We  show\n\ncool &amp; new results.</jats:p>")
+    assert out == "We show cool & new results."
+
+
+def test_parse_crossref_extracts_abstract_doi_keywords():
+    msg = {
+        "title": ["A spatial atlas of breast tissue"],
+        "author": [{"given": "Ada", "family": "Lovelace"}],
+        "container-title": ["Nature"],
+        "issued": {"date-parts": [[2023, 5]]},
+        "DOI": "10.1038/s41586-023-06124-2",
+        "abstract": "<jats:p>We map the breast microenvironment.</jats:p>",
+        "subject": ["Oncology", "Genomics"],
+    }
+    m = parse_crossref(msg, "https://x")
+    assert m.title == "A spatial atlas of breast tissue"
+    assert m.doi == "10.1038/s41586-023-06124-2"
+    assert m.abstract == "We map the breast microenvironment."
+    assert m.keywords == ["Oncology", "Genomics"]
+    assert m.year == 2023
+
+
+def test_parse_pubmed_efetch():
+    xml = b"""<PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <Article><Abstract>
+        <AbstractText Label="BACKGROUND">Tumors are complex.</AbstractText>
+        <AbstractText Label="RESULTS">We found niches.</AbstractText>
+      </Abstract>
+      <KeywordList><Keyword>spatial transcriptomics</Keyword></KeywordList>
+      </Article>
+      <MeshHeadingList><MeshHeading><DescriptorName>Breast Neoplasms</DescriptorName>
+      </MeshHeading></MeshHeadingList>
+    </MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+    abstract, keywords = parse_pubmed_efetch(xml)
+    assert abstract == "BACKGROUND: Tumors are complex. RESULTS: We found niches."
+    assert "spatial transcriptomics" in keywords
+    assert "Breast Neoplasms" in keywords
+
+
+def test_parse_europepmc():
+    payload = {
+        "resultList": {
+            "result": [
+                {
+                    "title": "Fibroblast niches.",
+                    "authorList": {"author": [{"fullName": "Haddad N"}]},
+                    "journalInfo": {"journal": {"title": "bioRxiv"}},
+                    "pubYear": "2024",
+                    "doi": "10.1101/2024.02.10.579743",
+                    "abstractText": "CAF niches modulate response.",
+                    "keywordList": {"keyword": ["fibroblasts", "breast"]},
+                }
+            ]
+        }
+    }
+    m = parse_europepmc(payload, "https://x")
+    assert m is not None
+    assert m.abstract == "CAF niches modulate response."
+    assert m.keywords == ["fibroblasts", "breast"]
+    assert m.venue == "bioRxiv"
+    assert m.year == 2024
 
 
 def test_doi_trims_trailing_url_path():
@@ -63,6 +131,8 @@ HIGHWIRE_HTML = """
 <meta name="citation_journal_title" content="Nature Methods">
 <meta name="citation_publication_date" content="2026/03/11">
 <meta name="citation_doi" content="10.1038/s41592-026-00000-0">
+<meta name="citation_keywords" content="spatial biology; breast cancer, imaging">
+<meta name="description" content="We profile the tumor microenvironment at single-cell resolution.">
 </head><body>...</body></html>
 """
 
@@ -76,6 +146,8 @@ def test_parse_highwire_tags():
     assert meta.venue == "Nature Methods"
     assert meta.year == 2026
     assert meta.doi == "10.1038/s41592-026-00000-0"
+    assert meta.keywords == ["spatial biology", "breast cancer", "imaging"]
+    assert meta.abstract == "We profile the tumor microenvironment at single-cell resolution."
 
 
 JSONLD_HTML = """
