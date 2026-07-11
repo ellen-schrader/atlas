@@ -10,10 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { usePapers } from "@/hooks/usePapers";
 import { useProfile } from "@/hooks/useProfile";
 import { postPaper } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { Membership } from "@/lib/types";
+import { formatAuthors, formatDate } from "@/lib/utils";
 
 export default function AppShell({
   session,
@@ -55,11 +57,12 @@ export default function AppShell({
           <div>
             <h1 className="text-lg font-semibold">Papers</h1>
             <p className="text-sm text-muted">
-              Post a paper below. Search, feed, and discovery land here next.
+              Papers your lab has posted. Search and discovery land here next.
             </p>
           </div>
 
           {team && <PostPaperCard teamId={team.id} />}
+          {team && <PaperFeed teamId={team.id} />}
 
           {team && (
             <Card>
@@ -81,6 +84,7 @@ export default function AppShell({
 }
 
 function PostPaperCard({ teamId }: { teamId: string }) {
+  const qc = useQueryClient();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -96,6 +100,7 @@ function PostPaperCard({ teamId }: { teamId: string }) {
       const title = r.paper.title ?? r.paper.url;
       setResult((r.already_posted ? "Already in your lab: " : "Posted: ") + title);
       setUrl("");
+      await qc.invalidateQueries({ queryKey: ["papers", teamId] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -125,6 +130,61 @@ function PostPaperCard({ teamId }: { teamId: string }) {
         {error && <p className="mt-2 text-xs text-danger">{error}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+function PaperFeed({ teamId }: { teamId: string }) {
+  const { data, isLoading, error } = usePapers(teamId);
+
+  if (isLoading) return <p className="text-sm text-muted">Loading papers…</p>;
+  if (error) return <p className="text-sm text-danger">Couldn’t load papers.</p>;
+
+  const posts = data ?? [];
+  if (posts.length === 0) {
+    return <p className="text-sm text-muted">No papers yet — post one above.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
+            <th className="px-4 py-2.5 font-medium">Title</th>
+            <th className="px-4 py-2.5 font-medium">Authors</th>
+            <th className="px-4 py-2.5 font-medium">Posted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {posts.map((p) => (
+            <tr
+              key={p.id}
+              className="border-b border-border align-top last:border-0 hover:bg-surface-2"
+            >
+              <td className="px-4 py-3">
+                <a
+                  href={p.papers.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-fg hover:text-accent"
+                >
+                  {p.papers.title ?? p.papers.url}
+                </a>
+                {(p.papers.venue || p.papers.year) && (
+                  <div className="mt-0.5 font-mono text-xs text-muted">
+                    {[p.papers.venue, p.papers.year].filter(Boolean).join(" · ")}
+                  </div>
+                )}
+              </td>
+              <td className="px-4 py-3 text-muted">{formatAuthors(p.papers.authors)}</td>
+              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-muted">
+                {formatDate(p.posted_at)}
+                {p.posted_by_label && <div>{p.posted_by_label}</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
