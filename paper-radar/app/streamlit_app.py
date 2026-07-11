@@ -8,6 +8,7 @@ lightweight on purpose -- no heavy ML imports here, so the shell always launches
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -22,6 +23,24 @@ from paper_radar.store import list_papers  # noqa: E402
 def _load() -> list[dict]:
     """Load papers as plain dicts (cache-friendly, decoupled from the session)."""
     return [p.model_dump() for p in list_papers()]
+
+
+def _format_posted_at(value: object) -> str | None:
+    """Format a posted-at value (datetime or ISO string) as e.g. '16 Oct 2025 10:26'."""
+    if not value:
+        return None
+    dt = value
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return dt  # show the raw string if it isn't ISO
+    if isinstance(dt, datetime):
+        # Drop a midnight time (date-only stamps) for a cleaner label.
+        if (dt.hour, dt.minute) == (0, 0):
+            return dt.strftime("%d %b %Y")
+        return dt.strftime("%d %b %Y %H:%M")
+    return str(dt)
 
 
 def _matches(paper: dict, query: str) -> bool:
@@ -63,10 +82,16 @@ def _render_card(paper: dict) -> None:
             meta_bits.append(str(paper["venue"]))
         if paper.get("year"):
             meta_bits.append(str(paper["year"]))
-        if paper.get("posted_by"):
-            meta_bits.append(f"shared by {paper['posted_by']}")
         if meta_bits:
             st.caption(" · ".join(meta_bits))
+
+        # Who shared it in Teams, and when.
+        posted_by = paper.get("posted_by")
+        posted_at = _format_posted_at(paper.get("posted_at"))
+        if posted_by or posted_at:
+            who = posted_by or "unknown"
+            when = f" on {posted_at}" if posted_at else ""
+            st.caption(f"📌 Shared by **{who}**{when}")
 
         if paper.get("summary"):
             st.write(paper["summary"])

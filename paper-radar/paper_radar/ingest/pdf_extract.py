@@ -17,18 +17,33 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import fitz  # PyMuPDF
 
+# Teams timestamp formats, tried in order. European day-first is preferred (this
+# lab's exports use DD/MM/YYYY); US month-first is a last-resort fallback.
+_STAMP_FORMATS = (
+    "%d/%m/%Y %H:%M",
+    "%d.%m.%Y %H:%M",
+    "%d/%m/%Y %I:%M %p",
+    "%d/%m/%Y",
+    "%d.%m.%Y",
+    "%m/%d/%Y %I:%M %p",
+    "%m/%d/%Y %H:%M",
+    "%m/%d/%Y",
+)
+
 # A permissive http(s) URL matcher. We strip common trailing punctuation below.
 _URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
 
-# Teams stamps look like "Ada Lovelace  3/14/2026 9:41 AM" or "Ada Lovelace 14 Mar 2026".
+# Teams stamps look like "Ellen Schrader 17/12/2025 17:14" (24h, European) or
+# "Ada Lovelace 3/14/2026 9:41 AM" (12h). Time (with or without AM/PM) is optional.
 _POSTER_RE = re.compile(
     r"(?P<name>[A-Z][a-zA-Z.'-]+(?:\s+[A-Z][a-zA-Z.'-]+){0,3})\s+"
-    r"(?P<ts>\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?:,?\s+\d{1,2}:\d{2}\s*[AP]M)?)",
+    r"(?P<ts>\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?:,?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)",
 )
 
 # Trailing characters that are almost never part of the real URL.
@@ -104,12 +119,57 @@ def _normalize_key(url: str) -> str:
     return urlunsplit(("", host, path, urlencode(kept), ""))
 
 
-def _nearest_poster(text: str, span_start: int) -> tuple[str | None, str | None]:
-    """Find the poster name/timestamp closest *above* a URL occurrence in text."""
+def _page_poster_stamps(page: fitz.Page) -> list[tuple[float, str, str]]:
+    """Collect ``(y_top, name, timestamp)`` poster stamps on a page, sorted by y.
+
+    Teams renders each message with the sender's name + timestamp on its own line
+    above the message body, so a stamp's vertical position lets us attribute the
+    links below it to the right person.
+    """
+    stamps: list[tuple[float, str, str]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            txt = "".join(span["text"] for span in line.get("spans", []))
+            m = _POSTER_RE.search(txt)
+            if m:
+                stamps.append((line["bbox"][1], m.group("name").strip(), m.group("ts").strip()))
+    stamps.sort(key=lambda s: s[0])
+    return stamps
+
+
+def _poster_for_y(stamps: list[tuple[float, str, str]], y: float) -> tuple[str | None, str | None]:
+    """Return the poster stamp closest *above* vertical position ``y`` (or None)."""
+    best: tuple[str | None, str | None] = (None, None)
+    for sy, name, ts in stamps:
+        if sy <= y + 2.0:  # small tolerance: stamp and its link often share a line
+            best = (name, ts)
+        else:
+            break
+    return best
+
+
+def _nearest_poster_in_text(text: str, span_start: int) -> tuple[str | None, str | None]:
+    """Fallback for bare-text URLs: nearest poster stamp earlier in reading order."""
     best: tuple[str | None, str | None] = (None, None)
     for m in _POSTER_RE.finditer(text, 0, span_start):
         best = (m.group("name").strip(), m.group("ts").strip())
     return best
+
+
+def parse_posted_at(stamp: str | None) -> datetime | None:
+    """Parse a Teams timestamp string (e.g. ``16/10/2025 10:26``) to a datetime.
+
+    Returns ``None`` when the string is missing or in an unrecognised format.
+    """
+    if not stamp:
+        return None
+    stamp = stamp.strip()
+    for fmt in _STAMP_FORMATS:
+        try:
+            return datetime.strptime(stamp, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def extract_urls_from_pdf(path: str | Path) -> PDFExtraction:
@@ -122,8 +182,10 @@ def extract_urls_from_pdf(path: str | Path) -> PDFExtraction:
         for page_index, page in enumerate(doc):
             page_no = page_index + 1
             text = page.get_text()
+            stamps = _page_poster_stamps(page)
 
-            # 1) Link annotations -- untruncated hrefs.
+            # 1) Link annotations -- untruncated hrefs. Attribute each to the
+            #    nearest poster stamp above the link's vertical position.
             for link in page.get_links():
                 uri = link.get("uri")
                 if not uri:
@@ -133,7 +195,8 @@ def extract_urls_from_pdf(path: str | Path) -> PDFExtraction:
                 if not uri or key in seen:
                     continue
                 seen.add(key)
-                posted_by, posted_at = _nearest_poster(text, len(text))
+                link_y = link["from"].y0 if link.get("from") is not None else 0.0
+                posted_by, posted_at = _poster_for_y(stamps, link_y)
                 extraction.urls.append(
                     ExtractedURL(
                         url=uri,
@@ -152,7 +215,7 @@ def extract_urls_from_pdf(path: str | Path) -> PDFExtraction:
                 if not uri or key in seen:
                     continue
                 seen.add(key)
-                posted_by, posted_at = _nearest_poster(text, m.start())
+                posted_by, posted_at = _nearest_poster_in_text(text, m.start())
                 extraction.urls.append(
                     ExtractedURL(
                         url=uri,

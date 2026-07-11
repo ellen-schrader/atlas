@@ -31,7 +31,7 @@ def ingest(
 ) -> None:
     """Extract URLs from PDFs and add new papers to the database."""
     from .ingest.metadata import fetch_metadata as _fetch_metadata
-    from .ingest.pdf_extract import extract_urls_from_dir
+    from .ingest.pdf_extract import extract_urls_from_dir, parse_posted_at
 
     if not pdf_dir.exists():
         typer.secho(f"No such directory: {pdf_dir}", fg=typer.colors.RED, err=True)
@@ -49,7 +49,11 @@ def ingest(
             exists = session.exec(select(Paper).where(Paper.url == item.url)).first()
             if exists is not None:
                 continue
-            paper = Paper(url=item.url, posted_by=item.posted_by)
+            paper = Paper(
+                url=item.url,
+                posted_by=item.posted_by,
+                posted_at=parse_posted_at(item.posted_at),
+            )
             if fetch_metadata:
                 meta = _fetch_metadata(item.url)
                 paper.title = meta.title

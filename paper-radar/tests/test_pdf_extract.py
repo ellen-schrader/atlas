@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import fitz  # PyMuPDF
 
-from paper_radar.ingest.pdf_extract import _normalize_key, extract_urls_from_pdf
+from paper_radar.ingest.pdf_extract import (
+    _normalize_key,
+    extract_urls_from_pdf,
+    parse_posted_at,
+)
 
 ANNOT_URL = "https://arxiv.org/abs/2306.11207"
 TEXT_URL = "https://www.nature.com/articles/s41586-023-06124-2"
@@ -69,3 +73,15 @@ def test_normalize_key_keeps_meaningful_params():
     a = _normalize_key("https://openreview.net/forum?id=AAA")
     b = _normalize_key("https://openreview.net/forum?id=BBB")
     assert a != b
+
+
+def test_parse_posted_at():
+    # European day-first, 24h time (this lab's format).
+    dt = parse_posted_at("16/10/2025 10:26")
+    assert (dt.year, dt.month, dt.day, dt.hour, dt.minute) == (2025, 10, 16, 10, 26)
+    # Date-only.
+    d = parse_posted_at("17/12/2025")
+    assert (d.year, d.month, d.day) == (2025, 12, 17)
+    # Missing / unrecognised -> None.
+    assert parse_posted_at(None) is None
+    assert parse_posted_at("not a date") is None
