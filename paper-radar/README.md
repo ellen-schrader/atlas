@@ -17,7 +17,7 @@ Papers arrive as PDFs exported from the lab's Teams channel. paper-radar:
 ```
 PDFs (Teams export)
       │  ingest/pdf_extract.py   (PyMuPDF: link annotations + regex fallback)
-      │  ingest/metadata.py      (arXiv / Crossref lookup)
+      │  ingest/metadata.py      (arXiv, Nature→DOI, PubMed, Crossref, citation tags)
       ▼
    SQLite  ◀── models.py (SQLModel: Paper, Label, User)  ── db.py
       │

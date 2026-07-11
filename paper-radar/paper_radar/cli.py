@@ -42,29 +42,40 @@ def ingest(
     typer.echo(f"Found {len(found)} unique URL(s) across PDFs in {pdf_dir}.")
 
     added = 0
+    enriched = 0
+    label = "Fetching metadata" if fetch_metadata else "Saving"
     with get_session() as session:
         from sqlmodel import select
 
-        for item in found:
-            exists = session.exec(select(Paper).where(Paper.url == item.url)).first()
-            if exists is not None:
-                continue
-            paper = Paper(
-                url=item.url,
-                posted_by=item.posted_by,
-                posted_at=parse_posted_at(item.posted_at),
-            )
-            if fetch_metadata:
-                meta = _fetch_metadata(item.url)
-                paper.title = meta.title
-                paper.authors = meta.authors
-                paper.venue = meta.venue
-                paper.year = meta.year
-            session.add(paper)
-            added += 1
+        with typer.progressbar(found, label=label) as progress:
+            for item in progress:
+                exists = session.exec(select(Paper).where(Paper.url == item.url)).first()
+                if exists is not None:
+                    continue
+                paper = Paper(
+                    url=item.url,
+                    posted_by=item.posted_by,
+                    posted_at=parse_posted_at(item.posted_at),
+                )
+                if fetch_metadata:
+                    try:
+                        meta = _fetch_metadata(item.url)
+                    except Exception:  # never let one bad URL abort the whole run
+                        meta = None
+                    if meta is not None:
+                        paper.title = meta.title
+                        paper.authors = meta.authors
+                        paper.venue = meta.venue
+                        paper.year = meta.year
+                        if meta.title:
+                            enriched += 1
+                session.add(paper)
+                added += 1
         session.commit()
 
     typer.secho(f"Added {added} new paper(s).", fg=typer.colors.GREEN)
+    if fetch_metadata:
+        typer.secho(f"Resolved metadata (title) for {enriched} of {added}.", fg=typer.colors.GREEN)
 
 
 @app.command()
