@@ -133,8 +133,21 @@ function Comments({ paperId, teamId, userId }: Ctx) {
   const [mentionIds, setMentionIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState("");
 
   const teammates = (members ?? []).filter((m) => m.user_id !== userId);
+
+  async function saveEdit(id: string) {
+    const { error: err } = await supabase
+      .from("comments")
+      .update({ body: editBody.trim() })
+      .eq("id", id);
+    if (!err) {
+      setEditingId(null);
+      await qc.invalidateQueries({ queryKey: commentsKey });
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -183,12 +196,40 @@ function Comments({ paperId, teamId, userId }: Ctx) {
       {list.map((c) => (
         <div key={c.id} className="flex gap-2.5">
           <Avatar name={c.profiles?.display_name ?? "?"} size={26} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-xs">
               <span className="font-semibold text-fg">{c.profiles?.display_name ?? "Someone"}</span>
               <span className="ml-2 font-mono text-muted">{formatDate(c.created_at)}</span>
             </div>
-            <div className="mt-0.5 whitespace-pre-wrap text-sm">{c.body}</div>
+            {editingId === c.id ? (
+              <div className="mt-1 flex flex-col gap-2">
+                <Textarea rows={2} value={editBody} onChange={(e) => setEditBody(e.target.value)} />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => saveEdit(c.id)} disabled={!editBody.trim()}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mt-0.5 whitespace-pre-wrap text-sm">{c.body}</div>
+                {c.author_id === userId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingId(c.id);
+                      setEditBody(c.body);
+                    }}
+                    className="mt-0.5 text-xs text-muted hover:text-accent"
+                  >
+                    Edit
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       ))}

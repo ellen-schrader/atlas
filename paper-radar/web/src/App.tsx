@@ -4,12 +4,17 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
-import AppShell from "@/routes/AppShell";
+import Dashboard from "@/routes/Dashboard";
+import Layout from "@/routes/Layout";
 import Login from "@/routes/Login";
 import Onboarding from "@/routes/Onboarding";
+import Papers from "@/routes/Papers";
+import Settings from "@/routes/Settings";
 
 function Center({ children }: { children: ReactNode }) {
-  return <div className="flex min-h-full items-center justify-center text-sm text-muted">{children}</div>;
+  return (
+    <div className="flex min-h-full items-center justify-center text-sm text-muted">{children}</div>
+  );
 }
 
 export default function App() {
@@ -35,24 +40,25 @@ function AuthedApp({ session }: { session: Session }) {
   if (memberships.isLoading) return <Center>Loading…</Center>;
 
   const teams = memberships.data ?? [];
-  const hasTeam = teams.length > 0;
+  const team = teams[0]?.teams;
+
+  if (!team) {
+    return (
+      <Routes>
+        <Route path="/onboarding" element={<Onboarding />} />
+        <Route path="*" element={<Navigate to="/onboarding" replace />} />
+      </Routes>
+    );
+  }
 
   return (
     <Routes>
-      <Route
-        path="/onboarding"
-        element={hasTeam ? <Navigate to="/" replace /> : <Onboarding />}
-      />
-      <Route
-        path="/"
-        element={
-          hasTeam ? (
-            <AppShell session={session} memberships={teams} />
-          ) : (
-            <Navigate to="/onboarding" replace />
-          )
-        }
-      />
+      <Route path="/onboarding" element={<Navigate to="/" replace />} />
+      <Route element={<Layout session={session} team={team} />}>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/papers" element={<Papers />} />
+        <Route path="/settings" element={<Settings />} />
+      </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
