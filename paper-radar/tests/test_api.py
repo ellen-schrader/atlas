@@ -32,6 +32,12 @@ def test_resolve_recognizes_scheme_and_computes_dedup_key():
     assert data["url_norm"] == "//arxiv.org/abs/2401.01234"
 
 
+def test_posts_requires_bearer_token():
+    # No Authorization header → 401 before any Supabase call.
+    resp = client.post("/posts", json={"url": "https://arxiv.org/abs/2401.01234", "team_id": "x"})
+    assert resp.status_code == 401
+
+
 def test_resolve_dedup_key_strips_tracking_params():
     resp = client.post(
         "/resolve",

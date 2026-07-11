@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Users } from "lucide-react";
@@ -8,8 +8,10 @@ import { Brand } from "@/components/Brand";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useProfile } from "@/hooks/useProfile";
+import { postPaper } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { Membership } from "@/lib/types";
 
@@ -53,9 +55,11 @@ export default function AppShell({
           <div>
             <h1 className="text-lg font-semibold">Papers</h1>
             <p className="text-sm text-muted">
-              Ingest, search, and discovery land here next. For now, set up your profile below.
+              Post a paper below. Search, feed, and discovery land here next.
             </p>
           </div>
+
+          {team && <PostPaperCard teamId={team.id} />}
 
           {team && (
             <Card>
@@ -73,6 +77,54 @@ export default function AppShell({
         </div>
       </main>
     </div>
+  );
+}
+
+function PostPaperCard({ teamId }: { teamId: string }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await postPaper(url.trim(), teamId);
+      const title = r.paper.title ?? r.paper.url;
+      setResult((r.already_posted ? "Already in your lab: " : "Posted: ") + title);
+      setUrl("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Post a paper</CardTitle>
+        <CardDescription>Paste a paper URL — arXiv, DOI, PubMed, or a publisher page.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="flex gap-2">
+          <Input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://arxiv.org/abs/…"
+            required
+          />
+          <Button type="submit" disabled={busy || !url.trim()}>
+            {busy ? "…" : "Post"}
+          </Button>
+        </form>
+        {result && <p className="mt-2 text-xs text-muted">{result}</p>}
+        {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+      </CardContent>
+    </Card>
   );
 }
 

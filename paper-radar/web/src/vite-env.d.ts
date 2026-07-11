@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   // Supabase's dashboard uses these Next.js-style names; we accept them too.
   readonly NEXT_PUBLIC_SUPABASE_URL?: string;
   readonly NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?: string;
+  readonly VITE_API_URL?: string;
 }
 
 interface ImportMeta {
