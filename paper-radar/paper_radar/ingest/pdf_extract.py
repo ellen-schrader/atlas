@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import fitz  # PyMuPDF
 
@@ -32,6 +33,25 @@ _POSTER_RE = re.compile(
 
 # Trailing characters that are almost never part of the real URL.
 _TRAILING_JUNK = ".,);:]}>”’'\""
+
+# Query params that are pure tracking/analytics noise: dropping them (plus any
+# "utm_*") lets the same paper shared with and without a tracker dedupe to one.
+# Meaningful params such as ``id`` (openreview) are deliberately kept.
+_TRACKING_PARAMS = {
+    "ct",
+    "af",
+    "dgcid",
+    "via",
+    "cid",
+    "ref",
+    "ref_src",
+    "spm",
+    "fbclid",
+    "gclid",
+    "mibextid",
+    "sr_share",
+    "rss",
+}
 
 
 @dataclass
@@ -63,9 +83,25 @@ def _clean_url(url: str) -> str:
 
 
 def _normalize_key(url: str) -> str:
-    """Key used only for dedup: lowercase host, drop trailing slash and fragment."""
-    u = url.split("#", 1)[0].rstrip("/")
-    return u.lower()
+    """Key used only for dedup (never stored).
+
+    Lowercases the host and drops a leading ``www.``, removes the fragment and
+    any trailing slash, and strips tracking query params (``utm_*`` and the
+    denylist above) while keeping meaningful ones. Remaining params are sorted so
+    order does not matter.
+    """
+    parts = urlsplit(url)
+    host = parts.netloc.lower().removeprefix("www.")
+    # Some Teams exports percent-encode the '=' in query strings (e.g. via%3Dihub).
+    raw_query = parts.query.replace("%3D", "=").replace("%3d", "=")
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(raw_query, keep_blank_values=False)
+        if not (k.lower().startswith("utm_") or k.lower() in _TRACKING_PARAMS)
+    ]
+    kept.sort()
+    path = parts.path.rstrip("/")
+    return urlunsplit(("", host, path, urlencode(kept), ""))
 
 
 def _nearest_poster(text: str, span_start: int) -> tuple[str | None, str | None]:

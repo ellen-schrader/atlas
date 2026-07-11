@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fitz  # PyMuPDF
 
-from paper_radar.ingest.pdf_extract import extract_urls_from_pdf
+from paper_radar.ingest.pdf_extract import _normalize_key, extract_urls_from_pdf
 
 ANNOT_URL = "https://arxiv.org/abs/2306.11207"
 TEXT_URL = "https://www.nature.com/articles/s41586-023-06124-2"
@@ -49,3 +49,23 @@ def test_dedup(tmp_path):
     _make_pdf(pdf_path)
     result = extract_urls_from_pdf(pdf_path)
     assert len({u.url for u in result.urls}) == len(result.urls)
+
+
+def test_normalize_key_collapses_tracking_and_www():
+    base = "https://www.biorxiv.org/content/10.1101/2026.05.11.724388v1"
+    # www vs not, trailing slash, and tracking params all collapse to one key.
+    assert _normalize_key(base) == _normalize_key(
+        "https://biorxiv.org/content/10.1101/2026.05.11.724388v1/"
+    )
+    assert _normalize_key(base) == _normalize_key(base + "?ct=")
+    assert _normalize_key(base) == _normalize_key(base + "?utm_source=x&utm_medium=social")
+    assert _normalize_key(
+        "https://www.sciencedirect.com/science/article/pii/S123?via%3Dihub"
+    ) == _normalize_key("https://www.sciencedirect.com/science/article/pii/S123")
+
+
+def test_normalize_key_keeps_meaningful_params():
+    # openreview ids are not tracking noise -- distinct ids stay distinct.
+    a = _normalize_key("https://openreview.net/forum?id=AAA")
+    b = _normalize_key("https://openreview.net/forum?id=BBB")
+    assert a != b
