@@ -5,6 +5,7 @@ import { LogOut, Users } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
 import { Brand } from "@/components/Brand";
+import { PaperEngagement } from "@/components/Engagement";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -63,7 +64,7 @@ export default function AppShell({
           </div>
 
           {team && <PostPaperCard teamId={team.id} />}
-          {team && <PaperFeed teamId={team.id} />}
+          {team && <PaperFeed teamId={team.id} userId={session.user.id} />}
 
           {team && (
             <Card>
@@ -144,7 +145,7 @@ function paperMatches(post: PaperPost, q: string): boolean {
   return hay.includes(q.toLowerCase());
 }
 
-function PaperFeed({ teamId }: { teamId: string }) {
+function PaperFeed({ teamId, userId }: { teamId: string; userId: string }) {
   const { data, isLoading, error } = usePapers(teamId);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<PaperPost | null>(null);
@@ -213,13 +214,21 @@ function PaperFeed({ teamId }: { teamId: string }) {
       )}
 
       <Modal open={selected !== null} onClose={() => setSelected(null)}>
-        {selected && <PaperDetail post={selected} />}
+        {selected && <PaperDetail post={selected} teamId={teamId} userId={userId} />}
       </Modal>
     </div>
   );
 }
 
-function PaperDetail({ post }: { post: PaperPost }) {
+function PaperDetail({
+  post,
+  teamId,
+  userId,
+}: {
+  post: PaperPost;
+  teamId: string;
+  userId: string;
+}) {
   const p = post.papers;
   const tags = [...new Set([...p.tags, ...p.keywords])];
   return (
@@ -268,6 +277,8 @@ function PaperDetail({ post }: { post: PaperPost }) {
         {post.posted_by_label ? ` · ${post.posted_by_label}` : ""}
         {post.note && <div className="mt-1">“{post.note}”</div>}
       </div>
+
+      <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
     </div>
   );
 }
