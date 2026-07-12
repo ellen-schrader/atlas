@@ -1,16 +1,19 @@
 import { type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { AtSign, Bookmark } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { AtSign, Bookmark, Check } from "lucide-react";
 
 import { InviteCode } from "@/components/InviteCode";
 import { PaperCard } from "@/components/PaperCard";
 import { PaperListRow } from "@/components/PaperListRow";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
-import { cn, formatDate } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
+import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 function greeting(): string {
@@ -33,8 +36,21 @@ export default function Dashboard() {
   );
   const { data: mentions } = useMentions(userId);
   const { data: toRead } = useReadingList(userId, team.id);
+  const qc = useQueryClient();
+  const { markSeen, markAllSeen } = useMentionActions(userId);
+
+  async function markPaperRead(paperId: string) {
+    await supabase
+      .from("paper_status")
+      .update({ status: "read" })
+      .eq("user_id", userId)
+      .eq("team_id", team.id)
+      .eq("paper_id", paperId);
+    void qc.invalidateQueries({ queryKey: ["reading-list"] });
+  }
 
   const firstName = displayName.split(/[\s@]/)[0];
+  const unseenMentions = (mentions ?? []).filter((m) => !m.seen_at);
   const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
   const active = posts.filter((p) => (counts?.[p.papers.id]?.comments ?? 0) > 0).slice(0, 2);
   const recent = posts.slice(0, 6);
@@ -43,7 +59,7 @@ export default function Dashboard() {
   // once (as the mention), so a single paper never occupies two slots.
   const seen = new Set<string>();
   const attention: AttentionItem[] = [];
-  for (const m of mentions ?? []) {
+  for (const m of unseenMentions) {
     if (seen.has(m.paper_id)) continue;
     seen.add(m.paper_id);
     attention.push({
@@ -52,8 +68,12 @@ export default function Dashboard() {
       icon: <AtSign size={15} />,
       lead: "Mentioned you",
       title: m.papers?.title ?? "A paper",
-      sub: formatDate(m.created_at),
-      onOpen: () => openPaper(m.paper_id),
+      sub: formatRelative(m.created_at),
+      onOpen: () => {
+        void markSeen(m.paper_id);
+        openPaper(m.paper_id);
+      },
+      onClear: () => void markSeen(m.paper_id),
     });
   }
   for (const r of toRead ?? []) {
@@ -67,6 +87,7 @@ export default function Dashboard() {
       title: r.papers?.title ?? "A paper",
       sub: [r.papers?.venue, r.papers?.year].filter(Boolean).join(" · "),
       onOpen: () => openPaper(r.paper_id),
+      onClear: () => void markPaperRead(r.paper_id),
     });
   }
   const attentionItems = attention.slice(0, 6);
@@ -100,7 +121,15 @@ export default function Dashboard() {
       )}
 
       {attentionItems.length > 0 && (
-        <Section title="Needs your attention" count={attentionItems.length}>
+        <Section
+          title="Needs your attention"
+          count={attentionItems.length}
+          action={
+            unseenMentions.length > 0
+              ? { label: "Mark all read", onClick: () => void markAllSeen() }
+              : undefined
+          }
+        >
           <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
             {attentionItems.map((a) => (
               <AttentionCard key={a.key} item={a} />
@@ -162,32 +191,40 @@ interface AttentionItem {
   title: string;
   sub: string;
   onOpen: () => void;
+  onClear: () => void;
 }
 
 function AttentionCard({ item }: { item: AttentionItem }) {
   return (
-    <button
-      onClick={item.onOpen}
-      className="flex items-start gap-3 rounded-card border border-border bg-surface p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-border-strong"
-    >
-      <span
-        className={cn(
-          "grid h-8 w-8 shrink-0 place-items-center rounded-lg border",
-          item.accent
-            ? "border-accent/30 bg-accent-weak text-accent"
-            : "border-border bg-surface-2 text-muted",
-        )}
-      >
-        {item.icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
-          {item.lead}
+    <div className="flex items-start gap-3 rounded-card border border-border bg-surface p-3.5 shadow-sm transition hover:border-border-strong">
+      <button onClick={item.onOpen} className="flex min-w-0 flex-1 items-start gap-3 text-left">
+        <span
+          className={cn(
+            "grid h-8 w-8 shrink-0 place-items-center rounded-lg border",
+            item.accent
+              ? "border-accent/30 bg-accent-weak text-accent"
+              : "border-border bg-surface-2 text-muted",
+          )}
+        >
+          {item.icon}
         </span>
-        <span className="mt-1 block text-sm font-semibold leading-snug">{item.title}</span>
-        {item.sub && <span className="mt-1 block text-xs text-muted">{item.sub}</span>}
-      </span>
-    </button>
+        <span className="min-w-0">
+          <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+            {item.lead}
+          </span>
+          <span className="mt-1 block text-sm font-semibold leading-snug">{item.title}</span>
+          {item.sub && <span className="mt-1 block text-xs text-muted">{item.sub}</span>}
+        </span>
+      </button>
+      <button
+        onClick={item.onClear}
+        title="Mark as read"
+        aria-label="Mark as read"
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-fg"
+      >
+        <Check size={14} />
+      </button>
+    </div>
   );
 }
 

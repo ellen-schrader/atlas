@@ -16,6 +16,7 @@ import {
 
 import { Avatar } from "@/components/Avatar";
 import { FigureModalProvider } from "@/components/FigureModal";
+import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
   { to: "/board", label: "Mood board", icon: Images, end: false },
+  { to: "/map", label: "Map", icon: MapIcon, end: false },
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -81,6 +83,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         <span className="flex items-center gap-2 font-semibold tracking-tight">
           <BrandMark size={6} /> Atlas
         </span>
+        <NotificationsBell userId={session.user.id} align="right" className="ml-auto" />
       </header>
 
       {open && (
@@ -102,13 +105,16 @@ export default function Layout({ session, team }: { session: Session; team: Team
             <span className="flex items-center gap-2 font-semibold tracking-tight">
               <BrandMark size={7} /> Atlas
             </span>
-            <button
-              aria-label="Close menu"
-              onClick={close}
-              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-surface-2 md:hidden"
-            >
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-1">
+              <NotificationsBell userId={session.user.id} align="left" className="hidden md:block" />
+              <button
+                aria-label="Close menu"
+                onClick={close}
+                className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-surface-2 md:hidden"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <nav className="flex flex-col gap-0.5">
@@ -117,16 +123,6 @@ export default function Layout({ session, team }: { session: Session; team: Team
                 <Icon size={16} /> {label}
               </NavLink>
             ))}
-            <span
-              aria-disabled
-              className="flex cursor-default items-center gap-3 rounded-control px-2.5 py-2 text-sm font-medium text-faint"
-              title="Coming soon"
-            >
-              <MapIcon size={16} /> Map
-              <span className="ml-auto rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-semibold text-muted">
-                soon
-              </span>
-            </span>
           </nav>
 
           <div className="mt-auto flex flex-col gap-3 border-t border-border pt-4">

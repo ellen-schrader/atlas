@@ -4,8 +4,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useMembers } from "@/hooks/useMembers";
 import { supabase } from "@/lib/supabase";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 const EMOJIS = ["👍", "❤️", "🎉", "💡", "🤔"];
 
@@ -113,6 +114,9 @@ function Reactions({ kind, subjectId, teamId, userId }: Ctx) {
     },
   });
   const rows = data ?? [];
+  const { data: members } = useMembers(teamId);
+  const nameOf = (uid: string) =>
+    uid === userId ? "You" : members?.find((m) => m.user_id === uid)?.profiles?.display_name ?? "Someone";
 
   async function toggle(emoji: string) {
     const mine = rows.some((r) => r.emoji === emoji && r.user_id === userId);
@@ -137,20 +141,21 @@ function Reactions({ kind, subjectId, teamId, userId }: Ctx) {
   return (
     <div className="flex flex-wrap gap-2">
       {EMOJIS.map((e) => {
-        const count = rows.filter((r) => r.emoji === e).length;
+        const who = rows.filter((r) => r.emoji === e).map((r) => nameOf(r.user_id));
         const mine = rows.some((r) => r.emoji === e && r.user_id === userId);
         return (
           <button
             key={e}
             type="button"
             onClick={() => toggle(e)}
+            title={who.length > 0 ? who.join(", ") : undefined}
             className={cn(
               "rounded-full border px-2.5 py-1 text-sm transition",
               mine ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-accent",
             )}
           >
             {e}
-            {count > 0 && <span className="ml-1 font-mono text-xs">{count}</span>}
+            {who.length > 0 && <span className="ml-1 font-mono text-xs">{who.length}</span>}
           </button>
         );
       })}
@@ -273,7 +278,9 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
           <div className="min-w-0 flex-1">
             <div className="text-xs">
               <span className="font-semibold text-fg">{c.profiles?.display_name ?? "Someone"}</span>
-              <span className="ml-2 font-mono text-muted">{formatDate(c.created_at)}</span>
+              <span className="ml-2 font-mono text-muted" title={formatDate(c.created_at)}>
+                {formatRelative(c.created_at)}
+              </span>
             </div>
             {editingId === c.id ? (
               <div className="mt-1 flex flex-col gap-2">
