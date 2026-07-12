@@ -259,6 +259,43 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
     return f"Palette for “{fig.get('title') or fig['id']}”: " + ", ".join(hexes)
 
 
+@mcp.tool()
+def get_moodboard_style(
+    category: str | None = None, limit: int = 8, team_id: str | None = None
+) -> str:
+    """Derive the lab's visual identity from its mood board: a palette + a ready
+    matplotlib style sheet. Use this to plot data "in our lab's style".
+
+    Args:
+        category: Restrict to one category (see moodboard_categories).
+        limit: How many figures to sample (1-16).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        figs = moodboard.list_figures(team, category=category, limit=max(1, min(int(limit), 16)))
+        if not figs:
+            return f"No figures on {team['name']}'s mood board yet."
+        raws = []
+        for f in figs:
+            try:
+                raws.append(moodboard.download(f))
+            except lab.LabError:
+                continue  # skip a figure whose bytes can't be fetched
+        if not raws:
+            return "Couldn't fetch any figure images to derive a style."
+        hexes = moodboard.aggregate_palette(raws, n=6)
+        style = moodboard.mplstyle(hexes, team["name"])
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    return (
+        f"Lab identity from {len(raws)} figure(s) on {team['name']}'s mood board.\n"
+        f"Palette: {', '.join(hexes)}\n\n"
+        f"Save as `atlas.mplstyle`, then `plt.style.use('atlas.mplstyle')`:\n\n"
+        f"```\n{style}\n```"
+    )
+
+
 def main() -> None:
     """Entry point: serve over stdio."""
     log.info("Atlas MCP server starting (stdio)")

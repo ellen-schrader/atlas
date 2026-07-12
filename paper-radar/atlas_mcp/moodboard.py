@@ -135,3 +135,58 @@ def palette(raw: bytes, n: int = 6) -> list[str]:
             ]
     except Exception as exc:  # noqa: BLE001
         raise LabError(f"Could not read the image: {exc}") from exc
+
+
+def aggregate_palette(raws: list[bytes], n: int = 6) -> list[str]:
+    """A palette across several figures: montage their thumbnails, then quantize."""
+    from PIL import Image
+
+    try:
+        thumbs = []
+        for raw in raws:
+            im = Image.open(io.BytesIO(raw)).convert("RGB")
+            im.thumbnail((120, 120))
+            thumbs.append(im)
+        if not thumbs:
+            return []
+        height = max(t.height for t in thumbs)
+        canvas = Image.new("RGB", (sum(t.width for t in thumbs), height), (255, 255, 255))
+        x = 0
+        for t in thumbs:
+            canvas.paste(t, (x, 0))
+            x += t.width
+        buf = io.BytesIO()
+        canvas.save(buf, format="PNG")
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(f"Could not build the palette: {exc}") from exc
+    return palette(buf.getvalue(), n=n)
+
+
+def mplstyle(hexes: list[str], lab_name: str) -> str:
+    """A matplotlib style sheet (``.mplstyle`` text) derived from a palette.
+
+    The palette drives the data colour cycle (the part that reads as "the lab's
+    look"); axis/text ink stays a neutral dark for legibility.
+    """
+    cycle = [h.lstrip("#") for h in hexes] or ["1f77b4"]
+    ink = "222222"
+    lines = [
+        f"# Atlas mood-board style — {lab_name}",
+        "figure.facecolor: white",
+        "axes.facecolor: white",
+        f"axes.edgecolor: {ink}",
+        f"axes.labelcolor: {ink}",
+        f"text.color: {ink}",
+        f"xtick.color: {ink}",
+        f"ytick.color: {ink}",
+        "axes.grid: True",
+        "grid.color: DDDDDD",
+        "grid.linewidth: 0.6",
+        "axes.spines.top: False",
+        "axes.spines.right: False",
+        "axes.titlesize: 13",
+        "axes.titleweight: bold",
+        "font.size: 11",
+        "axes.prop_cycle: cycler('color', [" + ", ".join(f"'{c}'" for c in cycle) + "])",
+    ]
+    return "\n".join(lines)

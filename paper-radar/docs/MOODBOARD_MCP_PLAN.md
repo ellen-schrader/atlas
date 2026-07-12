@@ -144,13 +144,16 @@ build:
   `get_figure_palette`, provenance surfaced per origin. Auth refactored so the user token
   reaches the Storage client (figure downloads under RLS). Validated over a real stdio
   handshake with seeded own + third-party figures.
-- **M2** — `get_moodboard_style` (the identity theme / `.mplstyle`) + the auto-license hint
-  (OpenAlex/Crossref) wired into upload.
-- **M3 (web, fast follow)** — the mood-board upload UI gains the **own/third-party toggle**
-  and the license prefill; `get_figure_image` deep link.
+- **M2 — done (style tool).** `get_moodboard_style(category?, limit?)` — samples up to N
+  figures, montages their thumbnails, quantizes to an aggregate palette, and emits that
+  palette + a ready `.mplstyle` (palette drives the data colour cycle; neutral ink). Answers
+  *"plot X in our lab's style."* Validated over stdio and the emitted `.mplstyle` parses +
+  renders in matplotlib. The **DOI→licence auto-hint moved to M3** — it's an upload-time
+  feature with no consumer until the web upload UI exists.
+- **M3 (web, fast follow)** — the mood-board upload UI gains the **own/third-party toggle**,
+  the **DOI→licence prefill** (OpenAlex/Crossref), and a `get_figure_image` deep link.
 
 ## Status
 
-- **M1 implemented and validated** (migration + four read tools; see Phases).
-- Next action: **M2** — `get_moodboard_style` (`.mplstyle` identity theme) + the auto-license
-  hint (OpenAlex/Crossref) at upload; then **M3** the web upload own/third-party toggle.
+- **M1 + M2 implemented and validated** (migration + five MCP tools; see Phases).
+- Next action: **M3** (web) — upload own/third-party toggle + DOI→licence prefill.
