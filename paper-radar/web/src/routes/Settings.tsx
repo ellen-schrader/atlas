@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { InviteCode } from "@/components/InviteCode";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
@@ -14,27 +14,34 @@ export default function Settings() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
-      <div>
-        <h1 className="text-lg font-semibold">Settings</h1>
-        <p className="text-sm text-muted">Your profile and lab.</p>
-      </div>
+      <header>
+        <h1 className="text-display font-bold tracking-tight">Settings</h1>
+        <p className="mt-1.5 text-sm text-muted">Your profile and lab.</p>
+      </header>
 
-      <ProfileCard userId={userId} initial={profile?.profile_md ?? ""} />
+      <ProfilePanel userId={userId} initial={profile?.profile_md ?? ""} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Invite your lab</CardTitle>
-          <CardDescription>Share this join code with lab members.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <code className="rounded bg-surface-2 px-2 py-1 font-mono text-sm">{team.slug}</code>
-        </CardContent>
-      </Card>
+      <Panel
+        title="Invite your lab"
+        desc={`Share this join code — anyone who enters it joins ${team.name}.`}
+      >
+        <InviteCode code={team.slug} />
+      </Panel>
     </div>
   );
 }
 
-function ProfileCard({ userId, initial }: { userId: string; initial: string }) {
+function Panel({ title, desc, children }: { title: string; desc: string; children: ReactNode }) {
+  return (
+    <section className="rounded-card border border-border bg-surface p-5 shadow-sm">
+      <h2 className="text-heading font-semibold tracking-tight">{title}</h2>
+      <p className="mt-1 text-sm text-muted">{desc}</p>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function ProfilePanel({ userId, initial }: { userId: string; initial: string }) {
   const qc = useQueryClient();
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
@@ -54,30 +61,25 @@ function ProfileCard({ userId, initial }: { userId: string; initial: string }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Your profile (USER.md)</CardTitle>
-        <CardDescription>
-          A short description of what you work on. It personalises your paper recommendations.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col items-start gap-3">
-        <Textarea
-          rows={4}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setSaved(false);
-          }}
-          placeholder="e.g. Oncologist working on an immunotherapy dataset focused on myeloid cells."
-        />
-        <div className="flex items-center gap-3">
-          <Button size="sm" onClick={save} disabled={busy}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-          {saved && <span className="text-xs text-muted">Saved.</span>}
-        </div>
-      </CardContent>
-    </Card>
+    <Panel
+      title="Your research profile"
+      desc="A short description of what you work on. It personalises your paper recommendations."
+    >
+      <Textarea
+        rows={4}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setSaved(false);
+        }}
+        placeholder="e.g. Oncologist working on an immunotherapy dataset focused on myeloid cells."
+      />
+      <div className="mt-3 flex items-center gap-3">
+        <Button size="sm" onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </Button>
+        {saved && <span className="text-xs text-muted">Saved.</span>}
+      </div>
+    </Panel>
   );
 }

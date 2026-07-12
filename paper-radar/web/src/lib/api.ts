@@ -10,22 +10,31 @@ export interface PostResult {
   paper: { url: string; title: string | null };
 }
 
-/** Call the Atlas API with the user's Supabase JWT; throws with the API's detail on error. */
-async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function authToken(): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error("Not signed in.");
+  return token;
+}
 
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...init.headers,
-    },
-  });
+/** Post a paper into a lab via the API (sends the user's Supabase JWT). */
+export async function postPaper(url: string, teamId: string): Promise<PostResult> {
+  const token = await authToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/posts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ url, team_id: teamId }),
+    });
+  } catch {
+    // fetch throws on network failure / CORS / service down — give the user
+    // something actionable rather than the raw "Failed to fetch".
+    throw new Error("Couldn’t reach the paper service. Check your connection and try again.");
+  }
   if (!res.ok) {
-    let detail = `Request failed (${res.status})`;
+    let detail = `Couldn’t post that paper (error ${res.status}).`;
     try {
       detail = (await res.json()).detail ?? detail;
     } catch {
@@ -36,19 +45,39 @@ async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T
   return res.json();
 }
 
-/** Post a paper into a lab via the API. */
-export function postPaper(url: string, teamId: string): Promise<PostResult> {
-  return authedRequest<PostResult>("/posts", {
-    method: "POST",
-    body: JSON.stringify({ url, team_id: teamId }),
-  });
+/** Call the Atlas API with the user's JWT; throws the API's detail on error. */
+async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = await authToken();
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...init.headers,
+      },
+    });
+  } catch {
+    throw new Error("Couldn’t reach the paper service. Check your connection and try again.");
+  }
+  if (!res.ok) {
+    let detail = `Request failed (error ${res.status}).`;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      // non-JSON error body
+    }
+    throw new Error(detail);
+  }
+  return res.json();
 }
 
-/** Rank the lab's posts against a free-text query by embedding similarity. */
+/** Rank the lab's papers against a free-text query by embedding similarity. */
 export async function semanticSearch(
   query: string,
   teamId: string,
-  limit = 20,
+  limit = 30,
 ): Promise<SemanticHit[]> {
   const data = await authedRequest<{ results: SemanticHit[] }>("/search/semantic", {
     method: "POST",

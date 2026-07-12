@@ -1,8 +1,10 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { PaperDetail } from "@/components/PaperDetail";
 import { Modal } from "@/components/ui/modal";
+import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost } from "@/lib/types";
 
@@ -12,9 +14,10 @@ const PaperModalContext = createContext<{ openPaper: (paperId: string) => void }
 
 export const usePaperModal = () => useContext(PaperModalContext);
 
-/** Provides `openPaper(paperId)` app-wide. Fetches the lab's post for that paper
- *  and shows the detail + engagement in a modal, so any list (papers, dashboard)
- *  can open the same view. */
+/** Provides `openPaper(paperId)` app-wide. The open paper lives in the URL as
+ *  `?paper=<id>`, so detail links are shareable, the back button closes the
+ *  modal, and a refresh reopens it. Fetches the lab's post for that paper and
+ *  shows the detail + engagement over whatever page you're on. */
 export function PaperModalProvider({
   teamId,
   userId,
@@ -24,7 +27,28 @@ export function PaperModalProvider({
   userId: string;
   children: ReactNode;
 }) {
-  const [paperId, setPaperId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const paperId = searchParams.get("paper");
+
+  const openPaper = (id: string) =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("paper", id);
+      return next;
+    });
+
+  const close = () =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("paper");
+        return next;
+      },
+      { replace: true },
+    );
+
+  const { data: reading } = useReadingList(userId, teamId);
+  const bookmarked = (reading ?? []).some((r) => r.paper_id === paperId);
 
   const { data: post, isLoading } = useQuery({
     queryKey: ["paper-post", teamId, paperId],
@@ -42,13 +66,15 @@ export function PaperModalProvider({
   });
 
   return (
-    <PaperModalContext.Provider value={{ openPaper: setPaperId }}>
+    <PaperModalContext.Provider value={{ openPaper }}>
       {children}
-      <Modal open={paperId !== null} onClose={() => setPaperId(null)}>
+      <Modal open={paperId !== null} onClose={close} label={post?.papers.title ?? "Paper"}>
         {post ? (
-          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} />
+          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} bookmarked={bookmarked} />
         ) : (
-          <div className="p-6 text-sm text-muted">{isLoading ? "Loading…" : "Paper not available."}</div>
+          <div className="p-10 text-center text-sm text-muted">
+            {isLoading ? "Loading…" : "Paper not available."}
+          </div>
         )}
       </Modal>
     </PaperModalContext.Provider>

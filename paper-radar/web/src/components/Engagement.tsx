@@ -33,7 +33,7 @@ interface Ctx {
 
 export function PaperEngagement(ctx: Ctx) {
   return (
-    <div className="mt-5 flex flex-col gap-5 border-t border-border pt-4">
+    <div className="flex flex-col gap-5">
       <Reactions {...ctx} />
       <Comments {...ctx} />
     </div>
@@ -73,6 +73,8 @@ function Reactions({ paperId, teamId, userId }: Ctx) {
         .insert({ paper_id: paperId, team_id: teamId, user_id: userId, emoji });
     }
     await qc.invalidateQueries({ queryKey: key });
+    // refresh the card/list engagement counts (they read a separate query)
+    await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
   }
 
   return (
@@ -189,6 +191,8 @@ function Comments({ paperId, teamId, userId }: Ctx) {
       setBody("");
       setMentionIds([]);
       await qc.invalidateQueries({ queryKey: commentsKey });
+      await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
+      await qc.invalidateQueries({ queryKey: ["mentions"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -201,7 +205,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
   return (
     <div className="flex flex-col gap-3">
       <div className="text-xs font-medium uppercase tracking-wide text-muted">
-        {list.length > 0 ? `${list.length} comment(s)` : "Comments"}
+        {list.length > 0 ? `${list.length} ${list.length === 1 ? "comment" : "comments"}` : "Comments"}
       </div>
 
       {list.map((c) => (

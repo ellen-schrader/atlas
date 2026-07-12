@@ -2,46 +2,84 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* IDE-minimal palette (plan §4): cool neutrals, one restrained-blue accent,
-   dark-first with both themes first-class. */
+/* Redesign palette: cool neutrals biased toward the blue accent, one restrained
+   accent, dark-first with both themes first-class. Token *names* are stable so
+   components never need to change when values are tuned. */
 :root {
-  --bg: #fafafa;
+  --bg: #f6f7f9;
   --surface: #ffffff;
-  --surface-2: #f4f5f7;
-  --border: #e5e7eb;
-  --fg: #1f2333;
-  --muted: #6b7280;
-  --accent: #3b6cff;
+  --surface-2: #f0f2f5;
+  --surface-3: #e7eaef;
+  --border: #e5e8ee;
+  --border-strong: #d3d8e1;
+  --fg: #1b2029;
+  --muted: #5b6472;
+  --faint: #7d8694;
+  --accent: #3a67f0;
+  --accent-weak: rgba(58, 103, 240, 0.09);
   --accent-fg: #ffffff;
   --danger: #dc2626;
   color-scheme: light;
 }
 
 .dark {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --surface-2: #1c2230;
-  --border: #2a2e37;
-  --fg: #e6e8ee;
-  --muted: #9aa0b0;
+  --bg: #0b0e14;
+  --surface: #12161e;
+  --surface-2: #191e28;
+  --surface-3: #222836;
+  --border: #232935;
+  --border-strong: #333a48;
+  --fg: #e7eaf0;
+  --muted: #a2aab8;
+  --faint: #7b8391;
   --accent: #6b8bff;
+  --accent-weak: rgba(107, 139, 255, 0.14);
   --accent-fg: #0b0e14;
   --danger: #f87171;
   color-scheme: dark;
 }
 
 @theme inline {
+  /* colours */
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-fg: var(--fg);
   --color-muted: var(--muted);
+  --color-faint: var(--faint);
   --color-accent: var(--accent);
+  --color-accent-weak: var(--accent-weak);
   --color-accent-fg: var(--accent-fg);
   --color-danger: var(--danger);
+
+  /* fonts */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+  /* type scale (semantic roles) — use as text-display / text-heading / … */
+  --text-eyebrow: 0.6875rem;
+  --text-eyebrow--line-height: 1;
+  --text-meta: 0.78125rem;
+  --text-meta--line-height: 1.2;
+  --text-card: 0.9375rem;
+  --text-card--line-height: 1.32;
+  --text-heading: 1rem;
+  --text-heading--line-height: 1.3;
+  --text-display: 1.8125rem;
+  --text-display--line-height: 1.1;
+
+  /* tracking */
+  --tracking-tight: -0.022em;
+  --tracking-snug: -0.01em;
+  --tracking-eyebrow: 0.07em;
+
+  /* radii */
+  --radius-chip: 0.4375rem;
+  --radius-control: 0.5625rem;
+  --radius-card: 0.8125rem;
 }
 
 * {
