@@ -2,7 +2,6 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "rea
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles } from "lucide-react";
 
-import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { PaperCard } from "@/components/PaperCard";
 import { SourceLabel } from "@/components/SourceLabel";
@@ -13,6 +12,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
+import { useReadPapers } from "@/hooks/useReadPapers";
 import { useTeamTags } from "@/hooks/useTeamTags";
 import { postPaper, semanticSearch } from "@/lib/api";
 import type { PaperPost } from "@/lib/types";
@@ -65,6 +65,7 @@ export default function Papers() {
     posts.map((p) => p.papers.id),
   );
   const { data: reading } = useReadingList(userId, team.id);
+  const { data: readIds } = useReadPapers(userId, team.id);
   const bookmarked = new Set((reading ?? []).map((r) => r.paper_id));
 
   const { openPaper } = usePaperModal();
@@ -227,7 +228,7 @@ export default function Papers() {
           ))}
         </div>
       ) : (
-        <PaperTable posts={posts} counts={counts} onOpen={(id) => openPaper(id)} />
+        <PaperTable posts={posts} counts={counts} readIds={readIds} onOpen={(id) => openPaper(id)} />
       )}
 
       {mode === "keyword" && search.isFetchingNextPage && (
@@ -317,10 +318,12 @@ function FilterChip({
 function PaperTable({
   posts,
   counts,
+  readIds,
   onOpen,
 }: {
   posts: PaperPost[];
   counts?: Record<string, { reactions: number; comments: number }>;
+  readIds?: Set<string>;
   onOpen: (paperId: string) => void;
 }) {
   return (
@@ -338,6 +341,7 @@ function PaperTable({
           {posts.map((post) => {
             const p = post.papers;
             const c = counts?.[p.id];
+            const read = readIds?.has(p.id) ?? false;
             return (
               <tr
                 key={post.id}
@@ -346,11 +350,17 @@ function PaperTable({
               >
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
-                    <span className="h-9 w-16 shrink-0 overflow-hidden rounded-md border border-border">
-                      <Cover seed={p.id} />
-                    </span>
+                    <span
+                      aria-label={read ? undefined : "Unread"}
+                      className={cn(
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
+                        read ? "bg-transparent" : "bg-accent",
+                      )}
+                    />
                     <div className="min-w-0">
-                      <div className="truncate font-medium text-fg">{p.title ?? p.url}</div>
+                      <div className={cn("truncate", read ? "text-muted" : "font-medium text-fg")}>
+                        {p.title ?? p.url}
+                      </div>
                       <SourceLabel venue={p.venue} year={p.year} className="mt-0.5 block" />
                     </div>
                   </div>

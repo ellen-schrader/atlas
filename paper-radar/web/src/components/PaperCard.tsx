@@ -45,7 +45,7 @@ export function PaperCard({
         }
       }}
       className={cn(
-        "flex cursor-pointer flex-col overflow-hidden rounded-card border border-border bg-surface shadow-sm transition",
+        "flex h-full cursor-pointer flex-col overflow-hidden rounded-card border border-border bg-surface shadow-sm transition",
         "hover:-translate-y-0.5 hover:border-border-strong",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
       )}
@@ -66,7 +66,7 @@ export function PaperCard({
           />
         )}
       </div>
-      <div className="flex flex-col gap-2.5 p-4">
+      <div className="flex flex-1 flex-col gap-2.5 p-4">
         <SourceLabel venue={p.venue} year={p.year} />
         <h3 className="text-card font-semibold tracking-snug text-fg">{p.title ?? p.url}</h3>
         {p.authors.length > 0 && <div className="text-meta text-muted">{formatAuthors(p.authors)}</div>}
@@ -78,7 +78,7 @@ export function PaperCard({
             {extra > 0 && <Chip className="text-faint">+{extra}</Chip>}
           </div>
         )}
-        <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-3">
+        <div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3">
           <EngagementSummary reactions={reactions} comments={comments} />
           <span className="text-meta inline-flex items-center gap-2 text-muted">
             {posterName && <Avatar name={posterName} size={20} />}

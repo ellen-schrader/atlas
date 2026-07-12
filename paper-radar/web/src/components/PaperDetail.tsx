@@ -8,6 +8,7 @@ import { Cover } from "@/components/Cover";
 import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
+import { useReadPapers } from "@/hooks/useReadPapers";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
@@ -161,33 +162,43 @@ function MarkReadButton({
   userId: string;
 }) {
   const qc = useQueryClient();
-  const [done, setDone] = useState(false);
+  const { data: readSet } = useReadPapers(userId, teamId);
+  const isRead = readSet?.has(paperId) ?? false;
   const [busy, setBusy] = useState(false);
 
-  async function mark() {
-    if (busy || done) return;
+  // Toggle read ↔ unread. "Unread" removes the read status row entirely (a paper
+  // is either to_read / read / unset — there's no separate unread state), so the
+  // list dots and reading list update in step.
+  async function toggle() {
+    if (busy) return;
     setBusy(true);
-    const { error } = await supabase
-      .from("paper_status")
-      .upsert(
-        { user_id: userId, team_id: teamId, paper_id: paperId, status: "read" },
-        { onConflict: "user_id,paper_id,team_id" },
-      );
+    const q = supabase.from("paper_status");
+    const { error } = isRead
+      ? await q.delete().eq("user_id", userId).eq("team_id", teamId).eq("paper_id", paperId)
+      : await q.upsert(
+          { user_id: userId, team_id: teamId, paper_id: paperId, status: "read" },
+          { onConflict: "user_id,paper_id,team_id" },
+        );
     setBusy(false);
     if (!error) {
-      setDone(true);
-      void qc.invalidateQueries({ queryKey: ["reading-list"] });
+      await qc.invalidateQueries({ queryKey: ["reading-list"] });
+      await qc.invalidateQueries({ queryKey: ["read-papers"] });
     }
   }
 
   return (
     <button
       type="button"
-      onClick={mark}
-      disabled={busy || done}
-      className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-2 text-sm font-medium transition hover:border-accent hover:text-accent disabled:opacity-60"
+      onClick={toggle}
+      disabled={busy}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-control border px-3 py-2 text-sm font-medium transition disabled:opacity-60",
+        isRead
+          ? "border-accent bg-accent-weak text-accent"
+          : "border-border hover:border-accent hover:text-accent",
+      )}
     >
-      <Check size={14} /> {done ? "Marked read" : "Mark read"}
+      <Check size={14} /> {isRead ? "Mark unread" : "Mark read"}
     </button>
   );
 }

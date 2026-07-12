@@ -2,6 +2,7 @@ import type { Session } from "@supabase/supabase-js";
 import { useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import {
+  BookMarked,
   Compass,
   Images,
   LayoutGrid,
@@ -39,6 +40,7 @@ export function useAppContext() {
 const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
+  { to: "/reading", label: "Reading list", icon: BookMarked, end: false },
   { to: "/board", label: "Mood board", icon: Images, end: false },
   { to: "/map", label: "Map", icon: MapIcon, end: false },
 ];
