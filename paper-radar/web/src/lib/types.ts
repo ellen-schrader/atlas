@@ -41,6 +41,7 @@ export interface PaperPost {
   note: string | null;
   posted_by: string | null;
   posted_by_label: string | null;
+  poster?: { display_name: string } | null; // joined profile — fallback when label is null
   tags: string[]; // lab-scoped custom tags (distinct from papers.tags/keywords)
   papers: Paper; // the joined canonical paper
 }

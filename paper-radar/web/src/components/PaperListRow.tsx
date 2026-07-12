@@ -17,6 +17,7 @@ export function PaperListRow({
   onOpen: () => void;
 }) {
   const p = post.papers;
+  const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
   const sub = [p.venue, p.year].filter(Boolean).join(" · ");
   const lead = p.authors[0] ? `${sub ? sub + " · " : ""}${p.authors[0]}${p.authors.length > 1 ? " et al." : ""}` : sub;
 
@@ -34,7 +35,7 @@ export function PaperListRow({
       </span>
       <EngagementSummary reactions={reactions} comments={comments} className="hidden sm:flex" />
       <span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted">
-        {post.posted_by_label && <Avatar name={post.posted_by_label} size={20} />}
+        {posterName && <Avatar name={posterName} size={20} />}
         <span className="whitespace-nowrap tabular-nums">{formatDate(post.posted_at)}</span>
       </span>
     </button>

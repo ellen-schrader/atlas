@@ -20,7 +20,9 @@ export function usePaperSearch(teamId: string, q: string, tag: string | null) {
           p_limit: PAGE_SIZE,
           p_offset: pageParam,
         })
-        .select("id, posted_at, note, posted_by, posted_by_label, tags, papers(*)");
+        .select(
+          "id, posted_at, note, posted_by, posted_by_label, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
+        );
       if (error) throw error;
       return (data ?? []) as unknown as PaperPost[];
     },

@@ -22,6 +22,7 @@ export function PaperDetail({
   bookmarked?: boolean;
 }) {
   const p = post.papers;
+  const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
   const canonical = [...new Set([...p.tags, ...p.keywords])];
 
   return (
@@ -76,9 +77,9 @@ export function PaperDetail({
         <PaperTags postId={post.id} teamId={teamId} initial={post.tags} canonical={canonical} />
 
         <div className="mt-5 flex items-center gap-2 text-xs text-muted">
-          {post.posted_by_label && <Avatar name={post.posted_by_label} size={22} />}
+          {posterName && <Avatar name={posterName} size={22} />}
           <span>
-            Posted {post.posted_by_label ? `by ${post.posted_by_label} ` : ""}· {formatDate(post.posted_at)}
+            Posted {posterName ? `by ${posterName} ` : ""}· {formatDate(post.posted_at)}
           </span>
         </div>
         {post.note && (
