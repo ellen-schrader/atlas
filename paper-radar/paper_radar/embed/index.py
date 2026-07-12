@@ -53,6 +53,36 @@ def search(
     return [(int(i), float(s)) for i, s in zip(ids[0], scores[0], strict=True) if i != -1]
 
 
+def auto_k(n: int) -> int:
+    """Cluster count for ``n`` papers, clamped to [4, 8].
+
+    Capped at 8 so each theme maps to one hue in the categorical map palette
+    (no color cycling); 8 themes is a readable granularity for a lab.
+    """
+    if n < 8:
+        return max(1, n // 2)
+    return int(min(8, max(4, round(n / 50))))
+
+
+def cluster_embeddings(embeddings: np.ndarray, *, k: int | None = None) -> np.ndarray:
+    """KMeans cluster labels for ``(n, dim)`` unit-norm embeddings.
+
+    Deterministic (fixed seed); ``k`` defaults to :func:`auto_k`. Returns an
+    ``(n,)`` int array of cluster ids in ``[0, k)``. With fewer than 2 points
+    everything is cluster 0.
+    """
+    from sklearn.cluster import KMeans
+
+    n = embeddings.shape[0]
+    if n < 2:
+        return np.zeros(n, dtype=int)
+    k = k or auto_k(n)
+    k = min(k, n)
+    vecs = np.ascontiguousarray(embeddings, dtype=np.float32)
+    km = KMeans(n_clusters=k, random_state=42, n_init=10)
+    return km.fit_predict(vecs).astype(int)
+
+
 def compute_umap(
     embeddings: np.ndarray,
     *,

@@ -43,29 +43,34 @@ def test_semantic_search_requires_bearer_token():
     assert resp.status_code == 401
 
 
-def test_map_requires_bearer_token():
-    resp = client.get("/map", params={"team_id": "t"})
+def test_overview_requires_bearer_token():
+    resp = client.get("/overview", params={"team_id": "t"})
     assert resp.status_code == 401
 
 
-def test_map_cache_keys_on_embedded_set():
-    from api.app import MapCache
-
-    cache = MapCache()
-    key = frozenset({("p1", "2026-07-01T00:00:00Z")})
-    cache.put("team-a", key, ["layout"])
-
-    assert cache.get("team-a", key) == ["layout"]
-    # A re-embedded paper (new embedded_at) or another team must miss.
-    assert cache.get("team-a", frozenset({("p1", "2026-07-02T00:00:00Z")})) is None
-    assert cache.get("team-b", key) is None
+def test_similarity_requires_bearer_token():
+    resp = client.post("/similarity", json={"query": "x", "team_id": "t"})
+    assert resp.status_code == 401
 
 
-def test_parse_vector_handles_postgrest_string_form():
-    from api.app import _parse_vector
+def test_compute_stats_aggregates_posts():
+    from api.app import _compute_stats
 
-    assert _parse_vector("[0.1,0.2]") == [0.1, 0.2]
-    assert _parse_vector([0.1, 0.2]) == [0.1, 0.2]
+    rows = [
+        {"posted_at": "2026-03-09T12:00:00Z", "papers": {"venue": "Nature", "year": 2025,
+                                                          "authors": ["A. One", "B. Last"]}},
+        {"posted_at": "2026-03-20T12:00:00Z", "papers": {"venue": "Nature", "year": 2026,
+                                                          "authors": ["C. Only"]}},
+        {"posted_at": "2026-04-01T12:00:00Z", "papers": {"venue": "bioRxiv", "year": 2026,
+                                                          "authors": []}},
+    ]
+    stats = _compute_stats(rows)
+    assert stats.over_time == [{"month": "2026-03", "count": 2}, {"month": "2026-04", "count": 1}]
+    assert stats.by_venue[0] == {"venue": "Nature", "count": 2}
+    assert {"year": 2026, "count": 2} in stats.by_year
+    # last author is the lab proxy; the empty-author row contributes nothing
+    labs = {d["lab"]: d["count"] for d in stats.by_lab}
+    assert labs == {"B. Last": 1, "C. Only": 1}
 
 
 def test_resolve_dedup_key_strips_tracking_params():

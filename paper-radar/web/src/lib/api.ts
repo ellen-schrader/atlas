@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { MapData, SemanticHit } from "@/lib/types";
+import type { OverviewData, SemanticHit } from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -86,7 +86,20 @@ export async function semanticSearch(
   return data.results;
 }
 
-/** 2-D UMAP layout of the lab's embedded papers. */
-export function fetchMap(teamId: string): Promise<MapData> {
-  return authedRequest<MapData>(`/map?team_id=${encodeURIComponent(teamId)}`);
+/** Insights overview: UMAP layout + named clusters + stats for the lab. */
+export function fetchOverview(teamId: string): Promise<OverviewData> {
+  return authedRequest<OverviewData>(`/overview?team_id=${encodeURIComponent(teamId)}`);
+}
+
+/** Cosine similarity of every embedded paper in the lab to a query (for the
+ *  map's Relevance color mode). Returns { paper_id: similarity }. */
+export async function fetchSimilarity(
+  query: string,
+  teamId: string,
+): Promise<Record<string, number>> {
+  const data = await authedRequest<{ similarities: Record<string, number> }>("/similarity", {
+    method: "POST",
+    body: JSON.stringify({ query, team_id: teamId }),
+  });
+  return data.similarities;
 }
