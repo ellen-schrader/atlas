@@ -124,13 +124,12 @@ primary route, and provenance travels with every third-party image.
 
 ## Build order / sequencing
 
-The tools extend `atlas_mcp`, which currently lives in **PR #22** (`feature/claude-integration`,
-branched off pre-mood-board `main`). This plan doc is on `feature/mcp-moodboard` off current
-`main` (which has `figures`). To build the tools:
+PR #22 (the `atlas_mcp` base) is **merged to `main`**, and `feature/mcp-moodboard` is rebased
+onto it — so `atlas_mcp` and the `figures` model are both present on this branch. Ready to
+build:
 
-1. Get `atlas_mcp` and the `figures` model on the same branch — cleanest is to **merge PR #22
-   to `main`**, then rebase/re-branch `feature/mcp-moodboard` onto it (or merge
-   `feature/claude-integration` into this branch).
+1. ~~Get `atlas_mcp` and `figures` on the same branch~~ — **done** (PR #22 merged; this
+   branch rebased onto `main`).
 2. Migration: add `origin` + `source_url` + `license` + `attribution` (+ optional
    auto-license backfill for existing paper-linked figures).
 3. MCP tools: `list_moodboard`, `moodboard_categories`, `get_figure_image`,
@@ -150,5 +149,6 @@ branched off pre-mood-board `main`). This plan doc is on `feature/mcp-moodboard`
 ## Status
 
 - Plan written; design agreed. **Not yet implemented.**
-- Blocking prerequisite for coding: reconcile `atlas_mcp` (PR #22) with the `figures` model
-  (see Build order). PR #22 is validated live but not yet merged.
+- Prerequisite cleared: **PR #22 merged to `main`** (the `atlas_mcp` P1 base, validated live),
+  and `feature/mcp-moodboard` rebased onto `main` — `atlas_mcp` + `figures` both present.
+- Next action: **M1** — the `origin`-toggle migration + the read tools.
