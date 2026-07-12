@@ -4,7 +4,7 @@ import { Bell } from "lucide-react";
 
 import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 /** Bell with an unread-mention count and a dropdown of unseen mentions. Opening
  *  one shows the paper (via the ?paper= route) and marks it seen. */
@@ -98,7 +98,9 @@ export function NotificationsBell({
                     Mentioned you
                   </span>
                   <span className="line-clamp-2 text-sm font-medium">{m.papers?.title ?? "A paper"}</span>
-                  <span className="text-xs tabular-nums text-muted">{formatDate(m.created_at)}</span>
+                  <span className="text-xs text-muted" title={formatDate(m.created_at)}>
+                    {formatRelative(m.created_at)}
+                  </span>
                 </button>
               ))}
             </div>
