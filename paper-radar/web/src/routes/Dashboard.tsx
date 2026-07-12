@@ -8,6 +8,7 @@ import { PaperCard } from "@/components/PaperCard";
 import { PaperListRow } from "@/components/PaperListRow";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
@@ -36,24 +37,8 @@ export default function Dashboard() {
   const { data: mentions } = useMentions(userId);
   const { data: toRead } = useReadingList(userId, team.id);
   const qc = useQueryClient();
+  const { markSeen, markAllSeen } = useMentionActions(userId);
 
-  async function markMentionsSeen(paperId: string) {
-    await supabase
-      .from("mentions")
-      .update({ seen_at: new Date().toISOString() })
-      .eq("mentioned_user", userId)
-      .eq("paper_id", paperId)
-      .is("seen_at", null);
-    void qc.invalidateQueries({ queryKey: ["mentions"] });
-  }
-  async function markAllMentionsSeen() {
-    await supabase
-      .from("mentions")
-      .update({ seen_at: new Date().toISOString() })
-      .eq("mentioned_user", userId)
-      .is("seen_at", null);
-    void qc.invalidateQueries({ queryKey: ["mentions"] });
-  }
   async function markPaperRead(paperId: string) {
     await supabase
       .from("paper_status")
@@ -85,10 +70,10 @@ export default function Dashboard() {
       title: m.papers?.title ?? "A paper",
       sub: formatDate(m.created_at),
       onOpen: () => {
-        void markMentionsSeen(m.paper_id);
+        void markSeen(m.paper_id);
         openPaper(m.paper_id);
       },
-      onClear: () => void markMentionsSeen(m.paper_id),
+      onClear: () => void markSeen(m.paper_id),
     });
   }
   for (const r of toRead ?? []) {
@@ -141,7 +126,7 @@ export default function Dashboard() {
           count={attentionItems.length}
           action={
             unseenMentions.length > 0
-              ? { label: "Mark all read", onClick: () => void markAllMentionsSeen() }
+              ? { label: "Mark all read", onClick: () => void markAllSeen() }
               : undefined
           }
         >
