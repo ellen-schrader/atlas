@@ -21,6 +21,13 @@ import { useAppContext } from "@/routes/Layout";
 
 type SearchMode = "keyword" | "semantic";
 
+/** The card grid: container-aware, so it accounts for the sidebar automatically.
+ *  A 300px min track is what makes three columns fit the page's content box
+ *  (max-w-5xl minus p-8 = 960px; 3×300 + 2×16 gap = 932 ≤ 960), while still
+ *  falling back to 2 and 1 columns — never below 300px — as space shrinks.
+ *  Shared with CardSkeletons so the skeleton can't drift from the real layout. */
+const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4";
+
 export default function Papers() {
   const { team, userId } = useAppContext();
   const [mode, setMode] = useState<SearchMode>("keyword");
@@ -213,7 +220,7 @@ export default function Papers() {
           <EmptyState filtered={Boolean(query || tag)} onClear={clearFilters} />
         )
       ) : view === "cards" ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className={CARD_GRID}>
           {posts.map((post) => (
             <PaperCard
               key={post.id}
@@ -430,7 +437,7 @@ function PostPaperBar({ teamId }: { teamId: string }) {
 
 function CardSkeletons() {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className={CARD_GRID}>
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="overflow-hidden rounded-card border border-border bg-surface">
           <div className="h-[132px] w-full animate-pulse bg-surface-2" />
