@@ -65,7 +65,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
   const close = () => setOpen(false);
 
   return (
-    <div className="min-h-full">
+    <div className="flex min-h-screen flex-col md:h-screen md:flex-row md:overflow-hidden">
       {/* mobile top bar */}
       <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-2.5 md:hidden">
         <button
@@ -80,8 +80,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         </span>
       </header>
 
-      <div className="flex min-h-full">
-        {open && (
+      {open && (
           <div
             className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
             onClick={close}
@@ -92,7 +91,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         <aside
           className={cn(
             "fixed inset-y-0 left-0 z-40 flex w-60 shrink-0 flex-col gap-5 border-r border-border bg-surface p-4",
-            "transition-transform md:static md:z-auto md:translate-x-0",
+            "transition-transform md:static md:z-auto md:h-full md:translate-x-0",
             open ? "translate-x-0" : "-translate-x-full",
           )}
         >
@@ -156,7 +155,6 @@ export default function Layout({ session, team }: { session: Session; team: Team
             <Outlet context={ctx} />
           </PaperModalProvider>
         </main>
-      </div>
     </div>
   );
 }
