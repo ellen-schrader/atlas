@@ -1,4 +1,5 @@
 import { Avatar } from "@/components/Avatar";
+import { BookmarkButton } from "@/components/BookmarkButton";
 import { Chip } from "@/components/Chip";
 import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
@@ -7,17 +8,24 @@ import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate } from "@/lib/utils";
 
 /** A paper in the lab's collection: cover, source, title, authors, tags, and a
- *  footer with engagement + who posted. Opens the detail view on click. */
+ *  footer with engagement + who posted. Opens the detail view on click. When
+ *  `teamId`/`userId` are given, a bookmark overlays the cover. */
 export function PaperCard({
   post,
   reactions = 0,
   comments = 0,
   onOpen,
+  teamId,
+  userId,
+  bookmarked = false,
 }: {
   post: PaperPost;
   reactions?: number;
   comments?: number;
   onOpen: () => void;
+  teamId?: string;
+  userId?: string;
+  bookmarked?: boolean;
 }) {
   const p = post.papers;
   const tags = post.tags.length ? post.tags : p.tags;
@@ -41,8 +49,21 @@ export function PaperCard({
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
       )}
     >
-      <div className="h-[132px] w-full">
+      <div className="relative h-[132px] w-full">
         <Cover seed={p.id} />
+        {teamId && userId && (
+          <BookmarkButton
+            paperId={p.id}
+            teamId={teamId}
+            userId={userId}
+            bookmarked={bookmarked}
+            className={cn(
+              "absolute right-2.5 top-2.5 h-8 w-8 justify-center rounded-control text-white",
+              "bg-black/40 backdrop-blur-sm hover:bg-black/60",
+              "aria-pressed:bg-accent aria-pressed:text-white",
+            )}
+          />
+        )}
       </div>
       <div className="flex flex-col gap-2.5 p-4">
         <SourceLabel venue={p.venue} year={p.year} />

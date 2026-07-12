@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
+import { BookmarkButton } from "@/components/BookmarkButton";
 import { Cover } from "@/components/Cover";
 import { PaperEngagement } from "@/components/Engagement";
 import { supabase } from "@/lib/supabase";
@@ -13,10 +14,12 @@ export function PaperDetail({
   post,
   teamId,
   userId,
+  bookmarked = false,
 }: {
   post: PaperPost;
   teamId: string;
   userId: string;
+  bookmarked?: boolean;
 }) {
   const p = post.papers;
   const canonical = [...new Set([...p.tags, ...p.keywords])];
@@ -52,6 +55,14 @@ export function PaperDetail({
           </a>
           {p.code_url && <LinkBtn href={p.code_url}>Code</LinkBtn>}
           {p.data_url && <LinkBtn href={p.data_url}>Data</LinkBtn>}
+          <BookmarkButton
+            paperId={p.id}
+            teamId={teamId}
+            userId={userId}
+            bookmarked={bookmarked}
+            showLabel
+            className="rounded-control border border-border px-3 py-2 text-sm font-medium hover:border-accent hover:text-accent aria-pressed:border-accent aria-pressed:text-accent"
+          />
         </div>
 
         <MetaLabel>Abstract</MetaLabel>

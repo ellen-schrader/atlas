@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
+import { useReadingList } from "@/hooks/useReadingList";
 import { useTeamTags } from "@/hooks/useTeamTags";
 import { postPaper } from "@/lib/api";
 import type { PaperPost } from "@/lib/types";
@@ -19,7 +20,7 @@ import { cn, formatAuthors, formatDate } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 export default function Papers() {
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const [rawQuery, setRawQuery] = useState("");
   const query = useDebouncedValue(rawQuery.trim(), 250);
   const [tag, setTag] = useState<string | null>(null);
@@ -47,6 +48,8 @@ export default function Papers() {
     team.id,
     posts.map((p) => p.papers.id),
   );
+  const { data: reading } = useReadingList(userId, team.id);
+  const bookmarked = new Set((reading ?? []).map((r) => r.paper_id));
 
   const { openPaper } = usePaperModal();
 
@@ -145,6 +148,9 @@ export default function Papers() {
               reactions={counts?.[post.papers.id]?.reactions ?? 0}
               comments={counts?.[post.papers.id]?.comments ?? 0}
               onOpen={() => openPaper(post.papers.id)}
+              teamId={team.id}
+              userId={userId}
+              bookmarked={bookmarked.has(post.papers.id)}
             />
           ))}
         </div>

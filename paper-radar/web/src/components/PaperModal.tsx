@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { PaperDetail } from "@/components/PaperDetail";
 import { Modal } from "@/components/ui/modal";
+import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost } from "@/lib/types";
 
@@ -46,6 +47,9 @@ export function PaperModalProvider({
       { replace: true },
     );
 
+  const { data: reading } = useReadingList(userId, teamId);
+  const bookmarked = (reading ?? []).some((r) => r.paper_id === paperId);
+
   const { data: post, isLoading } = useQuery({
     queryKey: ["paper-post", teamId, paperId],
     enabled: paperId !== null,
@@ -66,7 +70,7 @@ export function PaperModalProvider({
       {children}
       <Modal open={paperId !== null} onClose={close} label={post?.papers.title ?? "Paper"}>
         {post ? (
-          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} />
+          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} bookmarked={bookmarked} />
         ) : (
           <div className="p-10 text-center text-sm text-muted">
             {isLoading ? "Loading…" : "Paper not available."}

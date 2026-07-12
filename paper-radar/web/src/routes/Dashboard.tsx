@@ -34,6 +34,7 @@ export default function Dashboard() {
   const { data: toRead } = useReadingList(userId, team.id);
 
   const firstName = displayName.split(/[\s@]/)[0];
+  const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
   const active = posts.filter((p) => (counts?.[p.papers.id]?.comments ?? 0) > 0).slice(0, 2);
   const recent = posts.slice(0, 6);
 
@@ -113,6 +114,9 @@ export default function Dashboard() {
                 reactions={counts?.[post.papers.id]?.reactions ?? 0}
                 comments={counts?.[post.papers.id]?.comments ?? 0}
                 onOpen={() => openPaper(post.papers.id)}
+                teamId={team.id}
+                userId={userId}
+                bookmarked={bookmarkedIds.has(post.papers.id)}
               />
             ))}
           </div>
