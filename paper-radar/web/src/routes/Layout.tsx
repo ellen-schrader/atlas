@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
+import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         <span className="flex items-center gap-2 font-semibold tracking-tight">
           <BrandMark size={6} /> Atlas
         </span>
+        <NotificationsBell userId={session.user.id} align="right" className="ml-auto" />
       </header>
 
       {open && (
@@ -99,13 +101,16 @@ export default function Layout({ session, team }: { session: Session; team: Team
             <span className="flex items-center gap-2 font-semibold tracking-tight">
               <BrandMark size={7} /> Atlas
             </span>
-            <button
-              aria-label="Close menu"
-              onClick={close}
-              className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-surface-2 md:hidden"
-            >
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-1">
+              <NotificationsBell userId={session.user.id} align="left" className="hidden md:block" />
+              <button
+                aria-label="Close menu"
+                onClick={close}
+                className="grid h-8 w-8 place-items-center rounded-control text-muted hover:bg-surface-2 md:hidden"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <nav className="flex flex-col gap-0.5">
