@@ -14,7 +14,10 @@ server).
 
 from __future__ import annotations
 
+import ipaddress
+import time
 from functools import lru_cache, wraps
+from urllib.parse import urlsplit
 
 from api import embeddings
 from api.config import get_api_settings
@@ -252,3 +255,205 @@ def get_post(team: dict, paper_id: str) -> dict:
     if not posts:
         raise LabError(f"No paper {paper_id} in {team['name']}.")
     return _hydrate(client, posts)[0]
+
+
+# === write path (post a paper, comment, mention) ===========================
+# These are the only writing operations in the MCP server. They act as the
+# signed-in user (RLS enforces lab membership, self-authorship, and that a
+# mentionee is a co-member), never with the service-role key — except the one
+# global-corpus dedup below, which cannot leak or escalate.
+
+MAX_URL_LEN = 2048
+MAX_NOTE_LEN = 2000
+
+
+def validate_share_url(url: str) -> str:
+    """Accept only a plausible public http(s) article URL. Blocks non-http
+    schemes and loopback/private/link-local hosts so an injected URL can't point
+    the metadata fetch at internal infrastructure (SSRF)."""
+    raw = (url or "").strip()
+    if not raw:
+        raise LabError("No URL given.")
+    if len(raw) > MAX_URL_LEN:
+        raise LabError("That URL is too long.")
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https"):
+        raise LabError("Only http(s) links can be shared.")
+    host = parts.hostname
+    if not host:
+        raise LabError("That URL has no host.")
+    lowered = host.lower()
+    if lowered == "localhost" or lowered.endswith(".localhost") or lowered.endswith(".internal"):
+        raise LabError("That host isn't allowed.")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (
+        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+    ):
+        raise LabError("That host isn't allowed.")
+    return raw
+
+
+class _RateLimiter:
+    """A simple per-process sliding-window cap. The MCP process is one user, so
+    this is effectively a per-user write quota that bounds injection-driven spam."""
+
+    def __init__(self, max_events: int, window_seconds: float) -> None:
+        self.max_events = max_events
+        self.window = window_seconds
+        self._events: list[float] = []
+
+    def check(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        self._events = [t for t in self._events if now - t < self.window]
+        if len(self._events) >= self.max_events:
+            raise LabError(
+                "Too many shares in a short time — pausing to avoid flooding the lab. "
+                "Try again shortly."
+            )
+        self._events.append(now)
+
+
+_post_limiter = _RateLimiter(max_events=20, window_seconds=3600)
+
+
+@with_refresh
+def list_members(team: dict) -> list[dict]:
+    """The lab's members: {user_id, display_name}. RLS-scoped to the caller's lab."""
+    client = get_client()
+    rows = (
+        client.table("team_members")
+        .select("user_id, profiles(display_name)")
+        .eq("team_id", team["id"])
+        .execute()
+        .data
+        or []
+    )
+    out = []
+    for r in rows:
+        prof = r.get("profiles") or {}
+        out.append({"user_id": r["user_id"], "display_name": prof.get("display_name") or ""})
+    return out
+
+
+def resolve_member(team: dict, name: str) -> dict:
+    """Resolve a teammate to tag, EXACTLY. Never guesses: 0 or >1 name matches
+    raises, as does tagging yourself. This blocks injection like "tag everyone"."""
+    wanted = (name or "").strip().lstrip("@")
+    if not wanted:
+        raise LabError("No teammate name given to tag.")
+    me = current_user_id()
+    members = [m for m in list_members(team) if m["user_id"] != me]
+    matches = [m for m in members if m["display_name"].lower() == wanted.lower()]
+    if not matches:
+        # Fall back to a unique prefix match, still exact-or-refuse.
+        matches = [m for m in members if m["display_name"].lower().startswith(wanted.lower())]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        others = ", ".join(m["display_name"] for m in members) or "(no teammates)"
+        raise LabError(f"No teammate named “{wanted}” in {team['name']}. Members: {others}.")
+    names = ", ".join(m["display_name"] for m in matches)
+    raise LabError(f"“{wanted}” is ambiguous — did you mean one of: {names}? Be more specific.")
+
+
+def resolve_metadata(url: str) -> dict:
+    """Fetch citation metadata for a validated URL (one outbound request)."""
+    from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
+
+    clean = _clean_url(validate_share_url(url))
+    from paper_radar.ingest.metadata import fetch_metadata
+
+    meta = fetch_metadata(clean)
+    return {"clean_url": clean, "url_norm": _normalize_key(clean), "meta": meta}
+
+
+@with_refresh
+def find_existing_post(team: dict, paper_id: str) -> str | None:
+    """The post id if this paper is already in the lab, else None (idempotency)."""
+    rows = (
+        get_client()
+        .table("paper_posts")
+        .select("id")
+        .eq("team_id", team["id"])
+        .eq("paper_id", paper_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return rows[0]["id"] if rows else None
+
+
+def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
+    """Ensure the paper exists (global dedup) and post it into the lab as the
+    user. Returns (post_id, paper_id, already_shared). Rate-limited. Any note the
+    user wrote goes into a comment (add_comment_with_mention), not the post row."""
+    from api.app import _upsert_paper  # global-corpus dedup (service role, contained)
+
+    _post_limiter.check()
+    meta, clean_url, url_norm = resolved["meta"], resolved["clean_url"], resolved["url_norm"]
+    paper_id, _needs_embedding = _upsert_paper(meta, clean_url, url_norm)
+
+    existing = find_existing_post(team, paper_id)
+    if existing:
+        return existing, paper_id, True
+
+    uid = current_user_id()
+    row = {
+        "paper_id": paper_id,
+        "team_id": team["id"],
+        "posted_by": uid,
+        "source": "web",
+        "via": "claude_mcp",  # provenance — free-text column, no constraint change
+    }
+    try:
+        inserted = get_client().table("paper_posts").insert(row).execute()
+    except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "code", None) == "42501":
+            raise LabError(f"You are not a member of {team['name']}.") from exc
+        raise LabError(f"Could not share the paper: {exc}") from exc
+    return inserted.data[0]["id"], paper_id, False
+
+
+def add_comment_with_mention(
+    team: dict, paper_id: str, body: str, mention: dict | None
+) -> None:
+    """Post a comment as the user; if `mention` is given, tag that teammate (the
+    body embeds "@name" so the web UI highlights it, and the mention row notifies
+    them + adds the paper to their to-read via the DB trigger)."""
+    client = get_client()
+    text = (body or "").strip()[:MAX_NOTE_LEN]
+    if mention:
+        text = f"@{mention['display_name']} {text}".strip()
+    if not text:
+        return
+    uid = current_user_id()
+    try:
+        inserted = (
+            client.table("comments")
+            .insert({"paper_id": paper_id, "team_id": team["id"], "author_id": uid, "body": text})
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(f"Could not post the comment: {exc}") from exc
+    if not mention:
+        return
+    comment_id = inserted.data[0]["id"] if inserted.data else None
+    try:
+        client.table("mentions").insert(
+            {
+                "paper_id": paper_id,
+                "team_id": team["id"],
+                "mentioned_user": mention["user_id"],
+                "mentioned_by": uid,
+                "comment_id": comment_id,
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(
+            f"Shared the paper and posted the comment, but couldn't tag "
+            f"{mention['display_name']}: {exc}"
+        ) from exc
