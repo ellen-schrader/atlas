@@ -21,14 +21,24 @@ def load_fixture_papers() -> list[Paper]:
 
 
 def list_papers() -> list[Paper]:
-    """Return all papers from the DB, or the fixtures if the DB is empty.
+    """Return all papers from the DB, seeding the fixtures first if it is empty.
 
-    This is what the app calls so it always has something to show.
+    This is what the app calls so it always has something to show. Fixtures are
+    written to the DB (rather than returned transiently) so every paper has an
+    id that comments and reactions can attach to.
     """
     init_db()
     with get_session() as session:
         papers = list(session.exec(select(Paper)).all())
-    return papers if papers else load_fixture_papers()
+        if papers:
+            return papers
+        fixtures = load_fixture_papers()
+        for paper in fixtures:
+            session.add(paper)
+        session.commit()
+        for paper in fixtures:
+            session.refresh(paper)
+        return fixtures
 
 
 def upsert_paper(paper: Paper) -> Paper:

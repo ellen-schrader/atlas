@@ -10,7 +10,17 @@ Papers arrive as PDFs exported from the lab's Teams channel. paper-radar:
 2. **Enriches** — uses Claude (grounded on the resolved abstract) to write a short summary, assign domain tags, and find linked code/data repos. *(stub — you implement)*
 3. **Embeds** — computes local sentence-transformer embeddings, builds a FAISS index for semantic search, and a UMAP 2-D map of the collection.
 4. **Ranks** — a "taste model" scores papers by how interesting they are to the lab. *(stub — you implement)*
-5. **Serves** — a Streamlit app to search, filter, and browse.
+5. **Serves** — a Streamlit app (behind email/password sign-in) to search, filter, browse, comment on, and react to papers.
+
+## Accounts & teams
+
+The app requires signing in. Each user belongs to a **team**; signing up with a
+new team name creates the team, and signing up with an existing name joins it.
+The **papers database is shared across all teams**, but **comments and
+reactions are team-scoped** — you only see the ones written by members of your
+own team. Passwords are hashed with PBKDF2-SHA256 (stdlib only). See
+`paper_radar/auth.py` (accounts/teams) and `paper_radar/social.py`
+(comments/reactions).
 
 ## Architecture
 
@@ -19,7 +29,8 @@ PDFs (Teams export)
       │  ingest/pdf_extract.py   (PyMuPDF: link annotations + regex fallback)
       │  ingest/metadata.py      (arXiv, Nature→DOI, PubMed, Crossref, citation tags)
       ▼
-   SQLite  ◀── models.py (SQLModel: Paper, Label, User)  ── db.py
+   SQLite  ◀── models.py (Paper, Label, User, Team, Comment, Reaction)  ── db.py
+      │        auth.py (signup/login + teams) · social.py (comments/reactions)
       │
       ├─ enrich/agent.py   Claude → PaperEnrichment            [STUB]
       ├─ embed/embed.py    sentence-transformers (bge-small)

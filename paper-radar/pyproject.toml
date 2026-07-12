@@ -27,6 +27,14 @@ dependencies = [
 dev = [
     "ruff>=0.6",
     "pytest>=8.0",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "supabase>=2.9",
+]
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "supabase>=2.9",
 ]
 
 [project.scripts]
