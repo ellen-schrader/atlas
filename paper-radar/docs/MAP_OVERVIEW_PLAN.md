@@ -131,6 +131,21 @@ Returns, in one call:
 
 ---
 
+## Future TODOs
+
+- **Test alternative clustering methods.** Current: KMeans, fixed k (auto 4–8).
+  Evaluate HDBSCAN (density-based, finds "noise"/outliers, variable cluster
+  count), hierarchical/agglomerative, and different k against the lab's corpus —
+  pick by cluster coherence, not by default. The clustering call is isolated in
+  `paper_radar.embed.index.cluster_embeddings`, so swapping is local.
+- **Embedding coverage gap.** ~29 papers have no title *and* no abstract
+  (publisher bot-walls, plan §6), so there's nothing to embed and they never
+  appear on the map. Needs a metadata path (browser-extension / user-supplied /
+  LLM extraction) before they can be embedded. Voyage itself is called directly
+  on post (background task) and is healthy.
+- **Reduce LLM calls by persisting results:** enrichment tags in `papers.tags`
+  (compute once), cluster names in the `trends` table (survive restarts).
+
 ## 5. Rough steps (after §4)
 
 1. `/overview` endpoint: UMAP + KMeans + stats (no LLM yet) → wire the page.

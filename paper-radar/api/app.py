@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
-from . import embeddings
+from . import embeddings, enrichment
 from . import overview as overview_mod
 from .config import get_api_settings
 from .supa import get_user_id, service_client, user_client
@@ -225,6 +225,23 @@ def _embed_and_store(paper_id: str, title: str | None, abstract: str | None) -> 
         log.warning("embedding paper %s failed (backfill will retry): %s", paper_id, exc)
 
 
+def _enrich_and_store(paper_id: str, title: str | None, abstract: str | None) -> None:
+    """Background task: tag one paper and store the tags (service role).
+
+    No-ops without an Anthropic key; failures are logged, not raised — the
+    enrichment backfill retries anything still missing ``enriched_at``.
+    """
+    tags = enrichment.enrich_batch([{"id": paper_id, "title": title, "abstract": abstract}])
+    if paper_id not in tags:
+        return
+    try:
+        service_client().table("papers").update(
+            {"tags": tags[paper_id], "enriched_at": datetime.now(UTC).isoformat()}
+        ).eq("id", paper_id).is_("enriched_at", "null").execute()
+    except Exception as exc:
+        log.warning("enriching paper %s failed (backfill will retry): %s", paper_id, exc)
+
+
 def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: str | None):
     """Insert the paper_post as the user (RLS enforces membership). Returns (id, already)."""
     uc = user_client(token)
@@ -288,10 +305,12 @@ def create_post(
     paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
     post_id, already = _create_post(token, req.team_id, paper_id, user_id, req.note)
 
-    # Embed after responding so posting stays fast; skipped without a key
-    # (dev without embeddings) — the backfill script covers those papers.
+    # Embed + tag after responding so posting stays fast; each no-ops without
+    # its key, and the backfill scripts cover anything skipped.
     if needs_embedding and get_api_settings().voyage_api_key:
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
+    if needs_embedding:
+        background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
 
     return PostResponse(
         post_id=post_id,
