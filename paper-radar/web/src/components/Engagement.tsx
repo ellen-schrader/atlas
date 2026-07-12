@@ -4,8 +4,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useMembers } from "@/hooks/useMembers";
 import { supabase } from "@/lib/supabase";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 const EMOJIS = ["👍", "❤️", "🎉", "💡", "🤔"];
 
@@ -25,13 +26,69 @@ interface MemberRow {
   profiles: { display_name: string } | null;
 }
 
+/** What differs between engaging with a paper and engaging with a figure: the
+ *  backing tables, the foreign-key column, whether @-mentions apply, and which
+ *  card/list count query to refresh. Everything else is identical, so the two
+ *  public entry points below are thin wrappers over one `Engagement`. */
+type SubjectKind = "paper" | "figure";
+interface SubjectConfig {
+  commentsTable: string;
+  reactionsTable: string;
+  fk: string;
+  supportsMentions: boolean;
+  countsKey: string;
+}
+const SUBJECTS: Record<SubjectKind, SubjectConfig> = {
+  paper: {
+    commentsTable: "comments",
+    reactionsTable: "reactions",
+    fk: "paper_id",
+    supportsMentions: true,
+    countsKey: "engagement-counts",
+  },
+  figure: {
+    commentsTable: "figure_comments",
+    reactionsTable: "figure_reactions",
+    fk: "figure_id",
+    supportsMentions: false,
+    countsKey: "figure-engagement-counts",
+  },
+};
+
 interface Ctx {
-  paperId: string;
+  kind: SubjectKind;
+  subjectId: string;
   teamId: string;
   userId: string;
 }
 
-export function PaperEngagement(ctx: Ctx) {
+/** Reactions + comments on a paper. Public API unchanged. */
+export function PaperEngagement({
+  paperId,
+  teamId,
+  userId,
+}: {
+  paperId: string;
+  teamId: string;
+  userId: string;
+}) {
+  return <Engagement kind="paper" subjectId={paperId} teamId={teamId} userId={userId} />;
+}
+
+/** Reactions + comments on a mood-board figure (no @-mentions in v1). */
+export function FigureEngagement({
+  figureId,
+  teamId,
+  userId,
+}: {
+  figureId: string;
+  teamId: string;
+  userId: string;
+}) {
+  return <Engagement kind="figure" subjectId={figureId} teamId={teamId} userId={userId} />;
+}
+
+function Engagement(ctx: Ctx) {
   return (
     <div className="flex flex-col gap-5">
       <Reactions {...ctx} />
@@ -40,60 +97,65 @@ export function PaperEngagement(ctx: Ctx) {
   );
 }
 
-function Reactions({ paperId, teamId, userId }: Ctx) {
+function Reactions({ kind, subjectId, teamId, userId }: Ctx) {
+  const cfg = SUBJECTS[kind];
   const qc = useQueryClient();
-  const key = ["reactions", paperId, teamId];
+  const key = [cfg.reactionsTable, subjectId, teamId];
   const { data } = useQuery({
     queryKey: key,
     queryFn: async (): Promise<ReactionRow[]> => {
       const { data, error } = await supabase
-        .from("reactions")
+        .from(cfg.reactionsTable)
         .select("emoji, user_id")
-        .eq("paper_id", paperId)
+        .eq(cfg.fk, subjectId)
         .eq("team_id", teamId);
       if (error) throw error;
       return (data ?? []) as ReactionRow[];
     },
   });
   const rows = data ?? [];
+  const { data: members } = useMembers(teamId);
+  const nameOf = (uid: string) =>
+    uid === userId ? "You" : members?.find((m) => m.user_id === uid)?.profiles?.display_name ?? "Someone";
 
   async function toggle(emoji: string) {
     const mine = rows.some((r) => r.emoji === emoji && r.user_id === userId);
     if (mine) {
       await supabase
-        .from("reactions")
+        .from(cfg.reactionsTable)
         .delete()
-        .eq("paper_id", paperId)
+        .eq(cfg.fk, subjectId)
         .eq("team_id", teamId)
         .eq("user_id", userId)
         .eq("emoji", emoji);
     } else {
       await supabase
-        .from("reactions")
-        .insert({ paper_id: paperId, team_id: teamId, user_id: userId, emoji });
+        .from(cfg.reactionsTable)
+        .insert({ [cfg.fk]: subjectId, team_id: teamId, user_id: userId, emoji });
     }
     await qc.invalidateQueries({ queryKey: key });
     // refresh the card/list engagement counts (they read a separate query)
-    await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
+    await qc.invalidateQueries({ queryKey: [cfg.countsKey] });
   }
 
   return (
     <div className="flex flex-wrap gap-2">
       {EMOJIS.map((e) => {
-        const count = rows.filter((r) => r.emoji === e).length;
+        const who = rows.filter((r) => r.emoji === e).map((r) => nameOf(r.user_id));
         const mine = rows.some((r) => r.emoji === e && r.user_id === userId);
         return (
           <button
             key={e}
             type="button"
             onClick={() => toggle(e)}
+            title={who.length > 0 ? who.join(", ") : undefined}
             className={cn(
               "rounded-full border px-2.5 py-1 text-sm transition",
               mine ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-accent",
             )}
           >
             {e}
-            {count > 0 && <span className="ml-1 font-mono text-xs">{count}</span>}
+            {who.length > 0 && <span className="ml-1 font-mono text-xs">{who.length}</span>}
           </button>
         );
       })}
@@ -101,17 +163,18 @@ function Reactions({ paperId, teamId, userId }: Ctx) {
   );
 }
 
-function Comments({ paperId, teamId, userId }: Ctx) {
+function Comments({ kind, subjectId, teamId, userId }: Ctx) {
+  const cfg = SUBJECTS[kind];
   const qc = useQueryClient();
-  const commentsKey = ["comments", paperId, teamId];
+  const commentsKey = [cfg.commentsTable, subjectId, teamId];
 
   const { data: comments } = useQuery({
     queryKey: commentsKey,
     queryFn: async (): Promise<CommentRow[]> => {
       const { data, error } = await supabase
-        .from("comments")
+        .from(cfg.commentsTable)
         .select("id, body, created_at, author_id, profiles(display_name)")
-        .eq("paper_id", paperId)
+        .eq(cfg.fk, subjectId)
         .eq("team_id", teamId)
         .order("created_at");
       if (error) throw error;
@@ -121,6 +184,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
 
   const { data: members } = useQuery({
     queryKey: ["members", teamId],
+    enabled: cfg.supportsMentions,
     queryFn: async (): Promise<MemberRow[]> => {
       const { data, error } = await supabase
         .from("team_members")
@@ -138,7 +202,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
 
-  const teammates = (members ?? []).filter((m) => m.user_id !== userId);
+  const teammates = cfg.supportsMentions ? (members ?? []).filter((m) => m.user_id !== userId) : [];
 
   async function saveEdit(id: string) {
     setError(null);
@@ -146,7 +210,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
     // matched nothing (e.g. the comment-edit RLS policy isn't applied yet),
     // which would otherwise fail silently.
     const { data, error: err } = await supabase
-      .from("comments")
+      .from(cfg.commentsTable)
       .update({ body: editBody.trim() })
       .eq("id", id)
       .select("id");
@@ -169,16 +233,16 @@ function Comments({ paperId, teamId, userId }: Ctx) {
     setError(null);
     try {
       const { data: inserted, error: insErr } = await supabase
-        .from("comments")
-        .insert({ paper_id: paperId, team_id: teamId, author_id: userId, body: body.trim() })
+        .from(cfg.commentsTable)
+        .insert({ [cfg.fk]: subjectId, team_id: teamId, author_id: userId, body: body.trim() })
         .select("id")
         .single();
       if (insErr) throw insErr;
 
-      if (mentionIds.length > 0) {
+      if (cfg.supportsMentions && mentionIds.length > 0) {
         const { error: mErr } = await supabase.from("mentions").insert(
           mentionIds.map((uid) => ({
-            paper_id: paperId,
+            paper_id: subjectId,
             team_id: teamId,
             mentioned_user: uid,
             mentioned_by: userId,
@@ -191,8 +255,8 @@ function Comments({ paperId, teamId, userId }: Ctx) {
       setBody("");
       setMentionIds([]);
       await qc.invalidateQueries({ queryKey: commentsKey });
-      await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
-      await qc.invalidateQueries({ queryKey: ["mentions"] });
+      await qc.invalidateQueries({ queryKey: [cfg.countsKey] });
+      if (cfg.supportsMentions) await qc.invalidateQueries({ queryKey: ["mentions"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -214,7 +278,9 @@ function Comments({ paperId, teamId, userId }: Ctx) {
           <div className="min-w-0 flex-1">
             <div className="text-xs">
               <span className="font-semibold text-fg">{c.profiles?.display_name ?? "Someone"}</span>
-              <span className="ml-2 font-mono text-muted">{formatDate(c.created_at)}</span>
+              <span className="ml-2 font-mono text-muted" title={formatDate(c.created_at)}>
+                {formatRelative(c.created_at)}
+              </span>
             </div>
             {editingId === c.id ? (
               <div className="mt-1 flex flex-col gap-2">

@@ -19,6 +19,15 @@ export function Modal({
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastFocused = useRef<Element | null>(null);
 
+  // Keep the latest onClose in a ref so the setup effect below can depend on
+  // `open` alone. Otherwise a parent that re-renders on each keystroke (e.g. a
+  // dialog whose form state lives beside <Modal>) hands us a new onClose every
+  // render, re-running the effect and stealing focus back to the close button.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
     lastFocused.current = document.activeElement;
@@ -28,7 +37,7 @@ export function Modal({
     document.body.style.overflow = "hidden";
     const raf = requestAnimationFrame(() => closeRef.current?.focus());
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => {
@@ -38,7 +47,7 @@ export function Modal({
       document.body.style.overflow = prevOverflow;
       if (lastFocused.current instanceof HTMLElement) lastFocused.current.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

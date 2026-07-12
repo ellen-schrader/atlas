@@ -1,32 +1,38 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { InviteCode } from "@/components/InviteCode";
+import { LabManagement } from "@/components/LabManagement";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
+import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
+type Note = { ok: boolean; text: string } | null;
+
 export default function Settings() {
-  const { team, userId } = useAppContext();
+  const { team, userId, session } = useAppContext();
   const { data: profile } = useProfile(userId);
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
       <header>
         <h1 className="text-display font-bold tracking-tight">Settings</h1>
-        <p className="mt-1.5 text-sm text-muted">Your profile and lab.</p>
+        <p className="mt-1.5 text-sm text-muted">Your account, profile, and lab.</p>
       </header>
+
+      <AccountPanel
+        userId={userId}
+        currentName={profile?.display_name ?? ""}
+        currentEmail={session.user.email ?? ""}
+      />
 
       <ProfilePanel userId={userId} initial={profile?.profile_md ?? ""} />
 
-      <Panel
-        title="Invite your lab"
-        desc={`Share this join code — anyone who enters it joins ${team.name}.`}
-      >
-        <InviteCode code={team.slug} />
-      </Panel>
+      <LabManagement teamId={team.id} teamName={team.name} teamSlug={team.slug} userId={userId} />
     </div>
   );
 }
@@ -38,6 +44,172 @@ function Panel({ title, desc, children }: { title: string; desc: string; childre
       <p className="mt-1 text-sm text-muted">{desc}</p>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+function FieldNote({ note }: { note: Note }) {
+  if (!note) return null;
+  return <p className={cn("mt-1.5 text-xs", note.ok ? "text-accent" : "text-danger")}>{note.text}</p>;
+}
+
+function AccountPanel({
+  userId,
+  currentName,
+  currentEmail,
+}: {
+  userId: string;
+  currentName: string;
+  currentEmail: string;
+}) {
+  const qc = useQueryClient();
+
+  const [name, setName] = useState(currentName);
+  const [nameBusy, setNameBusy] = useState(false);
+  const [nameNote, setNameNote] = useState<Note>(null);
+  useEffect(() => setName(currentName), [currentName]);
+
+  const [email, setEmail] = useState(currentEmail);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailNote, setEmailNote] = useState<Note>(null);
+  useEffect(() => setEmail(currentEmail), [currentEmail]);
+
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwNote, setPwNote] = useState<Note>(null);
+
+  async function saveName(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || name.trim() === currentName) return;
+    setNameBusy(true);
+    setNameNote(null);
+    const { error } = await supabase.from("profiles").update({ display_name: name.trim() }).eq("id", userId);
+    // keep the auth metadata in sync (best effort — the app reads profiles)
+    await supabase.auth.updateUser({ data: { display_name: name.trim() } });
+    setNameBusy(false);
+    if (error) setNameNote({ ok: false, text: error.message });
+    else {
+      setNameNote({ ok: true, text: "Saved." });
+      await qc.invalidateQueries({ queryKey: ["profile", userId] });
+    }
+  }
+
+  async function saveEmail(e: FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || email.trim() === currentEmail) return;
+    setEmailBusy(true);
+    setEmailNote(null);
+    const { error } = await supabase.auth.updateUser({ email: email.trim() });
+    setEmailBusy(false);
+    if (error) setEmailNote({ ok: false, text: error.message });
+    else setEmailNote({ ok: true, text: "Check your new email to confirm the change." });
+  }
+
+  async function savePassword(e: FormEvent) {
+    e.preventDefault();
+    setPwNote(null);
+    if (pw.length < 8) {
+      setPwNote({ ok: false, text: "Password must be at least 8 characters." });
+      return;
+    }
+    if (pw !== pw2) {
+      setPwNote({ ok: false, text: "Passwords don’t match." });
+      return;
+    }
+    setPwBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setPwBusy(false);
+    if (error) setPwNote({ ok: false, text: error.message });
+    else {
+      setPwNote({ ok: true, text: "Password updated." });
+      setPw("");
+      setPw2("");
+    }
+  }
+
+  return (
+    <Panel title="Account" desc="Your name, email, and password.">
+      <div className="flex flex-col gap-6">
+        <form onSubmit={saveName} className="flex flex-col gap-1.5">
+          <Label htmlFor="acct-name">Display name</Label>
+          <div className="flex gap-2">
+            <Input
+              id="acct-name"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameNote(null);
+              }}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={nameBusy || !name.trim() || name.trim() === currentName}
+            >
+              {nameBusy ? "…" : "Save"}
+            </Button>
+          </div>
+          <FieldNote note={nameNote} />
+        </form>
+
+        <form onSubmit={saveEmail} className="flex flex-col gap-1.5">
+          <Label htmlFor="acct-email">Email</Label>
+          <div className="flex gap-2">
+            <Input
+              id="acct-email"
+              type="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setEmailNote(null);
+              }}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={emailBusy || !email.trim() || email.trim() === currentEmail}
+            >
+              {emailBusy ? "…" : "Update"}
+            </Button>
+          </div>
+          <FieldNote note={emailNote} />
+        </form>
+
+        <form onSubmit={savePassword} className="flex flex-col gap-1.5">
+          <Label htmlFor="acct-pw">New password</Label>
+          <Input
+            id="acct-pw"
+            type="password"
+            value={pw}
+            onChange={(e) => {
+              setPw(e.target.value);
+              setPwNote(null);
+            }}
+            placeholder="At least 8 characters"
+            autoComplete="new-password"
+          />
+          <Label htmlFor="acct-pw2" className="mt-1.5">
+            Confirm new password
+          </Label>
+          <Input
+            id="acct-pw2"
+            type="password"
+            value={pw2}
+            onChange={(e) => {
+              setPw2(e.target.value);
+              setPwNote(null);
+            }}
+            autoComplete="new-password"
+          />
+          <div className="mt-2">
+            <Button type="submit" size="sm" disabled={pwBusy || !pw || !pw2}>
+              {pwBusy ? "…" : "Update password"}
+            </Button>
+          </div>
+          <FieldNote note={pwNote} />
+        </form>
+      </div>
+    </Panel>
   );
 }
 

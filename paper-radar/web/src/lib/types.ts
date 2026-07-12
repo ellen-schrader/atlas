@@ -46,6 +46,28 @@ export interface PaperPost {
   papers: Paper; // the joined canonical paper
 }
 
+/** A mood-board figure: an inspirational publication image, lab-scoped, optionally
+ *  linked to a paper. The image itself lives in the private `figures` storage
+ *  bucket at `storage_path`; the app resolves short-lived signed URLs to show it. */
+export interface Figure {
+  id: string;
+  team_id: string;
+  uploaded_by: string | null;
+  storage_path: string;
+  title: string;
+  caption: string;
+  category: string;
+  paper_id: string | null;
+  tags: string[];
+  width: number;
+  height: number;
+  mime_type: string;
+  file_size: number | null;
+  created_at: string;
+  uploader?: { display_name: string } | null; // joined profile of the uploader
+  papers?: { id: string; title: string | null } | null; // joined linked paper (if any)
+}
+
 /** One result from POST /search/semantic. */
 export interface SemanticHit {
   similarity: number;
