@@ -73,6 +73,8 @@ function Reactions({ paperId, teamId, userId }: Ctx) {
         .insert({ paper_id: paperId, team_id: teamId, user_id: userId, emoji });
     }
     await qc.invalidateQueries({ queryKey: key });
+    // refresh the card/list engagement counts (they read a separate query)
+    await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
   }
 
   return (
@@ -189,6 +191,8 @@ function Comments({ paperId, teamId, userId }: Ctx) {
       setBody("");
       setMentionIds([]);
       await qc.invalidateQueries({ queryKey: commentsKey });
+      await qc.invalidateQueries({ queryKey: ["engagement-counts"] });
+      await qc.invalidateQueries({ queryKey: ["mentions"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
