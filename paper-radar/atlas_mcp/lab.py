@@ -14,7 +14,7 @@ server).
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import lru_cache, wraps
 
 from api import embeddings
 from api.config import get_api_settings
@@ -86,6 +86,40 @@ def current_user_id() -> str | None:
     return _session()[1]
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Whether `exc` looks like an expired/invalid session — worth a refresh + retry."""
+    code = getattr(exc, "code", None)
+    if code in (401, "401", "PGRST301", "PGRST302"):
+        return True
+    msg = f"{getattr(exc, 'message', '')} {exc}".lower()
+    return "jwt expired" in msg or "token is expired" in msg or "unauthorized" in msg or (
+        "jwt" in msg and "expired" in msg
+    )
+
+
+def with_refresh(fn):
+    """On an expired-session error, drop the cached session and retry once.
+
+    The cached client bakes in a bearer token that expires (~1h); a long-running
+    stdio server would otherwise 401 until restarted. Clean `LabError`s (bad
+    input, no such lab) are never retried.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except LabError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if _is_auth_error(exc):
+                _session.cache_clear()
+                return fn(*args, **kwargs)
+            raise
+
+    return wrapper
+
+
 def web_url() -> str:
     return get_atlas_settings().atlas_web_url.rstrip("/")
 
@@ -95,6 +129,7 @@ def paper_link(paper_id: str) -> str:
     return f"{web_url()}/papers?paper={paper_id}"
 
 
+@with_refresh
 def list_teams() -> list[dict]:
     """The labs the configured user belongs to (id, name, slug)."""
     client, uid = _session()
@@ -147,6 +182,7 @@ def _hydrate(client: Client, posts: list[dict]) -> list[dict]:
     return out
 
 
+@with_refresh
 def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
     """Ranked posts in `team` for `query`. mode: "keyword" | "semantic"."""
     client = get_client()
@@ -186,6 +222,7 @@ def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
     return _hydrate(client, posts)
 
 
+@with_refresh
 def recent(team: dict, limit: int) -> list[dict]:
     """The lab's most recently posted papers (search_papers with an empty query)."""
     client = get_client()
@@ -198,6 +235,7 @@ def recent(team: dict, limit: int) -> list[dict]:
     return _hydrate(client, posts)
 
 
+@with_refresh
 def get_post(team: dict, paper_id: str) -> dict:
     """One paper as posted in `team`, hydrated with its metadata."""
     client = get_client()

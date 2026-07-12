@@ -22,6 +22,7 @@ FIGURE_COLUMNS = (
 )
 
 
+@lab.with_refresh
 def list_figures(
     team: dict,
     *,
@@ -48,11 +49,13 @@ def list_figures(
         q = q.contains("tags", [tag])
     if mine_only:
         uid = lab.current_user_id()
-        if uid:
-            q = q.eq("uploaded_by", uid)
+        if not uid:
+            raise LabError("Couldn't determine your user id to filter to your own figures.")
+        q = q.eq("uploaded_by", uid)
     return q.execute().data or []
 
 
+@lab.with_refresh
 def get_figure(team: dict, figure_id: str) -> dict:
     """One figure in the lab, hydrated with uploader + linked paper."""
     client = lab.get_client()
@@ -71,48 +74,64 @@ def get_figure(team: dict, figure_id: str) -> dict:
     return rows[0]
 
 
+@lab.with_refresh
 def categories(team: dict) -> list[dict]:
     """The lab's category facets (figure_categories RPC)."""
     client = lab.get_client()
     return client.rpc("figure_categories", {"p_team": team["id"]}).execute().data or []
 
 
+@lab.with_refresh
+def _download_raw(figure: dict) -> bytes:
+    return lab.get_client().storage.from_(BUCKET).download(figure["storage_path"])
+
+
 def download(figure: dict) -> bytes:
     """Raw image bytes from the private bucket (storage RLS applies)."""
-    client = lab.get_client()
     try:
-        return client.storage.from_(BUCKET).download(figure["storage_path"])
+        return _download_raw(figure)
+    except LabError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise LabError(f"Could not fetch the image for figure {figure['id']}: {exc}") from exc
 
 
-def downscale_png(raw: bytes, max_side: int = 900) -> tuple[bytes, int, int]:
-    """Downscale to <= ``max_side`` on the long edge; return (png_bytes, w, h)."""
+def to_preview(raw: bytes, max_side: int = 768) -> tuple[bytes, str]:
+    """Downscale to <= ``max_side`` on the long edge and encode as WebP.
+
+    WebP stays small for both photos and line art, keeping the base64 payload —
+    which lands in the model's context — modest. Returns (bytes, mime_type).
+    """
     from PIL import Image  # lazy: importing Pillow is not free
 
-    with Image.open(io.BytesIO(raw)) as im:
-        im = im.convert("RGB")
-        w, h = im.size
-        scale = min(1.0, max_side / max(w, h))
-        if scale < 1.0:
-            im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))))
-        out = io.BytesIO()
-        im.save(out, format="PNG")
-        return out.getvalue(), im.width, im.height
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            scale = min(1.0, max_side / max(w, h))
+            if scale < 1.0:
+                im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))))
+            out = io.BytesIO()
+            im.save(out, format="WEBP", quality=80, method=6)
+            return out.getvalue(), "image/webp"
+    except Exception as exc:  # noqa: BLE001 — corrupt/unsupported bytes → clean error
+        raise LabError(f"Could not read the image: {exc}") from exc
 
 
 def palette(raw: bytes, n: int = 6) -> list[str]:
     """Dominant colours as hex, most-common first (deterministic)."""
     from PIL import Image
 
-    with Image.open(io.BytesIO(raw)) as im:
-        im = im.convert("RGB")
-        im.thumbnail((200, 200))  # palette is stable at low res and much faster
-        quant = im.quantize(colors=n, method=Image.Quantize.MEDIANCUT)
-        pal = quant.getpalette() or []
-        by_count = sorted(quant.getcolors() or [], reverse=True)  # [(count, index), ...]
-        hexes = []
-        for _, idx in by_count[:n]:
-            r, g, b = pal[idx * 3 : idx * 3 + 3]
-            hexes.append(f"#{r:02x}{g:02x}{b:02x}")
-        return hexes
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((200, 200))  # palette is stable at low res and much faster
+            quant = im.quantize(colors=n, method=Image.Quantize.MEDIANCUT)
+            pal = quant.getpalette() or []
+            by_count = sorted(quant.getcolors() or [], reverse=True)  # [(count, index), ...]
+            return [
+                f"#{pal[i * 3]:02x}{pal[i * 3 + 1]:02x}{pal[i * 3 + 2]:02x}"
+                for _, i in by_count[:n]
+            ]
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(f"Could not read the image: {exc}") from exc

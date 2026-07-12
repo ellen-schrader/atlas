@@ -188,6 +188,8 @@ def list_moodboard(
         limit: Maximum number of results (1-50).
         team_id: Which lab, if you belong to more than one.
     """
+    if origin and origin not in ("own", "third_party"):
+        return "Error: origin must be 'own' or 'third_party'."
     try:
         team = lab.resolve_team(team_id)
         figs = moodboard.list_figures(
@@ -233,10 +235,10 @@ def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
     try:
         team = lab.resolve_team(team_id)
         fig = moodboard.get_figure(team, figure_id)
-        png, _, _ = moodboard.downscale_png(moodboard.download(fig))
+        data, mime = moodboard.to_preview(moodboard.download(fig))
     except lab.LabError as exc:
         return [f"Error: {exc}"]
-    return [_format_figure(fig), Image(data=png, format="png")]
+    return [_format_figure(fig), Image(data=data, format=mime.split("/")[-1])]
 
 
 @mcp.tool()
