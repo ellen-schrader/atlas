@@ -18,7 +18,7 @@ from functools import lru_cache
 
 from api import embeddings
 from api.config import get_api_settings
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 from .config import get_atlas_settings
 
@@ -36,37 +36,54 @@ class LabError(RuntimeError):
 
 @lru_cache
 def _session() -> tuple[Client, str | None]:
-    """An authenticated Supabase client acting as the configured user, cached."""
+    """An authenticated Supabase client acting as the configured user, cached.
+
+    The user's token is applied to *all* sub-clients (postgrest for RLS reads,
+    storage for figure-image downloads) by baking it into the client headers.
+    """
     s = get_api_settings()
     if not (s.supabase_url and s.supabase_anon_key):
         raise LabError("Supabase is not configured — check api/.env.")
-    client = create_client(s.supabase_url, s.supabase_anon_key)
-
     cfg = get_atlas_settings()
+
     if cfg.atlas_token:
-        client.postgrest.auth(cfg.atlas_token)
+        token = cfg.atlas_token
+        probe = create_client(s.supabase_url, s.supabase_anon_key)
         try:
-            resp = client.auth.get_user(cfg.atlas_token)
+            resp = probe.auth.get_user(token)
         except Exception as exc:  # noqa: BLE001 — surface as a clean auth error
             raise LabError(f"ATLAS_TOKEN was rejected: {exc}") from exc
-        return client, (resp.user.id if resp and resp.user else None)
-
-    email, password = cfg.atlas_email, cfg.atlas_password
-    if not (email and password):
+        uid = resp.user.id if resp and resp.user else None
+    elif cfg.atlas_email and cfg.atlas_password:
+        signin = create_client(s.supabase_url, s.supabase_anon_key)
+        try:
+            res = signin.auth.sign_in_with_password(
+                {"email": cfg.atlas_email, "password": cfg.atlas_password}
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LabError(f"Could not sign in to Atlas as {cfg.atlas_email}: {exc}") from exc
+        token, uid = res.session.access_token, res.user.id
+    else:
         raise LabError(
             "No credentials: set ATLAS_TOKEN, or ATLAS_EMAIL and ATLAS_PASSWORD "
             "(in api/.env or the environment), so the MCP server can act as a lab member."
         )
-    try:
-        res = client.auth.sign_in_with_password({"email": email, "password": password})
-    except Exception as exc:  # noqa: BLE001
-        raise LabError(f"Could not sign in to Atlas as {email}: {exc}") from exc
-    client.postgrest.auth(res.session.access_token)
-    return client, res.user.id
+
+    client = create_client(
+        s.supabase_url,
+        s.supabase_anon_key,
+        options=ClientOptions(headers={"Authorization": f"Bearer {token}"}),
+    )
+    return client, uid
 
 
 def get_client() -> Client:
     return _session()[0]
+
+
+def current_user_id() -> str | None:
+    """The signed-in user's id (for 'only mine' filters)."""
+    return _session()[1]
 
 
 def web_url() -> str:

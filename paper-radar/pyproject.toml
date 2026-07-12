@@ -41,6 +41,7 @@ api = [
 mcp = [
     "mcp>=1.2",
     "supabase>=2.9",
+    "pillow>=10.0",
 ]
 
 [project.scripts]

@@ -139,8 +139,11 @@ build:
 
 ## Phases
 
-- **M1** — migration (origin toggle + fields) + read tools (`list_moodboard`,
-  `moodboard_categories`, `get_figure_image`, `get_figure_palette`), provenance surfaced.
+- **M1 — done.** Migration (`origin` toggle + `source_url`/`license`/`attribution`) + read
+  tools `list_moodboard`, `moodboard_categories`, `get_figure_image` (image content),
+  `get_figure_palette`, provenance surfaced per origin. Auth refactored so the user token
+  reaches the Storage client (figure downloads under RLS). Validated over a real stdio
+  handshake with seeded own + third-party figures.
 - **M2** — `get_moodboard_style` (the identity theme / `.mplstyle`) + the auto-license hint
   (OpenAlex/Crossref) wired into upload.
 - **M3 (web, fast follow)** — the mood-board upload UI gains the **own/third-party toggle**
@@ -148,7 +151,6 @@ build:
 
 ## Status
 
-- Plan written; design agreed. **Not yet implemented.**
-- Prerequisite cleared: **PR #22 merged to `main`** (the `atlas_mcp` P1 base, validated live),
-  and `feature/mcp-moodboard` rebased onto `main` — `atlas_mcp` + `figures` both present.
-- Next action: **M1** — the `origin`-toggle migration + the read tools.
+- **M1 implemented and validated** (migration + four read tools; see Phases).
+- Next action: **M2** — `get_moodboard_style` (`.mplstyle` identity theme) + the auto-license
+  hint (OpenAlex/Crossref) at upload; then **M3** the web upload own/third-party toggle.

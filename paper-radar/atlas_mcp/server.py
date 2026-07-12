@@ -1,4 +1,4 @@
-"""Atlas MCP server — read-only tools over the lab paper database (P1).
+"""Atlas MCP server — read-only tools over the lab paper database + mood board.
 
 Run over stdio (the transport Claude Code / Claude for Life Sciences use):
 
@@ -12,11 +12,11 @@ from __future__ import annotations
 import logging
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 
 from api import embeddings
 
-from . import lab
+from . import lab, moodboard
 
 # stderr only — a single stray write to stdout would corrupt the JSON-RPC stream.
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -127,6 +127,134 @@ def get_paper(paper_id: str, team_id: str | None = None) -> str:
     if note:
         parts += ["", f"Lab note: “{note}”"]
     return "\n".join(parts)
+
+
+# --- mood board -----------------------------------------------------------
+
+
+def _format_figure(f: dict) -> str:
+    """A figure as a text block: title, caption, meta, and origin/provenance."""
+    lines = [f"**{f.get('title') or '(untitled figure)'}**  [{f['id']}]"]
+    if f.get("caption"):
+        lines.append(f["caption"])
+    meta = []
+    if f.get("category"):
+        meta.append(f"category: {f['category']}")
+    if f.get("tags"):
+        meta.append("tags: " + ", ".join(f["tags"]))
+    uploader = (f.get("uploader") or {}).get("display_name")
+    if uploader:
+        meta.append(f"by {uploader}")
+    if meta:
+        lines.append(" · ".join(meta))
+
+    if f.get("origin") == "third_party":
+        prov = []
+        if f.get("attribution"):
+            prov.append(f["attribution"])
+        paper = f.get("papers")
+        if paper and paper.get("title"):
+            prov.append(paper["title"])
+        if f.get("source_url"):
+            prov.append(f["source_url"])
+        if f.get("license"):
+            prov.append(f"licence: {f['license']}")
+        tail = f" ({'; '.join(prov)})" if prov else ""
+        lines.append(
+            "third-party — derive style/palette only, attribute the source, "
+            "don't reproduce the figure." + tail
+        )
+    else:
+        lines.append("own — the lab's unpublished work; treat as confidential.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_moodboard(
+    category: str | None = None,
+    tag: str | None = None,
+    origin: str | None = None,
+    mine_only: bool = False,
+    limit: int = 20,
+    team_id: str | None = None,
+) -> str:
+    """List the lab's mood-board figures (inspirational images), newest first.
+
+    Args:
+        category: Filter to a category (see moodboard_categories).
+        tag: Filter to a tag.
+        origin: Filter to "own" or "third_party".
+        mine_only: Only figures you uploaded.
+        limit: Maximum number of results (1-50).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        figs = moodboard.list_figures(
+            team,
+            category=category,
+            tag=tag,
+            origin=origin or None,
+            mine_only=mine_only,
+            limit=_clamp(limit),
+        )
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not figs:
+        return f"No figures on {team['name']}'s mood board match that."
+    return "\n\n".join(_format_figure(f) for f in figs)
+
+
+@mcp.tool()
+def moodboard_categories(team_id: str | None = None) -> str:
+    """List the categories used on the lab's mood board, with counts."""
+    try:
+        team = lab.resolve_team(team_id)
+        cats = moodboard.categories(team)
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not cats:
+        return f"{team['name']} has no categorised figures yet."
+    return "\n".join(f"- {c['category']} ({c['n']})" for c in cats)
+
+
+@mcp.tool()
+def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
+    """Fetch a mood-board figure's image so you can see it, plus its details.
+
+    Use this to match a plotting style to a specific figure. Returns the image
+    and a text block (title, caption, origin, provenance). For third-party
+    figures, derive style only and attribute the source — don't reproduce it.
+
+    Args:
+        figure_id: The figure's id (from list_moodboard).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        fig = moodboard.get_figure(team, figure_id)
+        png, _, _ = moodboard.downscale_png(moodboard.download(fig))
+    except lab.LabError as exc:
+        return [f"Error: {exc}"]
+    return [_format_figure(fig), Image(data=png, format="png")]
+
+
+@mcp.tool()
+def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -> str:
+    """Extract a mood-board figure's dominant colours as hex, for matching a palette.
+
+    Args:
+        figure_id: The figure's id (from list_moodboard).
+        n: Number of colours (2-12).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        fig = moodboard.get_figure(team, figure_id)
+        hexes = moodboard.palette(moodboard.download(fig), n=max(2, min(int(n), 12)))
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    return f"Palette for “{fig.get('title') or fig['id']}”: " + ", ".join(hexes)
 
 
 def main() -> None:

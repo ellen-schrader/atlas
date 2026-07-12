@@ -1614,6 +1614,7 @@ dev = [
 ]
 mcp = [
     { name = "mcp" },
+    { name = "pillow" },
     { name = "supabase" },
 ]
 
@@ -1628,6 +1629,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },
     { name = "numba", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "pillow", marker = "extra == 'mcp'", specifier = ">=10.0" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pymupdf", specifier = ">=1.24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
