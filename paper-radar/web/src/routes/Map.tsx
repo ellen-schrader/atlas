@@ -45,7 +45,10 @@ export default function MapView() {
   const [sims, setSims] = useState<Record<string, number> | null>(null);
   const [searching, setSearching] = useState(false);
   const [labFilter, setLabFilter] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [activeCluster, setActiveCluster] = useState<number | null>(null);
   const [barHover, setBarHover] = useState<BarHover>(null);
+  const { theme } = useTheme();
 
   async function runFilter(e: FormEvent) {
     e.preventDefault();
@@ -74,7 +77,12 @@ export default function MapView() {
   function clearAll() {
     clearQuery();
     setLabFilter(null);
+    setTagFilter(null);
+    setActiveCluster(null);
   }
+
+  const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
+  const anyFilter = Boolean(sims || labFilter || tagFilter || activeCluster !== null);
 
   const points = data?.points ?? [];
   const labPapers = labFilter ? points.filter((p) => p.lab === labFilter) : [];
@@ -157,13 +165,26 @@ export default function MapView() {
           </div>
 
           {/* active filters — one place to see and clear everything */}
-          {(sims || labFilter) && (
+          {anyFilter && (
             <div className="-mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
               <span className="font-medium">Filters:</span>
               {sims && (
                 <FilterChip onClear={clearQuery}>
                   Topic:{" "}
                   <span className="inline-block max-w-[160px] truncate align-bottom text-fg">{topic}</span>
+                </FilterChip>
+              )}
+              {activeCluster !== null && (
+                <FilterChip onClear={() => setActiveCluster(null)}>
+                  Theme:{" "}
+                  <span className="text-fg">
+                    {data.clusters.find((c) => c.id === activeCluster)?.label ?? activeCluster}
+                  </span>
+                </FilterChip>
+              )}
+              {tagFilter && (
+                <FilterChip onClear={() => setTagFilter(null)}>
+                  Tag: <span className="font-mono text-fg">{tagFilter}</span>
                 </FilterChip>
               )}
               {labFilter && (
@@ -185,6 +206,9 @@ export default function MapView() {
             showHulls={showHulls}
             sims={searching ? null : sims}
             labFilter={labFilter}
+            tagFilter={tagFilter}
+            activeCluster={activeCluster}
+            setActiveCluster={setActiveCluster}
             barHover={barHover}
           />
           {data.embedded < data.total && (
@@ -200,17 +224,25 @@ export default function MapView() {
 
           {/* trends */}
           <SectionHeader>Trends</SectionHeader>
-          <p className="-mt-3 text-xs text-faint">
-            Hover a bar to highlight those papers on the map; click a lab to list its papers.
+          <Insights data={data} />
+          <p className="-mt-1 text-xs text-faint">
+            Hover a bar to highlight those papers on the map; click a theme, tag, or lab to filter.
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
-            <StatCard title="Shared over time">
-              <Bars data={data.stats.over_time.map((d) => ({ label: fmtMonth(d.month), value: d.count }))} />
+            <StatCard title="Themes">
+              <ThemeBars
+                clusters={data.clusters}
+                cat={cat}
+                active={activeCluster}
+                onToggle={(id) => setActiveCluster(activeCluster === id ? null : id)}
+              />
             </StatCard>
-            <StatCard title="Publication year">
+            <StatCard title="Top tags">
               <Bars
-                data={groupYears(data.stats.by_year)}
-                onHover={(label) => setBarHover(label ? { kind: "year", value: label } : null)}
+                horizontal
+                data={data.stats.by_tag.slice(0, 10).map((d) => ({ label: d.tag, value: d.count }))}
+                onClick={(label) => setTagFilter((cur) => (cur === label ? null : label))}
+                activeLabel={tagFilter}
               />
             </StatCard>
             <StatCard title="Top venues">
@@ -227,6 +259,15 @@ export default function MapView() {
                 onHover={(label) => setBarHover(label ? { kind: "lab", value: label } : null)}
                 onClick={(label) => setLabFilter((cur) => (cur === label ? null : label))}
                 activeLabel={labFilter}
+              />
+            </StatCard>
+            <StatCard title="Shared over time">
+              <Bars data={data.stats.over_time.map((d) => ({ label: fmtMonth(d.month), value: d.count }))} />
+            </StatCard>
+            <StatCard title="Publication year">
+              <Bars
+                data={groupYears(data.stats.by_year)}
+                onHover={(label) => setBarHover(label ? { kind: "year", value: label } : null)}
               />
             </StatCard>
           </div>
@@ -312,6 +353,9 @@ function Scatter({
   showHulls,
   sims,
   labFilter,
+  tagFilter,
+  activeCluster,
+  setActiveCluster,
   barHover,
 }: {
   points: OverviewPoint[];
@@ -321,12 +365,14 @@ function Scatter({
   showHulls: boolean;
   sims: Record<string, number> | null;
   labFilter: string | null;
+  tagFilter: string | null;
+  activeCluster: number | null;
+  setActiveCluster: (c: number | null) => void;
   barHover: BarHover;
 }) {
   const { theme } = useTheme();
   const { openPaper } = usePaperModal();
   const [hover, setHover] = useState<OverviewPoint | null>(null);
-  const [activeCluster, setActiveCluster] = useState<number | null>(null);
 
   const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
   const yearRamp = theme === "dark" ? YEAR_RAMP_DARK : YEAR_RAMP_LIGHT;
@@ -429,6 +475,7 @@ function Scatter({
   const dimmed = (p: OverviewPoint) =>
     (activeCluster !== null && p.cluster !== activeCluster) ||
     (labFilter !== null && p.lab !== labFilter) ||
+    (tagFilter !== null && !p.tags.includes(tagFilter)) ||
     (barHover !== null && String(barHoverValue(p, barHover)) !== barHover.value);
 
   const hovered = hover && scaled.find((p) => p.paper_id === hover.paper_id);
@@ -655,6 +702,87 @@ function groupYears(byYear: { year: number; count: number }[]): { label: string;
 
 function SectionHeader({ children }: { children: ReactNode }) {
   return <h2 className="-mb-2 text-base font-semibold tracking-tight text-fg">{children}</h2>;
+}
+
+function deriveInsights(data: OverviewData): string[] {
+  const out: string[] = [];
+  const ot = data.stats.over_time;
+  if (ot.length) {
+    const b = ot.reduce((a, c) => (c.count > a.count ? c : a));
+    out.push(`Busiest month: ${fmtMonth(b.month)} (${b.count})`);
+  }
+  const topTag = data.stats.by_tag[0];
+  if (topTag) out.push(`Most common tag: ${topTag.tag} (${topTag.count})`);
+  if (data.clusters.length) {
+    const big = [...data.clusters].sort((a, b) => b.size - a.size)[0];
+    out.push(`Largest theme: ${big.label} (${big.size})`);
+  }
+  return out;
+}
+
+function Insights({ data }: { data: OverviewData }) {
+  const items = deriveInsights(data);
+  if (!items.length) return null;
+  return (
+    <div className="-mt-3 flex flex-wrap gap-2">
+      {items.map((t) => (
+        <span
+          key={t}
+          className="rounded-chip border border-border bg-surface-2 px-2.5 py-1 text-xs text-muted"
+        >
+          {t}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ThemeBars({
+  clusters,
+  cat,
+  active,
+  onToggle,
+}: {
+  clusters: Cluster[];
+  cat: string[];
+  active: number | null;
+  onToggle: (id: number) => void;
+}) {
+  if (clusters.length === 0) return <p className="text-xs text-faint">No themes.</p>;
+  const max = Math.max(1, ...clusters.map((c) => c.size));
+  return (
+    <div className="flex flex-col gap-1.5">
+      {[...clusters]
+        .sort((a, b) => b.size - a.size)
+        .map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            title={c.description}
+            onClick={() => onToggle(c.id)}
+            className={cn(
+              "flex cursor-pointer items-center gap-2 rounded px-1 text-left text-xs transition hover:bg-surface-2",
+              active === c.id && "bg-surface-2",
+            )}
+          >
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ background: cat[c.id % cat.length] }}
+            />
+            <span className="w-32 shrink-0 truncate text-fg" title={c.label}>
+              {c.label}
+            </span>
+            <div className="h-3 flex-1 overflow-hidden rounded bg-surface-2">
+              <div
+                className="h-full rounded"
+                style={{ width: `${(c.size / max) * 100}%`, background: cat[c.id % cat.length] }}
+              />
+            </div>
+            <span className="w-6 shrink-0 text-right font-mono tabular-nums text-faint">{c.size}</span>
+          </button>
+        ))}
+    </div>
+  );
 }
 
 function KpiStrip({ data }: { data: OverviewData }) {

@@ -119,6 +119,7 @@ class OverviewPoint(BaseModel):
     venue: str | None = None
     year: int | None = None
     keywords: list[str] = []
+    tags: list[str] = []  # LLM topical tags (papers.tags)
     lab: str | None = None  # last author — proxy for the source lab (§4.1a)
     cluster: int
     reactions: int = 0
@@ -137,6 +138,7 @@ class OverviewStats(BaseModel):
     by_venue: list[dict]   # [{venue, count}] top venues
     by_year: list[dict]    # [{year, count}]
     by_lab: list[dict]     # [{lab, count}] top last-authors (proxy for source lab)
+    by_tag: list[dict]     # [{tag, count}] top LLM tags
 
 
 class OverviewResponse(BaseModel):
@@ -443,6 +445,7 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
     by_venue: Counter = Counter()
     by_year: Counter = Counter()
     by_lab: Counter = Counter()
+    by_tag: Counter = Counter()
     for r in rows:
         p = r.get("papers") or {}
         if r.get("posted_at"):
@@ -454,11 +457,14 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
         lab = _last_author_lab(p.get("authors") or [])
         if lab:
             by_lab[lab] += 1
+        for tag in p.get("tags") or []:
+            by_tag[tag] += 1
     return OverviewStats(
         over_time=[{"month": m, "count": n} for m, n in sorted(over_time.items())],
         by_venue=[{"venue": v, "count": n} for v, n in by_venue.most_common(10)],
         by_year=[{"year": y, "count": n} for y, n in sorted(by_year.items())],
         by_lab=[{"lab": lab, "count": n} for lab, n in by_lab.most_common(10)],
+        by_tag=[{"tag": t, "count": n} for t, n in by_tag.most_common(15)],
     )
 
 
@@ -475,7 +481,7 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     uc = user_client(token)
     cols = (
         "paper_id, posted_at, "
-        "papers(id, title, venue, year, keywords, authors, embedding, embedded_at)"
+        "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
     )
     rows = (
         uc.table("paper_posts")
@@ -506,6 +512,7 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
             venue=p.get("venue"),
             year=p.get("year"),
             keywords=p.get("keywords") or [],
+            tags=p.get("tags") or [],
             lab=_last_author_lab(p.get("authors") or []),
             reactions=eng.get(p["id"], (0, 0))[0],
             comments=eng.get(p["id"], (0, 0))[1],

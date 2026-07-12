@@ -71,6 +71,7 @@ export interface OverviewPoint {
   venue: string | null;
   year: number | null;
   keywords: string[];
+  tags: string[]; // LLM topical tags
   lab: string | null; // last author — proxy for the source lab
   cluster: number;
   reactions: number;
@@ -90,6 +91,7 @@ export interface OverviewStats {
   by_venue: { venue: string; count: number }[];
   by_year: { year: number; count: number }[];
   by_lab: { lab: string; count: number }[];
+  by_tag: { tag: string; count: number }[];
 }
 
 export interface OverviewData {
