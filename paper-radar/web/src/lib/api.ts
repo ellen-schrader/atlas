@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { OverviewData, SemanticHit } from "@/lib/types";
+import type { OverviewData, Recommendation, SemanticHit } from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -102,4 +102,31 @@ export async function fetchSimilarity(
     body: JSON.stringify({ query, team_id: teamId }),
   });
   return data.similarities;
+}
+
+export type RecScope = "discover" | "reading_list";
+
+export interface RecommendationsResult {
+  results: Recommendation[];
+  cold_start: boolean; // true = no taste signal yet (recency fallback used)
+}
+
+/** Personalized papers for the user in a lab, ranked by their taste vector.
+ *  scope="discover" = unseen papers; scope="reading_list" = saved papers ranked. */
+export function fetchRecommendations(
+  teamId: string,
+  scope: RecScope = "discover",
+  limit = 12,
+): Promise<RecommendationsResult> {
+  const q = new URLSearchParams({ team_id: teamId, scope, limit: String(limit) });
+  return authedRequest<RecommendationsResult>(`/recommendations?${q}`);
+}
+
+/** Save the user's research profile description and re-embed it (personalises
+ *  recommendations). Returns whether the embedding was (re)computed. */
+export function updateProfile(profileMd: string): Promise<{ ok: boolean; embedded: boolean }> {
+  return authedRequest("/profile", {
+    method: "POST",
+    body: JSON.stringify({ profile_md: profileMd }),
+  });
 }

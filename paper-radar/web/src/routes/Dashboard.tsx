@@ -1,7 +1,7 @@
-import { type ReactNode } from "react";
+import { type ReactNode, type RefObject, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AtSign, Bookmark, Check } from "lucide-react";
+import { AtSign, Bookmark, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 
 import { InviteCode } from "@/components/InviteCode";
 import { PaperCard } from "@/components/PaperCard";
@@ -12,6 +12,8 @@ import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
+import { useReadPapers } from "@/hooks/useReadPapers";
+import { useRecommendations } from "@/hooks/useRecommendations";
 import { supabase } from "@/lib/supabase";
 import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -27,6 +29,7 @@ export default function Dashboard() {
   const { team, userId, displayName } = useAppContext();
   const { openPaper } = usePaperModal();
   const navigate = useNavigate();
+  const recRowRef = useRef<HTMLDivElement>(null);
 
   const search = usePaperSearch(team.id, "", null);
   const posts = (search.data?.pages ?? []).flat();
@@ -36,6 +39,13 @@ export default function Dashboard() {
   );
   const { data: mentions } = useMentions(userId);
   const { data: toRead } = useReadingList(userId, team.id);
+  const { data: readIds } = useReadPapers(userId, team.id);
+  const recs = useRecommendations(team.id, "discover", 6);
+  const recResults = recs.data?.results ?? [];
+  const { data: recCounts } = useEngagementCounts(
+    team.id,
+    recResults.map((r) => r.post.papers.id),
+  );
   const qc = useQueryClient();
   const { markSeen, markAllSeen } = useMentionActions(userId);
 
@@ -47,6 +57,7 @@ export default function Dashboard() {
       .eq("team_id", team.id)
       .eq("paper_id", paperId);
     void qc.invalidateQueries({ queryKey: ["reading-list"] });
+    void qc.invalidateQueries({ queryKey: ["read-papers"] });
   }
 
   const firstName = displayName.split(/[\s@]/)[0];
@@ -138,6 +149,74 @@ export default function Dashboard() {
         </Section>
       )}
 
+      {!empty && (
+        <Section
+          title="Recommended for you"
+          action={{ label: "Reading list", onClick: () => navigate("/reading") }}
+        >
+          {recs.isLoading ? (
+            <CardSkeleton />
+          ) : recResults.length > 0 ? (
+            <>
+              {recs.data?.cold_start && (
+                <p className="mb-3 text-xs text-muted">
+                  Based on recent posts —{" "}
+                  <button
+                    onClick={() => navigate("/settings")}
+                    className="font-medium text-accent hover:underline"
+                  >
+                    add a research profile
+                  </button>{" "}
+                  for personalized picks.
+                </p>
+              )}
+              <div className="group/rec relative">
+                <ScrollArrow side="left" rowRef={recRowRef} />
+                <div
+                  ref={recRowRef}
+                  className="flex snap-x gap-4 overflow-x-auto scroll-smooth pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  {recResults.map((r) => (
+                    <div key={r.post.id} className="w-[300px] shrink-0 snap-start">
+                      <PaperCard
+                        post={r.post}
+                        reactions={recCounts?.[r.post.papers.id]?.reactions ?? 0}
+                        comments={recCounts?.[r.post.papers.id]?.comments ?? 0}
+                        onOpen={() => openPaper(r.post.papers.id)}
+                        teamId={team.id}
+                        userId={userId}
+                        bookmarked={bookmarkedIds.has(r.post.papers.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <ScrollArrow side="right" rowRef={recRowRef} />
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-start gap-2 rounded-card border border-dashed border-border bg-surface-2 p-5">
+              <span className="inline-flex items-center gap-2 text-sm font-medium">
+                <Sparkles size={15} className="text-accent" />
+                {recs.isError ? "Recommendations are unavailable right now." : "No new papers to recommend yet."}
+              </span>
+              <p className="text-xs text-muted">
+                {recs.isError
+                  ? "The recommendation service isn’t reachable — try again shortly."
+                  : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
+              </p>
+              {!recs.isError && (
+                <button
+                  onClick={() => navigate("/settings")}
+                  className="mt-1 rounded-control bg-accent px-3 py-1.5 text-xs font-semibold text-accent-fg transition hover:brightness-110"
+                >
+                  Set up your profile
+                </button>
+              )}
+            </div>
+          )}
+        </Section>
+      )}
+
       {active.length > 0 && (
         <Section title="Active discussions" action={{ label: "All papers", onClick: () => navigate("/papers") }}>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
@@ -172,6 +251,7 @@ export default function Dashboard() {
                   post={post}
                   reactions={counts?.[post.papers.id]?.reactions ?? 0}
                   comments={counts?.[post.papers.id]?.comments ?? 0}
+                  read={readIds?.has(post.papers.id)}
                   onOpen={() => openPaper(post.papers.id)}
                 />
               ))}
@@ -228,6 +308,37 @@ function AttentionCard({ item }: { item: AttentionItem }) {
   );
 }
 
+/** Netflix-style scroll control overlaid on a horizontal row's edge. Appears on
+ *  hover (pointer devices); touch users just swipe. */
+function ScrollArrow({
+  side,
+  rowRef,
+}: {
+  side: "left" | "right";
+  rowRef: RefObject<HTMLDivElement>;
+}) {
+  const Icon = side === "left" ? ChevronLeft : ChevronRight;
+  return (
+    <button
+      type="button"
+      aria-label={side === "left" ? "Scroll left" : "Scroll right"}
+      onClick={() =>
+        rowRef.current?.scrollBy({ left: side === "left" ? -648 : 648, behavior: "smooth" })
+      }
+      className={cn(
+        "absolute inset-y-0 z-10 hidden w-14 items-center opacity-0 transition group-hover/rec:opacity-100 md:flex",
+        side === "left"
+          ? "left-0 justify-start bg-gradient-to-r from-bg to-transparent"
+          : "right-0 justify-end bg-gradient-to-l from-bg to-transparent",
+      )}
+    >
+      <span className="grid h-8 w-8 place-items-center rounded-full border border-border bg-surface text-fg shadow-md transition hover:border-border-strong">
+        <Icon size={16} />
+      </span>
+    </button>
+  );
+}
+
 function Section({
   title,
   count,
@@ -268,6 +379,20 @@ function ListSkeleton() {
             <div className="h-3.5 w-2/3 animate-pulse rounded bg-surface-2" />
             <div className="mt-1.5 h-2.5 w-1/3 animate-pulse rounded bg-surface-2" />
           </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CardSkeleton() {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="rounded-card border border-border bg-surface p-4 shadow-sm">
+          <div className="h-24 w-full animate-pulse rounded-md bg-surface-2" />
+          <div className="mt-3 h-3.5 w-3/4 animate-pulse rounded bg-surface-2" />
+          <div className="mt-2 h-2.5 w-1/2 animate-pulse rounded bg-surface-2" />
         </div>
       ))}
     </div>

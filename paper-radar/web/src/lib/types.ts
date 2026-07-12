@@ -80,6 +80,12 @@ export interface SemanticHit {
   post: PaperPost;
 }
 
+/** One personalized paper from GET /recommendations (taste-vector ranked). */
+export interface Recommendation {
+  similarity: number;
+  post: PaperPost;
+}
+
 /** One row from the `similar_papers` RPC ("find similar" in the paper modal). */
 export interface SimilarPaper {
   post_id: string;

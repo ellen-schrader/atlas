@@ -16,11 +16,13 @@ Enrichment (summary/tags) still lands later in a worker.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
 
+import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -536,3 +538,238 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
         total=total,
         embedded=len(papers),
     )
+
+
+# --- profile embedding + recommendations -----------------------------------
+
+
+def _parse_vec(value: object) -> list[float] | None:
+    """PostgREST returns a `vector` column as a JSON string; normalize to a list."""
+    if value is None:
+        return None
+    return json.loads(value) if isinstance(value, str) else value  # type: ignore[return-value]
+
+
+def _l2norm(v: np.ndarray) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n > 0 else v
+
+
+def _seen_paper_ids(uc, user_id: str, team_id: str) -> set[str]:
+    """Papers this user has already engaged with in the lab — reacted to,
+    commented on, or has any read/reading/saved status. The set the discover feed
+    excludes (the SQL RPC does this server-side; we need it for cold-start too)."""
+    seen: set[str] = set()
+    for row in (
+        uc.table("reactions").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+    ):
+        seen.add(row["paper_id"])
+    for row in (
+        uc.table("comments").select("paper_id").eq("team_id", team_id).eq("author_id", user_id).execute().data or []
+    ):
+        seen.add(row["paper_id"])
+    for row in (
+        uc.table("paper_status").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+    ):
+        seen.add(row["paper_id"])
+    return seen
+
+
+def _taste_vector(uc, user_id: str, team_id: str) -> list[float] | None:
+    """Per-user taste vector = normalize(0.5·profile_vec + 0.5·engagement_centroid).
+
+    profile_vec is the embedding of the user's profile description (populated by
+    POST /profile); the centroid is the mean embedding of papers they've engaged
+    with in this lab. Missing either side falls back to the other; missing both
+    returns None (cold start → the caller uses a recency fallback)."""
+    prof = (
+        uc.table("profiles").select("profile_vec").eq("id", user_id).limit(1).execute().data or []
+    )
+    profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
+
+    centroid = None
+    seen = _seen_paper_ids(uc, user_id, team_id)
+    if seen:
+        rows = uc.table("papers").select("id, embedding").in_("id", list(seen)).execute().data or []
+        vecs = [
+            np.asarray(_parse_vec(r["embedding"]), dtype=np.float32)
+            for r in rows
+            if r.get("embedding")
+        ]
+        if vecs:
+            centroid = np.mean(vecs, axis=0)
+
+    parts: list[np.ndarray] = []
+    if profile_vec is not None:
+        parts.append(0.5 * _l2norm(np.asarray(profile_vec, dtype=np.float32)))
+    if centroid is not None:
+        parts.append(0.5 * _l2norm(centroid))
+    if not parts:
+        return None
+    return _l2norm(sum(parts)).tolist()
+
+
+class ProfileRequest(BaseModel):
+    profile_md: str
+
+
+class ProfileResponse(BaseModel):
+    ok: bool
+    embedded: bool  # whether profile_vec was (re)computed
+
+
+@app.post("/profile", response_model=ProfileResponse)
+def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> ProfileResponse:
+    """Save the caller's profile description and (re)embed it into profile_vec.
+
+    profile_md is saved as the user (RLS); the vector is written with the service
+    client. Centralizing the embed on save keeps profile_vec fresh for
+    recommendations — like /posts embeds a paper on ingest."""
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    md = req.profile_md
+    user_client(token).table("profiles").update({"profile_md": md}).eq("id", user_id).execute()
+
+    text = md.strip()
+    if not text:
+        service_client().table("profiles").update({"profile_vec": None}).eq("id", user_id).execute()
+        return ProfileResponse(ok=True, embedded=False)
+    if not get_api_settings().voyage_api_key:
+        return ProfileResponse(ok=True, embedded=False)  # md saved; vector left as-is
+    try:
+        vector = embeddings.embed_texts([text], input_type="document")[0]
+    except embeddings.EmbeddingError as exc:
+        # The description saved fine; recommendations just won't reflect it yet.
+        log.warning("embedding profile for %s failed: %s", user_id, exc)
+        return ProfileResponse(ok=True, embedded=False)
+    service_client().table("profiles").update({"profile_vec": vector}).eq("id", user_id).execute()
+    return ProfileResponse(ok=True, embedded=True)
+
+
+class Recommendation(BaseModel):
+    similarity: float
+    post: dict  # a paper_posts row with the joined paper (POST_COLUMNS)
+
+
+class RecommendationsResponse(BaseModel):
+    results: list[Recommendation]
+    cold_start: bool  # true when there was no taste signal (recency fallback used)
+
+
+def _hydrate(uc, order_ids: list[str], sims: dict[str, float], cold: bool) -> RecommendationsResponse:
+    """Fetch POST_COLUMNS for the given post ids and return them in order."""
+    if not order_ids:
+        return RecommendationsResponse(results=[], cold_start=cold)
+    posts = uc.table("paper_posts").select(POST_COLUMNS).in_("id", order_ids).execute().data or []
+    by_id = {p["id"]: p for p in posts}
+    return RecommendationsResponse(
+        results=[
+            Recommendation(similarity=sims.get(pid, 0.0), post=by_id[pid])
+            for pid in order_ids
+            if pid in by_id
+        ],
+        cold_start=cold,
+    )
+
+
+def _reading_list_ranked(uc, user_id: str, team_id: str, taste, limit: int) -> RecommendationsResponse:
+    """The user's saved (to_read) papers, ranked by taste similarity."""
+    saved = (
+        uc.table("paper_status")
+        .select("paper_id")
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .eq("status", "to_read")
+        .order("updated_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    paper_ids = [r["paper_id"] for r in saved]
+    if not paper_ids:
+        return RecommendationsResponse(results=[], cold_start=taste is None)
+
+    posts = (
+        uc.table("paper_posts")
+        .select(POST_COLUMNS)
+        .eq("team_id", team_id)
+        .in_("paper_id", paper_ids)
+        .execute()
+        .data
+        or []
+    )
+    post_by_paper = {p["papers"]["id"]: p for p in posts if p.get("papers")}
+
+    if taste is None:  # no taste signal — keep the date-added order
+        order = [post_by_paper[pid]["id"] for pid in paper_ids if pid in post_by_paper]
+        return _hydrate(uc, order[:limit], {}, cold=True)
+
+    taste_np = _l2norm(np.asarray(taste, dtype=np.float32))
+    emb = uc.table("papers").select("id, embedding").in_("id", paper_ids).execute().data or []
+    scored: list[tuple[float, str]] = []
+    for e in emb:
+        if not e.get("embedding") or e["id"] not in post_by_paper:
+            continue
+        v = _l2norm(np.asarray(_parse_vec(e["embedding"]), dtype=np.float32))
+        scored.append((float(np.dot(taste_np, v)), post_by_paper[e["id"]]["id"]))
+    scored.sort(reverse=True)
+    order = [pid for _, pid in scored][:limit]
+    sims = {pid: s for s, pid in scored}
+    return _hydrate(uc, order, sims, cold=False)
+
+
+def _recency_fallback(uc, team_id: str, user_id: str, limit: int) -> RecommendationsResponse:
+    """Cold start (no profile, no engagement): recent unseen posts, newest first."""
+    seen = _seen_paper_ids(uc, user_id, team_id)
+    rows = (
+        uc.table("paper_posts")
+        .select("id, paper_id, posted_at")
+        .eq("team_id", team_id)
+        .order("posted_at", desc=True)
+        .limit(limit * 4)
+        .execute()
+        .data
+        or []
+    )
+    order = [r["id"] for r in rows if r["paper_id"] not in seen][:limit]
+    return _hydrate(uc, order, {}, cold=True)
+
+
+@app.get("/recommendations", response_model=RecommendationsResponse)
+def recommendations(
+    team_id: str,
+    scope: str = "discover",
+    limit: int = 12,
+    token: str = Depends(require_token),
+) -> RecommendationsResponse:
+    """Personalized papers for the caller in a lab, ranked by a taste vector.
+
+    scope=discover: unseen papers ranked by taste (excludes read/engaged, RLS-scoped).
+    scope=reading_list: the caller's saved papers ranked by taste.
+    Falls back to recency when there's no taste signal yet."""
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if scope not in ("discover", "reading_list"):
+        raise HTTPException(status_code=400, detail="scope must be 'discover' or 'reading_list'")
+    limit = max(1, min(limit, 50))
+
+    uc = user_client(token)
+    taste = _taste_vector(uc, user_id, team_id)
+
+    if scope == "reading_list":
+        return _reading_list_ranked(uc, user_id, team_id, taste, limit)
+
+    if taste is None:
+        return _recency_fallback(uc, team_id, user_id, limit)
+
+    matches = (
+        uc.rpc("recommend_papers", {"p_team": team_id, "p_query": taste, "p_limit": limit})
+        .execute()
+        .data
+        or []
+    )
+    sims = {m["post_id"]: m["similarity"] for m in matches}
+    return _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)

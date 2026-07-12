@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useProfile } from "@/hooks/useProfile";
+import { updateProfile } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -218,17 +219,25 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => setText(initial), [initial]);
 
   async function save() {
     setBusy(true);
     setSaved(false);
-    const { error } = await supabase.from("profiles").update({ profile_md: text }).eq("id", userId);
-    setBusy(false);
-    if (!error) {
+    setError(null);
+    try {
+      // Save + re-embed via the API so profile_vec stays in sync with the text
+      // (recommendations rank against it). The service holds the embedding key.
+      await updateProfile(text);
       setSaved(true);
       await qc.invalidateQueries({ queryKey: ["profile", userId] });
+      await qc.invalidateQueries({ queryKey: ["recommendations"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -251,6 +260,7 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
           {busy ? "Saving…" : "Save"}
         </Button>
         {saved && <span className="text-xs text-muted">Saved.</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
       </div>
     </Panel>
   );

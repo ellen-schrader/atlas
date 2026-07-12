@@ -53,6 +53,36 @@ def test_similarity_requires_bearer_token():
     assert resp.status_code == 401
 
 
+def test_profile_requires_bearer_token():
+    resp = client.post("/profile", json={"profile_md": "I study spatial biology"})
+    assert resp.status_code == 401
+
+
+def test_recommendations_requires_bearer_token():
+    resp = client.get("/recommendations", params={"team_id": "t"})
+    assert resp.status_code == 401
+
+
+def test_l2norm_returns_unit_vector():
+    import numpy as np
+
+    from api.app import _l2norm
+
+    out = _l2norm(np.array([3.0, 4.0], dtype=np.float32))
+    assert abs(float(np.linalg.norm(out)) - 1.0) < 1e-6
+    # a zero vector is returned unchanged (no divide-by-zero)
+    zero = _l2norm(np.zeros(4, dtype=np.float32))
+    assert float(np.linalg.norm(zero)) == 0.0
+
+
+def test_parse_vec_handles_string_and_list():
+    from api.app import _parse_vec
+
+    assert _parse_vec("[0.1, 0.2, 0.3]") == [0.1, 0.2, 0.3]
+    assert _parse_vec([0.1, 0.2]) == [0.1, 0.2]
+    assert _parse_vec(None) is None
+
+
 def test_compute_stats_aggregates_posts():
     from api.app import _compute_stats
 
