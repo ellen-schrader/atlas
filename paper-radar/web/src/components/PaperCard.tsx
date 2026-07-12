@@ -28,6 +28,7 @@ export function PaperCard({
   bookmarked?: boolean;
 }) {
   const p = post.papers;
+  const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
   const tags = post.tags.length ? post.tags : p.tags;
   const shown = tags.slice(0, 3);
   const extra = tags.length - shown.length;
@@ -80,7 +81,7 @@ export function PaperCard({
         <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-3">
           <EngagementSummary reactions={reactions} comments={comments} />
           <span className="text-meta inline-flex items-center gap-2 text-muted">
-            {post.posted_by_label && <Avatar name={post.posted_by_label} size={20} />}
+            {posterName && <Avatar name={posterName} size={20} />}
             <span className="tabular-nums">{formatDate(post.posted_at)}</span>
           </span>
         </div>
