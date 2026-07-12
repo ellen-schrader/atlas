@@ -29,3 +29,7 @@ model_cache/
 
 # OS
 .DS_Store
+
+# never commit env backups
+.env*.bak
+*.env.bak

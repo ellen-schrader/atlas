@@ -1,9 +1,10 @@
 import { type FormEvent, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { PaperEngagement } from "@/components/Engagement";
+import { usePaperModal } from "@/components/PaperModal";
 import { supabase } from "@/lib/supabase";
-import type { PaperPost } from "@/lib/types";
+import type { PaperPost, SimilarPaper } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
 export function PaperDetail({
@@ -47,6 +48,7 @@ export function PaperDetail({
           </a>
         )}
       </div>
+      <SimilarPapers paperId={p.id} teamId={teamId} />
       <div className="mt-5 border-t border-border pt-3 font-mono text-xs text-muted">
         Posted {formatDate(post.posted_at)}
         {post.posted_by_label ? ` · ${post.posted_by_label}` : ""}
@@ -54,6 +56,49 @@ export function PaperDetail({
       </div>
 
       <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
+    </div>
+  );
+}
+
+/** The lab's most similar papers by embedding (empty until embeddings exist). */
+function SimilarPapers({ paperId, teamId }: { paperId: string; teamId: string }) {
+  const { openPaper } = usePaperModal();
+  const { data } = useQuery({
+    queryKey: ["similar-papers", teamId, paperId],
+    queryFn: async (): Promise<SimilarPaper[]> => {
+      const { data, error } = await supabase.rpc("similar_papers", {
+        p_team: teamId,
+        p_paper: paperId,
+      });
+      if (error) throw error;
+      return (data ?? []) as SimilarPaper[];
+    },
+  });
+
+  const similar = data ?? [];
+  if (similar.length === 0) return null;
+
+  return (
+    <div className="mt-5">
+      <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
+        Similar papers
+      </div>
+      <ul className="flex flex-col gap-1">
+        {similar.map((s) => (
+          <li key={s.paper_id}>
+            <button
+              type="button"
+              onClick={() => openPaper(s.paper_id)}
+              className="w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-2"
+            >
+              <span className="text-fg">{s.title ?? "Untitled"}</span>
+              <span className="ml-2 font-mono text-xs text-muted">
+                {[s.venue, s.year].filter(Boolean).join(" · ")}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

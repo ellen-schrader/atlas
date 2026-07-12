@@ -44,3 +44,36 @@ export interface PaperPost {
   tags: string[]; // lab-scoped custom tags (distinct from papers.tags/keywords)
   papers: Paper; // the joined canonical paper
 }
+
+/** One result from POST /search/semantic. */
+export interface SemanticHit {
+  similarity: number;
+  post: PaperPost;
+}
+
+/** One row from the `similar_papers` RPC ("find similar" in the paper modal). */
+export interface SimilarPaper {
+  post_id: string;
+  paper_id: string;
+  title: string | null;
+  venue: string | null;
+  year: number | null;
+  similarity: number;
+}
+
+/** One paper on the GET /map UMAP layout. */
+export interface MapPoint {
+  paper_id: string;
+  x: number;
+  y: number;
+  title: string | null;
+  venue: string | null;
+  year: number | null;
+  tags: string[];
+}
+
+export interface MapData {
+  points: MapPoint[];
+  total: number; // posts in the lab
+  embedded: number; // posts with an embedded paper (points returned)
+}

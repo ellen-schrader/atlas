@@ -38,6 +38,36 @@ def test_posts_requires_bearer_token():
     assert resp.status_code == 401
 
 
+def test_semantic_search_requires_bearer_token():
+    resp = client.post("/search/semantic", json={"query": "x", "team_id": "t"})
+    assert resp.status_code == 401
+
+
+def test_map_requires_bearer_token():
+    resp = client.get("/map", params={"team_id": "t"})
+    assert resp.status_code == 401
+
+
+def test_map_cache_keys_on_embedded_set():
+    from api.app import MapCache
+
+    cache = MapCache()
+    key = frozenset({("p1", "2026-07-01T00:00:00Z")})
+    cache.put("team-a", key, ["layout"])
+
+    assert cache.get("team-a", key) == ["layout"]
+    # A re-embedded paper (new embedded_at) or another team must miss.
+    assert cache.get("team-a", frozenset({("p1", "2026-07-02T00:00:00Z")})) is None
+    assert cache.get("team-b", key) is None
+
+
+def test_parse_vector_handles_postgrest_string_form():
+    from api.app import _parse_vector
+
+    assert _parse_vector("[0.1,0.2]") == [0.1, 0.2]
+    assert _parse_vector([0.1, 0.2]) == [0.1, 0.2]
+
+
 def test_resolve_dedup_key_strips_tracking_params():
     resp = client.post(
         "/resolve",

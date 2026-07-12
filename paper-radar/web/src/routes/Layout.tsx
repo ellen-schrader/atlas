@@ -1,6 +1,14 @@
 import type { Session } from "@supabase/supabase-js";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
-import { Compass, LayoutGrid, LibraryBig, LogOut, Settings as SettingsIcon, Users } from "lucide-react";
+import {
+  Compass,
+  LayoutGrid,
+  LibraryBig,
+  LogOut,
+  Map as MapIcon,
+  Settings as SettingsIcon,
+  Users,
+} from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
 import { PaperModalProvider } from "@/components/PaperModal";
@@ -25,6 +33,7 @@ export function useAppContext() {
 const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
+  { to: "/map", label: "Map", icon: MapIcon, end: false },
   { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
