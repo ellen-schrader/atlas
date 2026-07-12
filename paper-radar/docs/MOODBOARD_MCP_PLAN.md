@@ -150,10 +150,16 @@ build:
   *"plot X in our lab's style."* Validated over stdio and the emitted `.mplstyle` parses +
   renders in matplotlib. The **DOI→licence auto-hint moved to M3** — it's an upload-time
   feature with no consumer until the web upload UI exists.
-- **M3 (web, fast follow)** — the mood-board upload UI gains the **own/third-party toggle**,
-  the **DOI→licence prefill** (OpenAlex/Crossref), and a `get_figure_image` deep link.
+- **M3 — done.** The mood-board upload + edit UI gained the **own/third-party origin toggle**
+  and, for third-party figures, **Source URL / Licence / Attribution** with a **"Look up"
+  button** that resolves an advisory licence from the linked paper's DOI (or a pasted DOI)
+  via **OpenAlex** (client-side). The figure detail view shows provenance. Validated
+  end-to-end: a web upload's provenance flows through `list_moodboard` and into
+  `get_moodboard_style`. (A `get_figure_image` deep link remains a small optional follow-up.)
 
 ## Status
 
-- **M1 + M2 implemented and validated** (migration + five MCP tools; see Phases).
-- Next action: **M3** (web) — upload own/third-party toggle + DOI→licence prefill.
+- **M1 + M2 + M3 done and merged to `main`** (PRs #24, #25, #26). The mood board is fully
+  exposed to Claude over MCP, and the web upload captures own-vs-third-party provenance.
+- Optional follow-ups: a `?figure=` deep link in `get_figure_image`; a `figures.embedding`
+  column for multi-modal similarity search (per the mood_board migration's note).
