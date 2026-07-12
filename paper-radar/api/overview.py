@@ -10,6 +10,7 @@ follow-up — see docs/MAP_OVERVIEW_PLAN.md.)
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections import defaultdict
@@ -17,6 +18,8 @@ from collections import defaultdict
 import numpy as np
 
 from paper_radar.config import get_settings as get_llm_settings
+
+from .supa import service_client
 
 log = logging.getLogger(__name__)
 
@@ -101,12 +104,71 @@ def name_clusters(clusters: list[dict]) -> dict[int, dict]:
     return {c["id"]: named.get(c["id"], fallback[c["id"]]) for c in clusters}
 
 
-def compute_layout(papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
+def _signature(papers: list[dict]) -> str:
+    """Stable hash of the embedded-paper set — same set → same clustering → names."""
+    key = "|".join(f"{p['id']}:{p['embedded_at']}" for p in sorted(papers, key=lambda p: p["id"]))
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _load_names(team_id: str, signature: str) -> dict[int, dict] | None:
+    """Reuse persisted theme names for this signature, or None to (re)compute.
+
+    Degrades to None if the `trends` signature columns aren't present yet (the
+    migration hasn't been applied on the target DB).
+    """
+    try:
+        rows = (
+            service_client()
+            .table("trends")
+            .select("cluster_index, label, description")
+            .eq("team_id", team_id)
+            .eq("signature", signature)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        log.warning("trends read failed (names not persisted): %s", exc)
+        return None
+    if not rows:
+        return None
+    return {
+        r["cluster_index"]: {"label": r["label"], "description": r["description"] or ""}
+        for r in rows
+    }
+
+
+def _store_names(
+    team_id: str, signature: str, names: dict[int, dict], ids_by_cluster: dict[int, list[str]]
+) -> None:
+    """Persist theme names for this signature (replaces the team's trends rows)."""
+    try:
+        svc = service_client()
+        svc.table("trends").delete().eq("team_id", team_id).execute()
+        svc.table("trends").insert(
+            [
+                {
+                    "team_id": team_id,
+                    "signature": signature,
+                    "cluster_index": cid,
+                    "label": names[cid]["label"],
+                    "description": names[cid]["description"],
+                    "paper_ids": ids_by_cluster[cid],
+                }
+                for cid in sorted(names)
+            ]
+        ).execute()
+    except Exception as exc:
+        log.warning("trends write failed (names not persisted): %s", exc)
+
+
+def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
     """UMAP + clusters + names for ``papers`` (each with id, title, embedding).
 
     Returns ``(point_by_id, clusters)`` where ``point_by_id[id] = {x, y, cluster}``
-    and ``clusters = [{id, label, description, size}]``. Cached per the embedded
-    set by the caller via :func:`cache_key`.
+    and ``clusters = [{id, label, description, size}]``. UMAP + KMeans are
+    deterministic; the LLM names are reused from ``trends`` when the embedded set
+    is unchanged, so Claude is only called when the clustering actually changes.
     """
     from paper_radar.embed.index import cluster_embeddings, compute_umap
 
@@ -115,12 +177,18 @@ def compute_layout(papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
     labels = cluster_embeddings(vecs)
 
     titles_by_cluster: dict[int, list[str]] = defaultdict(list)
+    ids_by_cluster: dict[int, list[str]] = defaultdict(list)
     for p, c in zip(papers, labels, strict=True):
         titles_by_cluster[int(c)].append(p.get("title") or "")
+        ids_by_cluster[int(c)].append(p["id"])
 
-    names = name_clusters(
-        [{"id": cid, "titles": ts} for cid, ts in sorted(titles_by_cluster.items())]
-    )
+    signature = _signature(papers)
+    names = _load_names(team_id, signature)
+    if names is None:
+        names = name_clusters(
+            [{"id": cid, "titles": ts} for cid, ts in sorted(titles_by_cluster.items())]
+        )
+        _store_names(team_id, signature, names, ids_by_cluster)
 
     point_by_id = {
         p["id"]: {"x": float(x), "y": float(y), "cluster": int(c)}
@@ -129,8 +197,8 @@ def compute_layout(papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
     clusters = [
         {
             "id": cid,
-            "label": names[cid]["label"],
-            "description": names[cid]["description"],
+            "label": names.get(cid, {}).get("label", f"Theme {cid + 1}"),
+            "description": names.get(cid, {}).get("description", ""),
             "size": len(ts),
         }
         for cid, ts in sorted(titles_by_cluster.items())
@@ -144,6 +212,6 @@ def cached_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], li
     cached = _layout_cache.get(team_id, key)
     if cached is not None:
         return cached
-    result = compute_layout(papers)
+    result = compute_layout(team_id, papers)
     _layout_cache.put(team_id, key, result)
     return result

@@ -41,10 +41,76 @@ def test_name_clusters_falls_back_without_key(monkeypatch):
     assert names[1]["label"] == "Theme 2"
 
 
+class _FakeTrends:
+    """Tiny in-memory stand-in for the Supabase client's `trends` table."""
+
+    def __init__(self):
+        self.rows: list[dict] = []
+        self._op = None
+        self._filters: dict = {}
+        self._pending: list[dict] = []
+
+    def table(self, _name):
+        self._op = None
+        self._filters = {}
+        self._pending = []
+        return self
+
+    def select(self, _cols):
+        self._op = "select"
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def insert(self, rows):
+        self._op = "insert"
+        self._pending = rows
+        return self
+
+    def eq(self, k, v):
+        self._filters[k] = v
+        return self
+
+    def execute(self):
+        if self._op == "insert":
+            self.rows.extend(self._pending)
+            return type("R", (), {"data": self._pending})
+        if self._op == "delete":
+            self.rows = [r for r in self.rows if not self._match(r)]
+            return type("R", (), {"data": []})
+        return type("R", (), {"data": [r for r in self.rows if self._match(r)]})
+
+    def _match(self, row):
+        return all(row.get(k) == v for k, v in self._filters.items())
+
+
+def test_names_persist_and_reload(monkeypatch):
+    fake = _FakeTrends()
+    monkeypatch.setattr(ov, "service_client", lambda: fake)
+    names = {0: {"label": "A", "description": "da"}, 1: {"label": "B", "description": "db"}}
+    ids = {0: ["p1"], 1: ["p2"]}
+
+    assert ov._load_names("team", "sig") is None  # nothing persisted yet
+    ov._store_names("team", "sig", names, ids)
+    assert ov._load_names("team", "sig") == names  # round-trips → no Claude call next time
+    assert ov._load_names("team", "other-sig") is None  # a changed clustering misses
+
+
+def test_signature_stable_regardless_of_input_order():
+    a = [{"id": "p1", "embedded_at": "t1"}, {"id": "p2", "embedded_at": "t2"}]
+    b = list(reversed(a))
+    assert ov._signature(a) == ov._signature(b)
+    # a re-embed (different embedded_at) changes the signature
+    c = [{"id": "p1", "embedded_at": "t9"}, {"id": "p2", "embedded_at": "t2"}]
+    assert ov._signature(a) != ov._signature(c)
+
+
 def test_cached_layout_memoizes(monkeypatch):
     calls = {"n": 0}
 
-    def fake_compute(papers):
+    def fake_compute(team_id, papers):
         calls["n"] += 1
         return ({p["id"]: {"x": 0.0, "y": 0.0, "cluster": 0} for p in papers}, [])
 
