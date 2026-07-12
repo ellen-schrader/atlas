@@ -36,6 +36,12 @@ api = [
     "uvicorn[standard]>=0.30",
     "supabase>=2.9",
 ]
+# Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
+# docs/CLAUDE_INTEGRATION_PLAN.md). Run: uv run --extra mcp python -m atlas_mcp
+mcp = [
+    "mcp>=1.2",
+    "supabase>=2.9",
+]
 
 [project.scripts]
 paper-radar = "paper_radar.cli:app"
