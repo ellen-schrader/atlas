@@ -83,6 +83,29 @@ def test_parse_vec_handles_string_and_list():
     assert _parse_vec(None) is None
 
 
+def test_recency_decay_halves_at_halflife():
+    from datetime import UTC, datetime, timedelta
+
+    from api.app import _HALFLIFE_DAYS, _recency_decay
+
+    now = datetime(2026, 7, 1, tzinfo=UTC)
+    assert _recency_decay(now, now) == 1.0  # brand new
+    half = now - timedelta(days=_HALFLIFE_DAYS)
+    assert abs(_recency_decay(half, now) - 0.5) < 1e-6  # one half-life → 0.5
+    assert _recency_decay(None, now) == 1.0  # missing timestamp → no decay
+    # a future timestamp doesn't amplify weight
+    assert _recency_decay(now + timedelta(days=5), now) == 1.0
+
+
+def test_parse_ts_handles_iso_and_z():
+    from api.app import _parse_ts
+
+    assert _parse_ts("2026-07-01T12:00:00+00:00") is not None
+    assert _parse_ts("2026-07-01T12:00:00Z") is not None  # Z offset
+    assert _parse_ts(None) is None
+    assert _parse_ts("not-a-date") is None
+
+
 def test_compute_stats_aggregates_posts():
     from api.app import _compute_stats
 

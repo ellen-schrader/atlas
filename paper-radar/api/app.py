@@ -575,38 +575,112 @@ def _seen_paper_ids(uc, user_id: str, team_id: str) -> set[str]:
     return seen
 
 
-def _taste_vector(uc, user_id: str, team_id: str) -> list[float] | None:
-    """Per-user taste vector = normalize(0.5·profile_vec + 0.5·engagement_centroid).
+# Engagement weights for the taste centroid. Not all engagement is endorsement:
+# an explicit save or a reaction is a strong "I want more like this"; a plain
+# `read` only means "consumed" (preference unknown), so it barely nudges taste; a
+# 🤔 reaction is skeptical, not enthusiastic. Weights are decayed by age so recent
+# interests outweigh old ones.
+_W_REACTION = 1.0
+_W_SKEPTIC = 0.3  # 🤔
+_W_COMMENT = 0.75
+_W_BOOKMARK = 1.5  # to_read — an explicit, deliberate save
+_W_READ = 0.25  # read / reading — consumed, but says little about preference
+_HALFLIFE_DAYS = 90.0
 
-    profile_vec is the embedding of the user's profile description (populated by
-    POST /profile); the centroid is the mean embedding of papers they've engaged
-    with in this lab. Missing either side falls back to the other; missing both
-    returns None (cold start → the caller uses a recency fallback)."""
+
+def _parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recency_decay(ts: datetime | None, now: datetime) -> float:
+    """Half-life decay: a signal loses half its weight every _HALFLIFE_DAYS."""
+    if ts is None:
+        return 1.0
+    age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+    return 0.5 ** (age_days / _HALFLIFE_DAYS)
+
+
+def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
+    """Per-paper positive-interest weight for the user in this lab, blending signal
+    strength (save > reaction > comment > read) with recency decay."""
+    now = datetime.now(UTC)
+    weights: dict[str, float] = {}
+
+    def add(paper_id: str, w: float) -> None:
+        weights[paper_id] = weights.get(paper_id, 0.0) + w
+
+    for r in (
+        uc.table("reactions").select("paper_id, emoji, created_at")
+        .eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+    ):
+        base = _W_SKEPTIC if r.get("emoji") == "🤔" else _W_REACTION
+        add(r["paper_id"], base * _recency_decay(_parse_ts(r.get("created_at")), now))
+    for c in (
+        uc.table("comments").select("paper_id, created_at")
+        .eq("team_id", team_id).eq("author_id", user_id).execute().data or []
+    ):
+        add(c["paper_id"], _W_COMMENT * _recency_decay(_parse_ts(c.get("created_at")), now))
+    for s in (
+        uc.table("paper_status").select("paper_id, status, updated_at")
+        .eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+    ):
+        base = _W_BOOKMARK if s.get("status") == "to_read" else _W_READ
+        add(s["paper_id"], base * _recency_decay(_parse_ts(s.get("updated_at")), now))
+    return weights
+
+
+def _taste_vector(uc, user_id: str, team_id: str) -> list[float] | None:
+    """Per-user taste vector: a confidence-weighted blend of the profile embedding
+    and a recency-/strength-weighted engagement centroid.
+
+    The engagement side's weight grows with how many papers the user has actually
+    engaged with, so a single incidental interaction can't hijack the feed while
+    the profile carries a sparse user. Missing either side falls back to the other;
+    missing both returns None (cold start → recency fallback)."""
     prof = (
         uc.table("profiles").select("profile_vec").eq("id", user_id).limit(1).execute().data or []
     )
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
+    profile_np = (
+        _l2norm(np.asarray(profile_vec, dtype=np.float32)) if profile_vec is not None else None
+    )
 
-    centroid = None
-    seen = _seen_paper_ids(uc, user_id, team_id)
-    if seen:
-        rows = uc.table("papers").select("id, embedding").in_("id", list(seen)).execute().data or []
-        vecs = [
-            np.asarray(_parse_vec(r["embedding"]), dtype=np.float32)
-            for r in rows
-            if r.get("embedding")
-        ]
-        if vecs:
-            centroid = np.mean(vecs, axis=0)
+    centroid_np = None
+    n_engaged = 0
+    weights = _engagement_weights(uc, user_id, team_id)
+    if weights:
+        rows = (
+            uc.table("papers").select("id, embedding").in_("id", list(weights)).execute().data or []
+        )
+        acc: np.ndarray | None = None
+        wsum = 0.0
+        for r in rows:
+            w = weights.get(r["id"], 0.0)
+            if w <= 0 or not r.get("embedding"):
+                continue
+            v = _l2norm(np.asarray(_parse_vec(r["embedding"]), dtype=np.float32))
+            acc = w * v if acc is None else acc + w * v
+            wsum += w
+            n_engaged += 1
+        if acc is not None and wsum > 0:
+            centroid_np = _l2norm(acc / wsum)
 
-    parts: list[np.ndarray] = []
-    if profile_vec is not None:
-        parts.append(0.5 * _l2norm(np.asarray(profile_vec, dtype=np.float32)))
-    if centroid is not None:
-        parts.append(0.5 * _l2norm(centroid))
-    if not parts:
+    if profile_np is None and centroid_np is None:
         return None
-    return _l2norm(sum(parts)).tolist()
+    if centroid_np is None:
+        return profile_np.tolist()  # type: ignore[union-attr]
+    if profile_np is None:
+        return centroid_np.tolist()
+
+    # Both present: trust engagement more the more of it there is (capped so the
+    # profile always keeps a voice). n=1 → ~0.2, n=4 → 0.5, large → 0.7.
+    eng_conf = min(0.7, n_engaged / (n_engaged + 4.0))
+    return _l2norm((1 - eng_conf) * profile_np + eng_conf * centroid_np).tolist()
 
 
 class ProfileRequest(BaseModel):
@@ -639,7 +713,9 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
     if not get_api_settings().voyage_api_key:
         return ProfileResponse(ok=True, embedded=False)  # md saved; vector left as-is
     try:
-        vector = embeddings.embed_texts([text], input_type="document")[0]
+        # The profile describes what the user wants to read — embed it as a query
+        # (papers are documents), the retrieval-tuned pairing for profile→paper.
+        vector = embeddings.embed_texts([text], input_type="query")[0]
     except embeddings.EmbeddingError as exc:
         # The description saved fine; recommendations just won't reflect it yet.
         log.warning("embedding profile for %s failed: %s", user_id, exc)
