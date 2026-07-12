@@ -4,7 +4,7 @@
 -- Mirrors rls_isolation_test.sql (same JWT-claims trick to switch auth context).
 
 begin;
-select plan(6);
+select plan(7);
 
 -- A constant 1024-dim unit-ish vector for both the stored embeddings and the
 -- query, so every embedded paper ties on similarity and the test isolates the
@@ -36,21 +36,24 @@ insert into public.team_members (team_id, user_id, role) values
     ('11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000c', 'member'),
     ('22222222-2222-2222-2222-222222222222', '00000000-0000-0000-0000-00000000000b', 'owner');
 
--- p1..p4 embedded; p5 has no embedding.
+-- p1..p4 + p6 embedded; p5 has no embedding.
 insert into public.papers (id, url, url_norm, title, embedding) values
     ('10000000-0000-0000-0000-000000000001', 'http://x/1', 'x/1', 'Read paper',      pg_temp.qv()),
     ('20000000-0000-0000-0000-000000000002', 'http://x/2', 'x/2', 'Reacted paper',   pg_temp.qv()),
     ('30000000-0000-0000-0000-000000000003', 'http://x/3', 'x/3', 'Commented paper', pg_temp.qv()),
     ('40000000-0000-0000-0000-000000000004', 'http://x/4', 'x/4', 'Unseen paper',    pg_temp.qv()),
-    ('50000000-0000-0000-0000-000000000005', 'http://x/5', 'x/5', 'No-embedding',    null);
+    ('50000000-0000-0000-0000-000000000005', 'http://x/5', 'x/5', 'No-embedding',    null),
+    ('60000000-0000-0000-0000-000000000006', 'http://x/6', 'x/6', 'Ada-posted paper',pg_temp.qv());
 
--- Lab A posts all five; Lab B posts the read paper (for scoping).
+-- Lab A: Ada posts p1/p2/p3/p5 and p6; CARA posts the unseen p4 (so it's eligible
+-- for Ada — own-posted papers are excluded). Lab B posts the read paper (scoping).
 insert into public.paper_posts (paper_id, team_id, posted_by, source) values
     ('10000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
     ('20000000-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
     ('30000000-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
-    ('40000000-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
+    ('40000000-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000c', 'web'),
     ('50000000-0000-0000-0000-000000000005', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
+    ('60000000-0000-0000-0000-000000000006', '11111111-1111-1111-1111-111111111111', '00000000-0000-0000-0000-00000000000a', 'web'),
     ('10000000-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', '00000000-0000-0000-0000-00000000000b', 'web');
 
 -- Ada's "seen" signals: read p1, reacted p2, commented p3.
@@ -100,6 +103,14 @@ select is(
      where paper_id = '50000000-0000-0000-0000-000000000005'),
     0,
     'a paper with no embedding is never recommended');
+
+-- A paper Ada posted herself is never recommended back to her.
+select is(
+    (select count(*)::int from public.recommend_papers(
+        '11111111-1111-1111-1111-111111111111', pg_temp.qv(), 20)
+     where paper_id = '60000000-0000-0000-0000-000000000006'),
+    0,
+    'a paper Ada posted herself is never recommended');
 
 -- Cara's reaction on p4 didn't exclude it for Ada (still returned above).
 select ok(
