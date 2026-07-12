@@ -13,6 +13,7 @@ Usage (from paper-radar/, with api/.env configured):
 from __future__ import annotations
 
 import argparse
+import time
 from datetime import UTC, datetime
 
 from . import embeddings
@@ -42,7 +43,8 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="re-embed every paper, not just those missing embedded_at",
     )
-    parser.add_argument("--batch-size", type=int, default=64, help="papers per API request")
+    parser.add_argument("--batch-size", type=int, default=16, help="papers per API request")
+    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between batches")
     args = parser.parse_args(argv)
 
     svc = service_client()
@@ -52,10 +54,18 @@ def main(argv: list[str] | None = None) -> None:
     todo = [(row, text) for row, text in todo if text]
     print(f"{len(todo)} papers to embed ({skipped} skipped: no title/abstract)")
 
-    done = 0
+    # Each batch's rows are written as soon as it embeds, so a mid-run failure
+    # keeps all prior progress — re-running resumes (embedded_at is null only for
+    # the rest). Batches are paced to stay under the API's per-minute limit.
+    done = failed = 0
     for start in range(0, len(todo), args.batch_size):
         chunk = todo[start : start + args.batch_size]
-        vectors = embeddings.embed_texts([text for _, text in chunk])
+        try:
+            vectors = embeddings.embed_texts([text for _, text in chunk])
+        except embeddings.EmbeddingError as exc:
+            failed += len(chunk)
+            print(f"  batch at {start} failed ({exc}); skipping, re-run to retry")
+            continue
         now = datetime.now(UTC).isoformat()
         for (row, _), vector in zip(chunk, vectors, strict=True):
             svc.table("papers").update({"embedding": vector, "embedded_at": now}).eq(
@@ -63,7 +73,8 @@ def main(argv: list[str] | None = None) -> None:
             ).execute()
         done += len(chunk)
         print(f"  {done}/{len(todo)}")
-    print("Done.")
+        time.sleep(args.delay)
+    print(f"Done. embedded={done} failed={failed}")
 
 
 if __name__ == "__main__":

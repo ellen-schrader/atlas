@@ -20,10 +20,14 @@ from .config import ApiSettings, get_api_settings
 
 log = logging.getLogger(__name__)
 
+# Batches are deliberately small: the free tier caps tokens-per-minute, and one
+# large batch of abstracts can exceed it in a single request. Small batches +
+# 429 backoff keep us under the limit.
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
-BATCH_SIZE = 128          # texts per request (well under Voyage's limits)
-_RETRIES = 3              # attempts per batch on 429/5xx
+BATCH_SIZE = 16           # texts per request
+_RETRIES = 6              # attempts per batch on 429/5xx
 _TIMEOUT = 60             # seconds per request
+_RATE_LIMIT_WAIT = 30     # fallback seconds to wait on a 429 with no Retry-After
 _RETRYABLE = {429, 500, 502, 503, 529}
 
 
@@ -89,7 +93,14 @@ def _embed_batch(batch: list[str], input_type: str, settings: ApiSettings) -> li
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code in _RETRYABLE and attempt < _RETRIES - 1:
-                time.sleep(2**attempt)
+                if exc.code == 429:
+                    # Honor Retry-After when present; the free tier's per-minute
+                    # limit needs a real cooldown, not a 1-2s backoff.
+                    retry_after = (exc.headers or {}).get("Retry-After")
+                    time.sleep(int(retry_after) if retry_after and retry_after.isdigit()
+                               else _RATE_LIMIT_WAIT)
+                else:
+                    time.sleep(2**attempt)
                 continue
             raise EmbeddingError(f"Voyage API returned HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
