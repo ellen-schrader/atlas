@@ -66,8 +66,9 @@ def test_rate_limiter_caps_within_window():
 _MEMBERS = [
     {"user_id": "me", "display_name": "Ellen"},
     {"user_id": "u1", "display_name": "Maya Chen"},
-    {"user_id": "u2", "display_name": "Maya Patel"},
-    {"user_id": "u3", "display_name": "Omar"},
+    {"user_id": "u2", "display_name": "Omar"},
+    {"user_id": "u3", "display_name": "Sam"},
+    {"user_id": "u4", "display_name": "Sam"},  # duplicate exact name → true ambiguity
 ]
 
 
@@ -79,15 +80,23 @@ def team(monkeypatch):
 
 
 def test_resolve_member_exact_and_strips_at(team):
-    assert lab.resolve_member(team, "Omar")["user_id"] == "u3"
-    assert lab.resolve_member(team, "@Omar")["user_id"] == "u3"
+    assert lab.resolve_member(team, "Omar")["user_id"] == "u2"
+    assert lab.resolve_member(team, "@Omar")["user_id"] == "u2"
     assert lab.resolve_member(team, "maya chen")["user_id"] == "u1"  # case-insensitive exact
 
 
-def test_resolve_member_refuses_ambiguous(team):
-    # "Maya" prefixes two members and matches neither exactly → refuse, don't guess
+def test_resolve_member_is_exact_only(team):
+    # A unique prefix must NOT tag — exact-or-refuse, no guessing.
+    with pytest.raises(lab.LabError):
+        lab.resolve_member(team, "Om")
     with pytest.raises(lab.LabError):
         lab.resolve_member(team, "Maya")
+
+
+def test_resolve_member_refuses_duplicate_name(team):
+    # Two members literally named "Sam" → can't tell them apart.
+    with pytest.raises(lab.LabError):
+        lab.resolve_member(team, "Sam")
 
 
 def test_resolve_member_refuses_self_and_unknown(team):
@@ -97,6 +106,30 @@ def test_resolve_member_refuses_self_and_unknown(team):
         lab.resolve_member(team, "Nobody")
     with pytest.raises(lab.LabError):
         lab.resolve_member(team, "")
+
+
+# --- DNS-based SSRF guard ---------------------------------------------------
+
+
+def test_reject_private_dns_blocks_hostname_resolving_internal(monkeypatch):
+    # A public-looking hostname whose DNS points at a private/loopback address.
+    def fake_getaddrinfo(host, *a, **k):
+        return [(2, 1, 6, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(lab.socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(lab.LabError):
+        lab._reject_private_dns("evil.example.com")
+
+
+def test_reject_private_dns_allows_public(monkeypatch):
+    monkeypatch.setattr(lab.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    lab._reject_private_dns("example.com")  # no raise
+    # unresolvable host is left for the fetch to error on, not blocked here
+    def boom(*a, **k):
+        raise OSError("nxdomain")
+
+    monkeypatch.setattr(lab.socket, "getaddrinfo", boom)
+    lab._reject_private_dns("does-not-exist.invalid")  # no raise
 
 
 # --- untrusted-content wrapper ---------------------------------------------
@@ -111,3 +144,73 @@ def test_untrusted_wraps_and_noops_on_empty():
     assert "Ignore prior instructions" in out
     assert server._untrusted("paper", None) == ""
     assert server._untrusted("paper", "") == ""
+
+
+# --- the write tool's confirmation gate (verifies it isn't a no-op) ---------
+
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+
+class _FakeCtx:
+    """Stands in for FastMCP's Context to drive the elicitation branch."""
+
+    def __init__(self, action="accept", raise_exc=False):
+        self.action = action
+        self.raise_exc = raise_exc
+
+    async def elicit(self, message, schema):
+        if self.raise_exc:
+            raise RuntimeError("client has no elicitation capability")
+        return SimpleNamespace(action=self.action, data=schema())
+
+
+def _drive_post_paper(monkeypatch, *, confirm, ctx):
+    """Run the post_paper tool with the lab data-layer stubbed; returns
+    (result_text, number_of_writes)."""
+    pytest.importorskip("mcp")
+    from atlas_mcp import lab as L
+    from atlas_mcp import server
+
+    writes = {"n": 0}
+    monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t", "name": "Lab A"})
+    monkeypatch.setattr(
+        L,
+        "resolve_metadata",
+        lambda url: {
+            "clean_url": url,
+            "url_norm": "n",
+            "meta": SimpleNamespace(title="A Paper", authors=[], venue=None, year=None),
+        },
+    )
+    monkeypatch.setattr(L, "post_paper", lambda team, resolved: (writes.__setitem__("n", writes["n"] + 1) or ("post1", "paper1", False)))
+    monkeypatch.setattr(L, "add_comment_with_mention", lambda *a: None)
+    monkeypatch.setattr(L, "paper_link", lambda pid: f"http://x/{pid}")
+    fn = getattr(server.post_paper, "fn", server.post_paper)
+    out = asyncio.run(fn(url="https://arxiv.org/abs/1706.03762", confirm=confirm, ctx=ctx))
+    return out, writes["n"]
+
+
+def test_post_paper_dry_run_writes_nothing(monkeypatch):
+    out, n = _drive_post_paper(monkeypatch, confirm=False, ctx=_FakeCtx())
+    assert "Nothing shared yet" in out
+    assert n == 0
+
+
+def test_post_paper_decline_blocks_write(monkeypatch):
+    out, n = _drive_post_paper(monkeypatch, confirm=True, ctx=_FakeCtx(action="decline"))
+    assert "Not shared" in out
+    assert n == 0  # the human gate actually stopped the write
+
+
+def test_post_paper_accept_writes(monkeypatch):
+    out, n = _drive_post_paper(monkeypatch, confirm=True, ctx=_FakeCtx(action="accept"))
+    assert "Shared to Lab A" in out
+    assert n == 1
+
+
+def test_post_paper_degrades_when_elicit_unsupported(monkeypatch):
+    # No elicitation support → falls back to the explicit confirm=true flag.
+    out, n = _drive_post_paper(monkeypatch, confirm=True, ctx=_FakeCtx(raise_exc=True))
+    assert "Shared to Lab A" in out
+    assert n == 1

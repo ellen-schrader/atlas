@@ -15,6 +15,8 @@ server).
 from __future__ import annotations
 
 import ipaddress
+import logging
+import socket
 import time
 from functools import lru_cache, wraps
 from urllib.parse import urlsplit
@@ -24,6 +26,8 @@ from api.config import get_api_settings
 from supabase import Client, ClientOptions, create_client
 
 from .config import get_atlas_settings
+
+log = logging.getLogger("atlas_mcp.lab")
 
 # Explicit columns — never `papers(*)`, which would drag the 1024-dim embedding
 # into every response.
@@ -289,11 +293,34 @@ def validate_share_url(url: str) -> str:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None
-    if ip is not None and (
-        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_unspecified
-    ):
+    if ip is not None and _is_blocked_ip(ip):
         raise LabError("That host isn't allowed.")
     return raw
+
+
+def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
+    return bool(
+        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def _reject_private_dns(host: str) -> None:
+    """Resolve `host` and reject if it maps to a private/loopback/link-local IP —
+    blocks a *public hostname* that points at internal infra (the literal-IP check
+    in validate_share_url can't catch that). Best-effort: it does not close the
+    DNS-rebinding window between here and the fetch; airtight SSRF protection would
+    need a check at connect time."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return  # unresolvable — let fetch_metadata surface the real error
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            raise LabError("That host resolves to a disallowed address.")
 
 
 class _RateLimiter:
@@ -316,7 +343,11 @@ class _RateLimiter:
         self._events.append(now)
 
 
+# Writes and outbound metadata fetches are capped separately: the fetch limiter
+# also covers confirm=false dry-runs (which resolve metadata but don't write), so
+# an injected preview loop can't drive unbounded outbound requests.
 _post_limiter = _RateLimiter(max_events=20, window_seconds=3600)
+_fetch_limiter = _RateLimiter(max_events=40, window_seconds=3600)
 
 
 @with_refresh
@@ -339,33 +370,39 @@ def list_members(team: dict) -> list[dict]:
 
 
 def resolve_member(team: dict, name: str) -> dict:
-    """Resolve a teammate to tag, EXACTLY. Never guesses: 0 or >1 name matches
-    raises, as does tagging yourself. This blocks injection like "tag everyone"."""
+    """Resolve a teammate to tag by EXACT display name (case-insensitive). Never
+    guesses: no match or a name shared by >1 member raises, as does tagging
+    yourself. Exact-only is deliberate — it blocks injection like "tag everyone"
+    and stops a loose partial from silently tagging the wrong person."""
     wanted = (name or "").strip().lstrip("@")
     if not wanted:
         raise LabError("No teammate name given to tag.")
     me = current_user_id()
     members = [m for m in list_members(team) if m["user_id"] != me]
     matches = [m for m in members if m["display_name"].lower() == wanted.lower()]
-    if not matches:
-        # Fall back to a unique prefix match, still exact-or-refuse.
-        matches = [m for m in members if m["display_name"].lower().startswith(wanted.lower())]
     if len(matches) == 1:
         return matches[0]
     if not matches:
         others = ", ".join(m["display_name"] for m in members) or "(no teammates)"
-        raise LabError(f"No teammate named “{wanted}” in {team['name']}. Members: {others}.")
-    names = ", ".join(m["display_name"] for m in matches)
-    raise LabError(f"“{wanted}” is ambiguous — did you mean one of: {names}? Be more specific.")
+        raise LabError(
+            f"No teammate named exactly “{wanted}” in {team['name']}. Members: {others}."
+        )
+    raise LabError(
+        f"More than one member is named “{wanted}” in {team['name']} — can't tell them apart."
+    )
 
 
 def resolve_metadata(url: str) -> dict:
-    """Fetch citation metadata for a validated URL (one outbound request)."""
+    """Fetch citation metadata for a validated URL (one outbound request). Covered
+    by the fetch rate limiter (so dry-run previews can't be looped for free) and a
+    DNS check that rejects public names resolving to internal addresses."""
+    from paper_radar.ingest.metadata import fetch_metadata
     from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
-    clean = _clean_url(validate_share_url(url))
-    from paper_radar.ingest.metadata import fetch_metadata
-
+    _fetch_limiter.check()
+    safe = validate_share_url(url)
+    _reject_private_dns(urlsplit(safe).hostname or "")
+    clean = _clean_url(safe)
     meta = fetch_metadata(clean)
     return {"clean_url": clean, "url_norm": _normalize_key(clean), "meta": meta}
 
@@ -387,10 +424,12 @@ def find_existing_post(team: dict, paper_id: str) -> str | None:
     return rows[0]["id"] if rows else None
 
 
+@with_refresh
 def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
     """Ensure the paper exists (global dedup) and post it into the lab as the
     user. Returns (post_id, paper_id, already_shared). Rate-limited. Any note the
-    user wrote goes into a comment (add_comment_with_mention), not the post row."""
+    user wrote goes into a comment (add_comment_with_mention), not the post row.
+    @with_refresh so an expired JWT is refreshed + retried, like the read path."""
     from api.app import _upsert_paper  # global-corpus dedup (service role, contained)
 
     _post_limiter.check()
@@ -418,18 +457,25 @@ def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
     return inserted.data[0]["id"], paper_id, False
 
 
+@with_refresh
 def add_comment_with_mention(
     team: dict, paper_id: str, body: str, mention: dict | None
-) -> None:
+) -> str | None:
     """Post a comment as the user; if `mention` is given, tag that teammate (the
     body embeds "@name" so the web UI highlights it, and the mention row notifies
-    them + adds the paper to their to-read via the DB trigger)."""
+    them + adds the paper to their to-read via the DB trigger).
+
+    Returns None on full success, or a warning string if the comment posted but the
+    tag couldn't be added — we DON'T raise there, so the caller reports partial
+    success instead of a failure that would invite a retry (and duplicate the
+    comment). @with_refresh only ever retries a failed *comment* insert, before
+    anything has landed, so it can't duplicate."""
     client = get_client()
     text = (body or "").strip()[:MAX_NOTE_LEN]
     if mention:
         text = f"@{mention['display_name']} {text}".strip()
     if not text:
-        return
+        return None
     uid = current_user_id()
     try:
         inserted = (
@@ -440,7 +486,7 @@ def add_comment_with_mention(
     except Exception as exc:  # noqa: BLE001
         raise LabError(f"Could not post the comment: {exc}") from exc
     if not mention:
-        return
+        return None
     comment_id = inserted.data[0]["id"] if inserted.data else None
     try:
         client.table("mentions").insert(
@@ -452,8 +498,7 @@ def add_comment_with_mention(
                 "comment_id": comment_id,
             }
         ).execute()
-    except Exception as exc:  # noqa: BLE001
-        raise LabError(
-            f"Shared the paper and posted the comment, but couldn't tag "
-            f"{mention['display_name']}: {exc}"
-        ) from exc
+    except Exception as exc:  # noqa: BLE001 — comment landed; tag is best-effort
+        log.warning("mention insert for %s failed: %s", mention["display_name"], exc)
+        return f"(couldn't notify @{mention['display_name']} — tag failed)"
+    return None

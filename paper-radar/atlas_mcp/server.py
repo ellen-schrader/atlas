@@ -389,19 +389,22 @@ async def post_paper(
             data = getattr(res, "data", None)
             if data is not None and getattr(data, "confirm", True) is False:
                 return "Not shared — you declined."
-        except Exception:  # noqa: BLE001 — client without elicitation support
-            log.info("elicitation unavailable; proceeding on explicit confirm=true")
+        except Exception as exc:  # noqa: BLE001
+            # The client didn't support elicitation (or it errored). We still have
+            # the explicit confirm=true call + the client's tool approval as the
+            # human gate, but log loudly so a broken gate is visible, not silent.
+            log.warning("elicitation gate unavailable, proceeding on confirm=true: %s", exc)
 
     try:
         _post_id, paper_id, already = lab.post_paper(team, resolved)
-        if note or member:
-            lab.add_comment_with_mention(team, paper_id, note or "", member)
+        warn = lab.add_comment_with_mention(team, paper_id, note or "", member) if (note or member) else None
     except lab.LabError as exc:
         return f"Error: {exc}"
 
     head = f"Already in {team['name']}" if already else f"Shared to {team['name']}"
     tail = f" — tagged @{member['display_name']}" if member else ""
-    return f"{head}: {title}{tail}\n{lab.paper_link(paper_id)}"
+    body = f"{head}: {title}{tail}\n{lab.paper_link(paper_id)}"
+    return f"{body}\n{warn}" if warn else body
 
 
 def main() -> None:
