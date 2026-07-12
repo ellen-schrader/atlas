@@ -72,7 +72,14 @@ export function PaperModalProvider({
       {children}
       <Modal open={paperId !== null} onClose={close} label={post?.papers.title ?? "Paper"}>
         {post ? (
-          <PaperDetail key={post.id} post={post} teamId={teamId} userId={userId} bookmarked={bookmarked} />
+          <PaperDetail
+            key={post.id}
+            post={post}
+            teamId={teamId}
+            userId={userId}
+            bookmarked={bookmarked}
+            onClose={close}
+          />
         ) : (
           <div className="p-10 text-center text-sm text-muted">
             {isLoading ? "Loading…" : "Paper not available."}
