@@ -10,7 +10,7 @@ import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost, SimilarPaper } from "@/lib/types";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 export function PaperDetail({
   post,
@@ -86,8 +86,8 @@ export function PaperDetail({
         <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted">
           <span className="flex items-center gap-2">
             {posterName && <Avatar name={posterName} size={22} />}
-            <span>
-              Posted {posterName ? `by ${posterName} ` : ""}· {formatDate(post.posted_at)}
+            <span title={formatDate(post.posted_at)}>
+              Posted {posterName ? `by ${posterName} ` : ""}· {formatRelative(post.posted_at)}
             </span>
           </span>
           {canDelete && <DeletePost postId={post.id} teamId={teamId} onDeleted={onClose} />}

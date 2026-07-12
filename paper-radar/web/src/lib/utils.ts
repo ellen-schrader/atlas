@@ -37,3 +37,20 @@ export function formatDate(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+
+/** Relative time like "3d ago", falling back to an absolute date past a month. */
+export function formatRelative(iso: string | null): string {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  const sec = Math.round((Date.now() - ms) / 1000);
+  if (sec < 45) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  if (day < 30) return `${Math.round(day / 7)}w ago`;
+  return formatDate(iso);
+}

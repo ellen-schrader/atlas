@@ -13,7 +13,7 @@ import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 function greeting(): string {
@@ -68,7 +68,7 @@ export default function Dashboard() {
       icon: <AtSign size={15} />,
       lead: "Mentioned you",
       title: m.papers?.title ?? "A paper",
-      sub: formatDate(m.created_at),
+      sub: formatRelative(m.created_at),
       onOpen: () => {
         void markSeen(m.paper_id);
         openPaper(m.paper_id);
