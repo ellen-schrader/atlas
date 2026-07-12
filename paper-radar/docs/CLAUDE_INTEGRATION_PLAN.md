@@ -135,8 +135,11 @@ forward (Claude Code can also consume it via `claude mcp add --transport http �
 1. **Token type for P1** — reuse a raw Supabase access token (simplest, but short-lived)
    vs. mint a longer-lived lab-scoped personal access token. Lean: raw token for the
    spike, PAT before sharing with the team.
-2. **Supabase Cloud now or stay local for the spike?** Lean: spike locally; migrate to
-   Cloud before P4 (and before anyone remote needs the data).
+2. **Supabase Cloud now or stay local for the spike?** Resolved: **cloud** — `api/.env`
+   already points at the hosted project (≈426 papers in 1 lab; `search_papers` /
+   `match_papers` deployed), so the MCP server targets it with no override. Effectively
+   satisfies **P0**. Semantic mode there still needs a `VOYAGE_API_KEY` + embedded papers;
+   keyword works today.
 3. **Package layout** — resolved: a separate **`paper-radar/atlas_mcp/`** module that
    imports from `api/`, so the two entry points stay distinct. (Not `mcp/` — that would
    shadow the `mcp` SDK.)
