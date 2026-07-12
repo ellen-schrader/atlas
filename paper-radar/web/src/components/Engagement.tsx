@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useMembers } from "@/hooks/useMembers";
+import { type Member, useMembers } from "@/hooks/useMembers";
 import { supabase } from "@/lib/supabase";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
@@ -19,10 +19,6 @@ interface CommentRow {
   body: string;
   created_at: string;
   author_id: string;
-  profiles: { display_name: string } | null;
-}
-interface MemberRow {
-  user_id: string;
   profiles: { display_name: string } | null;
 }
 
@@ -70,6 +66,79 @@ function activeMention(text: string, caret: number): { query: string; start: num
   if (!m) return null;
   const query = m[1];
   return { query, start: caret - query.length - 1 };
+}
+
+/** Split a posted comment into plain runs and `@Name` runs that resolve to a
+ *  teammate. Longest names first so "@Ada Lovelace" wins over "@Ada". */
+function splitMentions(text: string, members: Member[]): { text: string; member?: Member }[] {
+  const named = members.filter((m) => m.profiles?.display_name);
+  if (named.length === 0) return [{ text }];
+
+  const byName = new Map(named.map((m) => [m.profiles!.display_name.toLowerCase(), m]));
+  const pattern = named
+    .map((m) => m.profiles!.display_name)
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(`@(${pattern})`, "gi");
+
+  const out: { text: string; member?: Member }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at) });
+    out.push({ text: m[0], member: byName.get(m[1].toLowerCase()) });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
+}
+
+/** A posted comment, with @mentions highlighted and hoverable. */
+function CommentBody({ text, members }: { text: string; members: Member[] }) {
+  return (
+    <div className="mt-0.5 whitespace-pre-wrap text-sm">
+      {splitMentions(text, members).map((part, i) =>
+        part.member ? (
+          <MentionTag key={i} member={part.member} label={part.text} />
+        ) : (
+          <span key={i}>{part.text}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** A highlighted @mention that reveals a quick profile summary on hover. */
+function MentionTag({ member, label }: { member: Member; label: string }) {
+  const name = member.profiles?.display_name ?? "member";
+  const bio = member.profiles?.profile_md?.trim();
+  return (
+    <span className="group/mention relative inline-block">
+      <span className="cursor-default rounded-chip bg-accent-weak px-1 font-medium text-accent">
+        {label}
+      </span>
+      <span
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 hidden w-64",
+          "rounded-card border border-border bg-surface p-3 text-left shadow-lg",
+          "group-hover/mention:block",
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <Avatar name={name} size={28} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-fg">{name}</span>
+            <span className="block text-xs capitalize text-muted">{member.role}</span>
+          </span>
+        </span>
+        <span className="mt-2 block whitespace-normal text-xs leading-relaxed text-muted">
+          {bio ? (bio.length > 160 ? `${bio.slice(0, 160)}…` : bio) : "No research profile yet."}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 /** Reactions + comments on a paper. Public API unchanged. */
@@ -192,18 +261,9 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
     },
   });
 
-  const { data: members } = useQuery({
-    queryKey: ["members", teamId],
-    enabled: cfg.supportsMentions,
-    queryFn: async (): Promise<MemberRow[]> => {
-      const { data, error } = await supabase
-        .from("team_members")
-        .select("user_id, profiles(display_name)")
-        .eq("team_id", teamId);
-      if (error) throw error;
-      return (data ?? []) as unknown as MemberRow[];
-    },
-  });
+  // Shared with Reactions (same ["members", teamId] cache key) — one source of
+  // truth for names, roles, and the profile shown on an @mention hover.
+  const { data: members } = useMembers(teamId);
 
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -236,7 +296,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
   }
 
   /** Replace the typed `@query` with the picked teammate's full name. */
-  function pickMention(m: MemberRow) {
+  function pickMention(m: Member) {
     const el = inputRef.current;
     if (!el || !mention) return;
     const name = m.profiles?.display_name ?? "member";
@@ -376,7 +436,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
               </div>
             ) : (
               <>
-                <div className="mt-0.5 whitespace-pre-wrap text-sm">{c.body}</div>
+                <CommentBody text={c.body} members={members ?? []} />
                 {c.author_id === userId && (
                   <button
                     type="button"
