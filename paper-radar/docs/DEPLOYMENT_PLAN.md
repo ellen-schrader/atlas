@@ -90,16 +90,23 @@ wire the three tiers together with env vars. No data migration is needed.
     member — retest when one joins, or sign up a second account into the
     same lab).
 
-### Phase 4 — CI/CD (after the manual deploy works)
+### Phase 4 — CI/CD
 
-11. GitHub Actions on merge to `main`:
-    - `supabase db push` (official setup-cli action, `SUPABASE_ACCESS_TOKEN`
-      + `SUPABASE_DB_PASSWORD` as repo secrets) — migrations run in CI on
-      deploy, per MIGRATION_PLAN §12.
-    - `fly deploy` for the API (`FLY_API_TOKEN` secret).
-    - Web: Vercel's git integration handles this automatically (preview
-      deploys per PR for free).
-12. Order matters: migrations → API → web, so code never runs ahead of schema.
+11. ✓ `.github/workflows/deploy.yml`: on push to `main` (paths-filtered to
+    `paper-radar/**`), `supabase link` + `db push`, then `fly deploy
+    --remote-only` — migrations land before the API, per MIGRATION_PLAN §12.
+    If `db push` needs the database password in headless CI, add a
+    `SUPABASE_DB_PASSWORD` repo secret and pass it to the link step.
+12. **Repo secrets — manual step**: `FLY_API_TOKEN`
+    (`fly tokens create deploy -a paper-radar-api`) and
+    `SUPABASE_ACCESS_TOKEN` must be set via `gh secret set`.
+13. **Web via Vercel git integration — manual step**: install the Vercel
+    GitHub App on the `ellen-schrader` account and connect the repo (project
+    Settings → Git). Project `rootDirectory` is already `paper-radar/web` and
+    preview+production env vars are set, so PR previews and production
+    deploys work as soon as it's connected. (Manual CLI deploys still work:
+    `vercel deploy --prod` from `paper-radar/web`; note the CLI ignores
+    `rootDirectory` for uploads from that directory.)
 
 ### Phase 5 — later / as needed
 
