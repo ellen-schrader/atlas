@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "atlas": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "paper-radar", "--extra", "mcp", "python", "-m", "atlas_mcp"],
+      "env": {
+        "ATLAS_EMAIL": "${ATLAS_EMAIL}",
+        "ATLAS_PASSWORD": "${ATLAS_PASSWORD}",
+        "ATLAS_WEB_URL": "${ATLAS_WEB_URL:-http://localhost:5173}"
+      }
+    }
+  }
+}

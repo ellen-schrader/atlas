@@ -13,7 +13,7 @@ integrations.
 
 | Phase | What | Needs hosting? | Hackathon-critical |
 |-------|------|----------------|--------------------|
-| **P1** | Local **stdio** MCP server, read-only tools, in Claude Code | No | ✅ yes |
+| **P1** | Local **stdio** MCP server, read-only tools, in Claude Code — **done** | No | ✅ yes |
 | **P2** | Lab-scoped auth (token via env) | No | ✅ yes |
 | **P3** | Write tool (`post_paper`) + citation formatting | No | ➖ nice-to-have |
 | **P4** | Remote MCP (HTTP + OAuth) for claude.ai custom connectors | Yes | ➖ fast-follow |
@@ -89,32 +89,35 @@ for free — the same model the web app and API already use.
 Project-scoped, committed to git so the team shares it:
 
 ```jsonc
-// .mcp.json (repo root)
+// .mcp.json (repo root) — committed; this is what ships.
 {
   "mcpServers": {
     "atlas": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "atlas-mcp"],
+      "args": ["run", "--directory", "paper-radar", "--extra", "mcp", "python", "-m", "atlas_mcp"],
       "env": {
-        "ATLAS_TOKEN": "${ATLAS_TOKEN}"   // expanded from the shell, never committed
+        "ATLAS_EMAIL": "${ATLAS_EMAIL}",
+        "ATLAS_PASSWORD": "${ATLAS_PASSWORD}",
+        "ATLAS_WEB_URL": "${ATLAS_WEB_URL:-http://localhost:5173}"
       }
     }
   }
 }
 ```
 
-Equivalent one-liner:
+- `--directory paper-radar` runs uv in the Python project (the repo root is one level up),
+  so the server picks up `api/.env` for the Supabase connection — the same config the
+  FastAPI uses. Point `api/.env` at your Supabase (local or Cloud). To target a *local*
+  Supabase when `api/.env` points elsewhere, add `SUPABASE_URL` / `SUPABASE_ANON_KEY` to
+  the `env` block (real env vars win over `.env`).
+- Auth: each teammate `export ATLAS_EMAIL=… ATLAS_PASSWORD=…` (or `export ATLAS_TOKEN=…`)
+  before launching Claude Code — the secret is expanded from the shell, never committed.
+- The package is named **`atlas_mcp`**, not `mcp`, so it never shadows the `mcp` SDK.
 
-```bash
-claude mcp add --scope project --transport stdio \
-  --env ATLAS_TOKEN="${ATLAS_TOKEN}" atlas -- uv run atlas-mcp
-```
-
-Each teammate runs `export ATLAS_TOKEN=…` before launching Claude Code. For Claude for
-Life Sciences at the hackathon: the same stdio server works wherever MCP stdio is
-supported; if that environment can only reach a **remote** connector, pull P4 forward
-(Claude Code can also consume it via `claude mcp add --transport http … --header
+For Claude for Life Sciences at the hackathon: the same stdio server works wherever MCP
+stdio is supported; if that environment can only reach a **remote** connector, pull P4
+forward (Claude Code can also consume it via `claude mcp add --transport http … --header
 "Authorization: Bearer …"`).
 
 ## Implementation gotchas (Python stdio)
@@ -122,7 +125,7 @@ supported; if that environment can only reach a **remote** connector, pull P4 fo
 - **stdout is JSON-RPC only.** All logging goes to **stderr** (`logging` configured to
   stderr); no stray `print()`. A dirty stdout breaks the protocol silently.
 - Sanity-check by running the launch command directly — it should print nothing to
-  stdout: `uv run atlas-mcp 2>&1 | head`.
+  stdout: `uv run --extra mcp python -m atlas_mcp 2>&1 | head` (logs land on stderr).
 - First-run startup (uv resolve / imports like umap) can be slow; the client's default
   startup timeout is 30 s (`MCP_TIMEOUT` overrides). Keep heavy imports lazy.
 - Tools that can return large results may set `_meta["anthropic/maxResultSizeChars"]`.
@@ -134,12 +137,23 @@ supported; if that environment can only reach a **remote** connector, pull P4 fo
    spike, PAT before sharing with the team.
 2. **Supabase Cloud now or stay local for the spike?** Lean: spike locally; migrate to
    Cloud before P4 (and before anyone remote needs the data).
-3. **Package layout** — `paper-radar/mcp/` as its own module vs. folding into `api/`.
-   Lean: separate `mcp/` module that imports from `api/` so the two entry points stay
-   distinct.
+3. **Package layout** — resolved: a separate **`paper-radar/atlas_mcp/`** module that
+   imports from `api/`, so the two entry points stay distinct. (Not `mcp/` — that would
+   shadow the `mcp` SDK.)
 
-## Next step
+## Status
 
-Build **P1**: the local read-only stdio server (`search_lab_papers`, `get_paper`,
-`list_recent_papers`), reusing `api/supa.py` and `api/embeddings.py`, registered in
-Claude Code via `.mcp.json`, validated by asking Claude to search the seeded lab.
+- **P1 — done.** `atlas_mcp/` ships four read-only tools — `list_labs`,
+  `search_lab_papers` (keyword + semantic), `list_recent_papers`, `get_paper` — over
+  stdio, reusing `api/embeddings.py` + the search RPCs, RLS-scoped per user. Validated
+  end-to-end over a real MCP stdio handshake against the seeded lab (keyword search,
+  recent, and per-paper detail all return citation blocks with `?paper=` deep links;
+  semantic degrades gracefully without a Voyage key). Registered via the committed
+  `.mcp.json` above.
+- **P2 — partly done.** Auth via `ATLAS_TOKEN` or `ATLAS_EMAIL`/`ATLAS_PASSWORD`; a
+  longer-lived lab-scoped PAT is still open.
+
+## Next steps
+
+- **P3:** the `post_paper` write tool (reuse the `/posts` path) + richer citations.
+- Harden P2 (PAT), then P4 (remote HTTP + OAuth) when a non-local Claude surface needs it.
