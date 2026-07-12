@@ -131,12 +131,22 @@ export default function MapView() {
               value={sizeBy}
               onChange={(v) => setSizeBy(v as SizeMode)}
               options={[
-                { value: "uniform", label: "Uniform" },
+                {
+                  value: "uniform",
+                  label: "Uniform",
+                  disabled: colorBy === "relevance",
+                  title: colorBy === "relevance" ? "Size follows relevance in this mode" : undefined,
+                },
                 {
                   value: "engagement",
                   label: "Engagement",
-                  disabled: !hasEngagement,
-                  title: hasEngagement ? undefined : "No reactions or comments yet",
+                  disabled: !hasEngagement || colorBy === "relevance",
+                  title:
+                    colorBy === "relevance"
+                      ? "Size follows relevance in this mode"
+                      : hasEngagement
+                        ? undefined
+                        : "No reactions or comments yet",
                 },
               ]}
             />

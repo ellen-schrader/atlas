@@ -144,7 +144,9 @@ def _store_names(
     """Persist theme names for this signature (replaces the team's trends rows)."""
     try:
         svc = service_client()
-        svc.table("trends").delete().eq("team_id", team_id).execute()
+        # Only clear prior *naming* rows (those carry a signature), so any other
+        # future use of the trends table for this team is left intact.
+        svc.table("trends").delete().eq("team_id", team_id).not_.is_("signature", "null").execute()
         svc.table("trends").insert(
             [
                 {

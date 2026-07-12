@@ -48,11 +48,13 @@ class _FakeTrends:
         self.rows: list[dict] = []
         self._op = None
         self._filters: dict = {}
+        self._not_null: str | None = None
         self._pending: list[dict] = []
 
     def table(self, _name):
         self._op = None
         self._filters = {}
+        self._not_null = None
         self._pending = []
         return self
 
@@ -73,6 +75,14 @@ class _FakeTrends:
         self._filters[k] = v
         return self
 
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, col, _val):  # only used as .not_.is_(col, "null") → col is not null
+        self._not_null = col
+        return self
+
     def execute(self):
         if self._op == "insert":
             self.rows.extend(self._pending)
@@ -83,7 +93,9 @@ class _FakeTrends:
         return type("R", (), {"data": [r for r in self.rows if self._match(r)]})
 
     def _match(self, row):
-        return all(row.get(k) == v for k, v in self._filters.items())
+        if not all(row.get(k) == v for k, v in self._filters.items()):
+            return False
+        return self._not_null is None or row.get(self._not_null) is not None
 
 
 def test_names_persist_and_reload(monkeypatch):

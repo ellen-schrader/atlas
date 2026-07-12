@@ -425,11 +425,21 @@ def _last_author_lab(authors: list) -> str | None:
 
 def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
     """(reactions, comments) per paper for the team, RLS-scoped. {} if no ids."""
-    counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
     if not paper_ids:
         return {}
-    rx = uc.table("reactions").select("paper_id").eq("team_id", team_id).execute().data or []
-    cm = uc.table("comments").select("paper_id").eq("team_id", team_id).execute().data or []
+    counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
+    # Filter to the loaded papers (not the whole team) — fewer rows, and avoids
+    # a truncated count if a busy lab hits PostgREST's max-rows.
+    rx = (
+        uc.table("reactions").select("paper_id").eq("team_id", team_id)
+        .in_("paper_id", paper_ids).execute().data
+        or []
+    )
+    cm = (
+        uc.table("comments").select("paper_id").eq("team_id", team_id)
+        .in_("paper_id", paper_ids).execute().data
+        or []
+    )
     for r in rx:
         if r["paper_id"] in counts:
             counts[r["paper_id"]][0] += 1
