@@ -33,6 +33,10 @@ export function FigureUploadDialog({
   const [caption, setCaption] = useState("");
   const [category, setCategory] = useState<string>("");
   const [paper, setPaper] = useState<PickedPaper | null>(null);
+  const [origin, setOrigin] = useState<"own" | "third_party">("own");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [license, setLicense] = useState("");
+  const [attribution, setAttribution] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +57,10 @@ export function FigureUploadDialog({
     setCaption("");
     setCategory("");
     setPaper(null);
+    setOrigin("own");
+    setSourceUrl("");
+    setLicense("");
+    setAttribution("");
     setError(null);
     setBusy(false);
   }
@@ -94,6 +102,10 @@ export function FigureUploadDialog({
         caption,
         category,
         paperId: paper?.id ?? null,
+        origin,
+        sourceUrl,
+        license,
+        attribution,
       });
       await qc.invalidateQueries({ queryKey: ["figures", teamId] });
       await qc.invalidateQueries({ queryKey: ["figure-categories", teamId] });
@@ -168,6 +180,14 @@ export function FigureUploadDialog({
             onCategory={setCategory}
             paper={paper}
             onPaper={setPaper}
+            origin={origin}
+            onOrigin={setOrigin}
+            sourceUrl={sourceUrl}
+            onSourceUrl={setSourceUrl}
+            license={license}
+            onLicense={setLicense}
+            attribution={attribution}
+            onAttribution={setAttribution}
           />
         </div>
 

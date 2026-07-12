@@ -157,6 +157,31 @@ export function FigureDetail({
               </button>
             )}
 
+            {figure.origin === "third_party" && (
+              <div className="mt-4 rounded-control border border-border bg-surface-2 p-3">
+                <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+                  Third-party · style reference
+                </span>
+                <div className="mt-1.5 flex flex-col gap-0.5 text-xs text-fg/90">
+                  {figure.attribution && <span>{figure.attribution}</span>}
+                  {figure.source_url && (
+                    <a
+                      href={figure.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="truncate text-accent hover:underline"
+                    >
+                      {figure.source_url}
+                    </a>
+                  )}
+                  {figure.license && <span className="text-muted">Licence: {figure.license}</span>}
+                  {!figure.attribution && !figure.source_url && !figure.license && (
+                    <span className="italic text-muted">No source recorded.</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <hr className="my-6 border-border" />
             <MetaLabel>Discussion</MetaLabel>
             <FigureEngagement figureId={figure.id} teamId={teamId} userId={userId} />
@@ -227,6 +252,10 @@ function FigureEditForm({
   const [paper, setPaper] = useState<PickedPaper | null>(
     figure.papers ? { id: figure.papers.id, title: figure.papers.title ?? "Linked paper" } : null,
   );
+  const [origin, setOrigin] = useState<"own" | "third_party">(figure.origin);
+  const [sourceUrl, setSourceUrl] = useState(figure.source_url ?? "");
+  const [license, setLicense] = useState(figure.license ?? "");
+  const [attribution, setAttribution] = useState(figure.attribution ?? "");
   const [newFile, setNewFile] = useState<File | null>(null);
   const [newPreview, setNewPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -268,6 +297,10 @@ function FigureEditForm({
         category,
         paperId: paper?.id ?? null,
         newFile,
+        origin,
+        sourceUrl,
+        license,
+        attribution,
       });
       await onSaved();
     } catch (err) {
@@ -330,6 +363,14 @@ function FigureEditForm({
         onCategory={setCategory}
         paper={paper}
         onPaper={setPaper}
+        origin={origin}
+        onOrigin={setOrigin}
+        sourceUrl={sourceUrl}
+        onSourceUrl={setSourceUrl}
+        license={license}
+        onLicense={setLicense}
+        attribution={attribution}
+        onAttribution={setAttribution}
       />
 
       {error && <p className="text-sm text-danger">{error}</p>}

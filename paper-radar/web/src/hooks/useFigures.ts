@@ -142,7 +142,25 @@ export function useFigureEngagementCounts(teamId: string, figureIds: string[]) {
   });
 }
 
-export interface UploadFigureInput {
+export interface Provenance {
+  origin: "own" | "third_party";
+  sourceUrl: string | null;
+  license: string | null;
+  attribution: string | null;
+}
+
+/** Third-party provenance is only stored for third-party figures; 'own' clears it. */
+function provenanceColumns(p: Provenance) {
+  const third = p.origin === "third_party";
+  return {
+    origin: p.origin,
+    source_url: third ? p.sourceUrl?.trim() || null : null,
+    license: third ? p.license?.trim() || null : null,
+    attribution: third ? p.attribution?.trim() || null : null,
+  };
+}
+
+export interface UploadFigureInput extends Provenance {
   file: File;
   teamId: string;
   userId: string;
@@ -189,6 +207,7 @@ export async function uploadFigure(input: UploadFigureInput): Promise<string> {
     height,
     mime_type: file.type,
     file_size: file.size,
+    ...provenanceColumns(input),
   });
   if (insErr) {
     // Roll back the orphaned object (delete policy allows the owner).
@@ -199,7 +218,7 @@ export async function uploadFigure(input: UploadFigureInput): Promise<string> {
   return figureId;
 }
 
-export interface UpdateFigureInput {
+export interface UpdateFigureInput extends Provenance {
   figure: Pick<Figure, "id" | "team_id" | "storage_path">;
   title: string;
   caption: string;
@@ -221,6 +240,7 @@ export async function updateFigure(input: UpdateFigureInput): Promise<void> {
     caption: caption.trim(),
     category,
     paper_id: paperId,
+    ...provenanceColumns(input),
   };
 
   // A newly-uploaded object at a *different* path than the current one — tracked
