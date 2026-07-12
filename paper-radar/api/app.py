@@ -558,21 +558,11 @@ def _l2norm(v: np.ndarray) -> np.ndarray:
 def _seen_paper_ids(uc, user_id: str, team_id: str) -> set[str]:
     """Papers this user has already engaged with in the lab — reacted to,
     commented on, or has any read/reading/saved status. The set the discover feed
-    excludes (the SQL RPC does this server-side; we need it for cold-start too)."""
-    seen: set[str] = set()
-    for row in (
-        uc.table("reactions").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    for row in (
-        uc.table("comments").select("paper_id").eq("team_id", team_id).eq("author_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    for row in (
-        uc.table("paper_status").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    return seen
+    excludes (the SQL RPC does this server-side; we need it for cold-start too).
+
+    Every engagement row gets a nonzero weight, so the weight keys are exactly
+    the seen set — reuse them rather than re-issuing the same three queries."""
+    return set(_engagement_weights(uc, user_id, team_id))
 
 
 # Engagement weights for the taste centroid. Not all engagement is endorsement:
@@ -734,7 +724,9 @@ class RecommendationsResponse(BaseModel):
     cold_start: bool  # true when there was no taste signal (recency fallback used)
 
 
-def _hydrate(uc, order_ids: list[str], sims: dict[str, float], cold: bool) -> RecommendationsResponse:
+def _hydrate(
+    uc, order_ids: list[str], sims: dict[str, float], cold: bool
+) -> RecommendationsResponse:
     """Fetch POST_COLUMNS for the given post ids and return them in order."""
     if not order_ids:
         return RecommendationsResponse(results=[], cold_start=cold)
@@ -750,7 +742,9 @@ def _hydrate(uc, order_ids: list[str], sims: dict[str, float], cold: bool) -> Re
     )
 
 
-def _reading_list_ranked(uc, user_id: str, team_id: str, taste, limit: int) -> RecommendationsResponse:
+def _reading_list_ranked(
+    uc, user_id: str, team_id: str, taste, limit: int
+) -> RecommendationsResponse:
     """The user's saved (to_read) papers, ranked by taste similarity."""
     saved = (
         uc.table("paper_status")

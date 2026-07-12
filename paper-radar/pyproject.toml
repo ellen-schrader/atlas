@@ -11,10 +11,11 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
     "pymupdf>=1.24",
-    "sentence-transformers>=3.0",
-    "faiss-cpu>=1.8",
+    # umap/sklearn back the API's /map endpoint (embed/index.py); the deps only
+    # the local pipeline needs (sentence-transformers/torch, faiss, streamlit)
+    # live in `legacy`.
     "umap-learn>=0.5.6",
-    "streamlit>=1.38",
+    "scikit-learn>=1.4",
     "typer>=0.12",
     "numpy>=1.26,<3",
     # Pin modern numba/llvmlite so the resolver doesn't backtrack to versions
@@ -31,6 +32,13 @@ dev = [
     "httpx>=0.27",
     "supabase>=2.9",
 ]
+# The Streamlit-era prototype (app/, embed/embed.py, `paper-radar serve`).
+# Not installed in the API container image.
+legacy = [
+    "sentence-transformers>=3.0",
+    "streamlit>=1.38",
+    "faiss-cpu>=1.8",
+]
 api = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -42,6 +50,17 @@ mcp = [
     "mcp>=1.2",
     "supabase>=2.9",
     "pillow>=10.0",
+]
+
+[tool.uv]
+# cryptography>=47 linux/aarch64 wheels SIGILL in the Docker Desktop VM (via
+# supabase -> pyjwt[crypto]); 46.x imports fine. Scoped to that platform so
+# amd64 prod builds and mac/dev stay current. Retest on a cryptography bump.
+constraint-dependencies = [
+    "cryptography<47 ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    # Complementary bound: forces uv to fork the resolution so every other
+    # platform stays on current cryptography instead of inheriting the pin.
+    "cryptography>=47 ; sys_platform != 'linux' or platform_machine != 'aarch64'",
 ]
 
 [project.scripts]

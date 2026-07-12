@@ -22,7 +22,13 @@ def get_model(model_name: str | None = None):
     Imported lazily so that merely importing this module -- or running the
     Streamlit shell -- does not pull in torch.
     """
-    from sentence_transformers import SentenceTransformer
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise ImportError(
+            "sentence-transformers is not installed; the local embedding "
+            "pipeline needs the legacy extra: uv sync --extra dev --extra legacy"
+        ) from exc
 
     name = model_name or get_settings().embedding_model
     return SentenceTransformer(name)

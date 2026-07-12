@@ -1,0 +1,28 @@
+# Fly.io config for the Atlas API (docs/DEPLOYMENT_PLAN.md, phase 3).
+# Deploy from this directory: fly deploy --remote-only
+app = "paper-radar-api"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "api/Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Machines stop after a few idle minutes (cold start on next request);
+  # post-response embedding finishes well within the idle window.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
