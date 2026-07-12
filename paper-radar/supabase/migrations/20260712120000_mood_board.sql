@@ -16,6 +16,9 @@
 --   * Images live in a PRIVATE Storage bucket `figures`, laid out as
 --     `{team_id}/{figure_id}.{ext}`; the app serves them via short-lived signed
 --     URLs so lab isolation stays enforced in the database, not by URL secrecy.
+--     The bucket + storage.objects policies are a SEPARATE migration
+--     (20260712121000_mood_board_storage.sql) so a hosted-permission hiccup on
+--     storage.objects can't roll back these tables.
 --   * Future: a `figures.embedding extensions.vector(N)` column + similarity RPCs
 --     will power semantic / multi-modal search (describe-a-figure, more-like-this).
 --     Deliberately NOT added now — the dimension depends on the chosen model, and
@@ -114,29 +117,12 @@ create policy figure_reactions_insert on public.figure_reactions for insert
 create policy figure_reactions_delete on public.figure_reactions for delete
     using (public.is_team_member(team_id) and user_id = auth.uid());
 
--- === storage: private bucket + team-folder policies ========================
--- The first path segment is the team_id; membership in that team gates read and
--- write. `owner` (the uploading user) gates delete. If a hosted project blocks
--- `create policy on storage.objects` from a migration (storage-admin ownership),
--- create these three policies via the dashboard — the bucket insert is safe.
-
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('figures', 'figures', false, 10485760,
-        array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-on conflict (id) do nothing;
-
-create policy figures_objects_select on storage.objects for select to authenticated
-    using (
-        bucket_id = 'figures'
-        and public.is_team_member(((storage.foldername(name))[1])::uuid)
-    );
-create policy figures_objects_insert on storage.objects for insert to authenticated
-    with check (
-        bucket_id = 'figures'
-        and public.is_team_member(((storage.foldername(name))[1])::uuid)
-    );
-create policy figures_objects_delete on storage.objects for delete to authenticated
-    using (bucket_id = 'figures' and owner = auth.uid());
+-- NOTE: the private `figures` Storage bucket and its storage.objects policies
+-- live in the SEPARATE migration 20260712121000_mood_board_storage.sql. They are
+-- split out on purpose: creating policies on storage.objects can require the
+-- storage-admin role on hosted Supabase, and each migration file runs in one
+-- transaction — so isolating storage means a permission hiccup there can't roll
+-- back these tables. See that file's header for the fallback.
 
 -- === category facets =======================================================
 -- Distinct non-empty categories a lab has actually used, with counts — for the
