@@ -63,6 +63,12 @@ export interface Figure {
   height: number;
   mime_type: string;
   file_size: number | null;
+  // Provenance: 'own' is the lab's (unpublished) work; 'third_party' is an external
+  // image kept as inspiration, in which case source/license/attribution are recorded.
+  origin: "own" | "third_party";
+  source_url: string | null;
+  license: string | null;
+  attribution: string | null;
   created_at: string;
   uploader?: { display_name: string } | null; // joined profile of the uploader
   papers?: { id: string; title: string | null } | null; // joined linked paper (if any)
