@@ -213,7 +213,7 @@ export default function Papers() {
           <EmptyState filtered={Boolean(query || tag)} onClear={clearFilters} />
         )
       ) : view === "cards" ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {posts.map((post) => (
             <PaperCard
               key={post.id}
@@ -430,7 +430,7 @@ function PostPaperBar({ teamId }: { teamId: string }) {
 
 function CardSkeletons() {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="overflow-hidden rounded-card border border-border bg-surface">
           <div className="h-[132px] w-full animate-pulse bg-surface-2" />
