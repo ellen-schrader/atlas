@@ -73,10 +73,12 @@ P3 adds one **write** tool:
 The server acts **as a specific user in a specific lab**, so RLS does the access control
 for free — the same model the web app and API already use.
 
-- **Local / Claude Code (P1–P3):** pass a **Supabase access token** (or a lab-scoped
-  personal access token we mint) via an environment variable. Claude Code expands
-  `${ATLAS_TOKEN}` from the shell into the server's env — the secret never lands in
-  `.mcp.json` or git. The server attaches it exactly like `user_client(token)` does today.
+- **Local / Claude Code (P1–P3):** the server reads credentials from `api/.env` (gitignored)
+  or real environment variables via pydantic-settings — `ATLAS_EMAIL` + `ATLAS_PASSWORD`
+  (signed in) or `ATLAS_TOKEN`. It attaches the resulting token exactly like
+  `user_client(token)` does today. We deliberately do **not** rely on `${VAR}` interpolation
+  inside `.mcp.json`: not every MCP client expands it (Claude Code passed the literal
+  `${ATLAS_EMAIL}` through), so file-based config is the portable choice.
 - **Remote / claude.ai connectors (P4):** full **OAuth 2.1** — the MCP server becomes an
   OAuth *Resource Server* (RFC 9728 protected-resource metadata) that validates Supabase
   JWTs via introspection (`auth.get_user`). ⚠️ This is the one genuinely hard part:
@@ -88,31 +90,37 @@ for free — the same model the web app and API already use.
 
 Project-scoped, committed to git so the team shares it:
 
-```jsonc
-// .mcp.json (repo root) — committed; this is what ships.
+Project-scoped `.mcp.json`, committed so the team shares it — no secrets in it:
+
+```json
 {
   "mcpServers": {
     "atlas": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "paper-radar", "--extra", "mcp", "python", "-m", "atlas_mcp"],
-      "env": {
-        "ATLAS_EMAIL": "${ATLAS_EMAIL}",
-        "ATLAS_PASSWORD": "${ATLAS_PASSWORD}",
-        "ATLAS_WEB_URL": "${ATLAS_WEB_URL:-http://localhost:5173}"
-      }
+      "args": ["run", "--directory", "paper-radar", "--extra", "mcp", "python", "-m", "atlas_mcp"]
     }
   }
 }
 ```
 
-- `--directory paper-radar` runs uv in the Python project (the repo root is one level up),
-  so the server picks up `api/.env` for the Supabase connection — the same config the
-  FastAPI uses. Point `api/.env` at your Supabase (local or Cloud). To target a *local*
-  Supabase when `api/.env` points elsewhere, add `SUPABASE_URL` / `SUPABASE_ANON_KEY` to
-  the `env` block (real env vars win over `.env`).
-- Auth: each teammate `export ATLAS_EMAIL=… ATLAS_PASSWORD=…` (or `export ATLAS_TOKEN=…`)
-  before launching Claude Code — the secret is expanded from the shell, never committed.
+Then put your config in **`paper-radar/api/.env`** (gitignored), which the server reads
+alongside the Supabase settings:
+
+```
+# Supabase target (already set for the API — cloud by default)
+SUPABASE_URL=…
+SUPABASE_ANON_KEY=…
+# Atlas login for the MCP server to act as you
+ATLAS_EMAIL=you@lab.org
+ATLAS_PASSWORD=…
+# optional: ATLAS_TOKEN=… (instead of email/password), ATLAS_TEAM_ID=…, ATLAS_WEB_URL=…
+```
+
+- `--directory paper-radar` runs uv in the Python project (the repo root is one level up)
+  so `api/.env` resolves — the same config the FastAPI uses.
+- Real environment variables override `api/.env`, so CI or a teammate can set
+  `ATLAS_EMAIL`/`ATLAS_PASSWORD` in the shell instead.
 - The package is named **`atlas_mcp`**, not `mcp`, so it never shadows the `mcp` SDK.
 
 For Claude for Life Sciences at the hackathon: the same stdio server works wherever MCP

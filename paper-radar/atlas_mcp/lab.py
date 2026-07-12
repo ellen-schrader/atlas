@@ -14,12 +14,13 @@ server).
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from api import embeddings
 from api.config import get_api_settings
 from supabase import Client, create_client
+
+from .config import get_atlas_settings
 
 # Explicit columns — never `papers(*)`, which would drag the 1024-dim embedding
 # into every response.
@@ -41,20 +42,20 @@ def _session() -> tuple[Client, str | None]:
         raise LabError("Supabase is not configured — check api/.env.")
     client = create_client(s.supabase_url, s.supabase_anon_key)
 
-    token = os.environ.get("ATLAS_TOKEN")
-    if token:
-        client.postgrest.auth(token)
+    cfg = get_atlas_settings()
+    if cfg.atlas_token:
+        client.postgrest.auth(cfg.atlas_token)
         try:
-            resp = client.auth.get_user(token)
+            resp = client.auth.get_user(cfg.atlas_token)
         except Exception as exc:  # noqa: BLE001 — surface as a clean auth error
             raise LabError(f"ATLAS_TOKEN was rejected: {exc}") from exc
         return client, (resp.user.id if resp and resp.user else None)
 
-    email, password = os.environ.get("ATLAS_EMAIL"), os.environ.get("ATLAS_PASSWORD")
+    email, password = cfg.atlas_email, cfg.atlas_password
     if not (email and password):
         raise LabError(
-            "No credentials: set ATLAS_TOKEN, or ATLAS_EMAIL and ATLAS_PASSWORD, "
-            "so the MCP server can act as a lab member."
+            "No credentials: set ATLAS_TOKEN, or ATLAS_EMAIL and ATLAS_PASSWORD "
+            "(in api/.env or the environment), so the MCP server can act as a lab member."
         )
     try:
         res = client.auth.sign_in_with_password({"email": email, "password": password})
@@ -69,7 +70,7 @@ def get_client() -> Client:
 
 
 def web_url() -> str:
-    return os.environ.get("ATLAS_WEB_URL", "http://localhost:5173").rstrip("/")
+    return get_atlas_settings().atlas_web_url.rstrip("/")
 
 
 def paper_link(paper_id: str) -> str:
@@ -103,7 +104,7 @@ def resolve_team(team_id: str | None) -> dict:
             if t["id"] == team_id:
                 return t
         raise LabError(f"You are not a member of lab {team_id}.")
-    env_team = os.environ.get("ATLAS_TEAM_ID")
+    env_team = get_atlas_settings().atlas_team_id
     if env_team:
         for t in teams:
             if t["id"] == env_team:
