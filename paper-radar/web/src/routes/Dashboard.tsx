@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { AtSign, Bookmark } from "lucide-react";
 
+import { InviteCode } from "@/components/InviteCode";
 import { PaperCard } from "@/components/PaperCard";
 import { PaperListRow } from "@/components/PaperListRow";
 import { usePaperModal } from "@/components/PaperModal";
@@ -91,6 +92,10 @@ export default function Dashboard() {
           >
             Go to Papers
           </button>
+          <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
+            <span className="text-xs text-muted">Or invite your lab with this join code</span>
+            <InviteCode code={team.slug} />
+          </div>
         </div>
       )}
 
