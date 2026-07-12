@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { InviteCode } from "@/components/InviteCode";
+import { LabManagement } from "@/components/LabManagement";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,12 +32,7 @@ export default function Settings() {
 
       <ProfilePanel userId={userId} initial={profile?.profile_md ?? ""} />
 
-      <Panel
-        title="Invite your lab"
-        desc={`Share this join code — anyone who enters it joins ${team.name}.`}
-      >
-        <InviteCode code={team.slug} />
-      </Panel>
+      <LabManagement teamId={team.id} teamName={team.name} teamSlug={team.slug} userId={userId} />
     </div>
   );
 }
