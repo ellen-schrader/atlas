@@ -1,10 +1,10 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useMembers } from "@/hooks/useMembers";
+import { type Member, useMembers } from "@/hooks/useMembers";
 import { supabase } from "@/lib/supabase";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
@@ -19,10 +19,6 @@ interface CommentRow {
   body: string;
   created_at: string;
   author_id: string;
-  profiles: { display_name: string } | null;
-}
-interface MemberRow {
-  user_id: string;
   profiles: { display_name: string } | null;
 }
 
@@ -60,6 +56,89 @@ interface Ctx {
   subjectId: string;
   teamId: string;
   userId: string;
+}
+
+/** The `@…` token being typed immediately before the caret, if any. Requires the
+ *  `@` to start a word, and no whitespace between it and the caret — so a name
+ *  that's already been completed ("@Maya Chen ") stops matching. */
+function activeMention(text: string, caret: number): { query: string; start: number } | null {
+  const m = /(?:^|\s)@([^\s@]*)$/.exec(text.slice(0, caret));
+  if (!m) return null;
+  const query = m[1];
+  return { query, start: caret - query.length - 1 };
+}
+
+/** Split a posted comment into plain runs and `@Name` runs that resolve to a
+ *  teammate. Longest names first so "@Ada Lovelace" wins over "@Ada". */
+function splitMentions(text: string, members: Member[]): { text: string; member?: Member }[] {
+  const named = members.filter((m) => m.profiles?.display_name);
+  if (named.length === 0) return [{ text }];
+
+  const byName = new Map(named.map((m) => [m.profiles!.display_name.toLowerCase(), m]));
+  const pattern = named
+    .map((m) => m.profiles!.display_name)
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(`@(${pattern})`, "gi");
+
+  const out: { text: string; member?: Member }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at) });
+    out.push({ text: m[0], member: byName.get(m[1].toLowerCase()) });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
+}
+
+/** A posted comment, with @mentions highlighted and hoverable. */
+function CommentBody({ text, members }: { text: string; members: Member[] }) {
+  return (
+    <div className="mt-0.5 whitespace-pre-wrap text-sm">
+      {splitMentions(text, members).map((part, i) =>
+        part.member ? (
+          <MentionTag key={i} member={part.member} label={part.text} />
+        ) : (
+          <span key={i}>{part.text}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** A highlighted @mention that reveals a quick profile summary on hover. */
+function MentionTag({ member, label }: { member: Member; label: string }) {
+  const name = member.profiles?.display_name ?? "member";
+  const bio = member.profiles?.profile_md?.trim();
+  return (
+    <span className="group/mention relative inline-block">
+      <span className="cursor-default rounded-chip bg-accent-weak px-1 font-medium text-accent">
+        {label}
+      </span>
+      <span
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute bottom-full left-0 z-30 mb-1.5 hidden w-64",
+          "rounded-card border border-border bg-surface p-3 text-left shadow-lg",
+          "group-hover/mention:block",
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <Avatar name={name} size={28} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-fg">{name}</span>
+            <span className="block text-xs capitalize text-muted">{member.role}</span>
+          </span>
+        </span>
+        <span className="mt-2 block whitespace-normal text-xs leading-relaxed text-muted">
+          {bio ? (bio.length > 160 ? `${bio.slice(0, 160)}…` : bio) : "No research profile yet."}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 /** Reactions + comments on a paper. Public API unchanged. */
@@ -182,27 +261,84 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
     },
   });
 
-  const { data: members } = useQuery({
-    queryKey: ["members", teamId],
-    enabled: cfg.supportsMentions,
-    queryFn: async (): Promise<MemberRow[]> => {
-      const { data, error } = await supabase
-        .from("team_members")
-        .select("user_id, profiles(display_name)")
-        .eq("team_id", teamId);
-      if (error) throw error;
-      return (data ?? []) as unknown as MemberRow[];
-    },
-  });
+  // Shared with Reactions (same ["members", teamId] cache key) — one source of
+  // truth for names, roles, and the profile shown on an @mention hover.
+  const { data: members } = useMembers(teamId);
 
   const [body, setBody] = useState("");
-  const [mentionIds, setMentionIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
 
+  // @-mention autocomplete
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
+
   const teammates = cfg.supportsMentions ? (members ?? []).filter((m) => m.user_id !== userId) : [];
+
+  const matches = mention
+    ? teammates
+        .filter((m) =>
+          (m.profiles?.display_name ?? "").toLowerCase().includes(mention.query.toLowerCase()),
+        )
+        .slice(0, 5)
+    : [];
+  const showMenu = matches.length > 0;
+
+  /** Recompute the active @-token from the textarea's live value + caret. */
+  function syncMention() {
+    const el = inputRef.current;
+    if (!el || !cfg.supportsMentions) return;
+    setMention(activeMention(el.value, el.selectionStart ?? 0));
+    setActiveIdx(0);
+  }
+
+  /** Replace the typed `@query` with the picked teammate's full name. */
+  function pickMention(m: Member) {
+    const el = inputRef.current;
+    if (!el || !mention) return;
+    const name = m.profiles?.display_name ?? "member";
+    const caret = el.selectionStart ?? body.length;
+    const next = `${body.slice(0, mention.start)}@${name} ${body.slice(caret)}`;
+    const pos = mention.start + name.length + 2; // past "@name "
+    setBody(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (!showMenu) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => (i + 1) % matches.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => (i - 1 + matches.length) % matches.length);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault(); // pick instead of newline
+      pickMention(matches[activeIdx]);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setMention(null);
+    }
+  }
+
+  /** Who the comment tags: any teammate whose name appears as "@Name" in the body.
+   *  Derived from the text (not click state), so hand-typed mentions notify too. */
+  function mentionedIds(text: string): string[] {
+    const lower = text.toLowerCase();
+    return teammates
+      .filter((m) => {
+        const name = m.profiles?.display_name;
+        return name && lower.includes(`@${name.toLowerCase()}`);
+      })
+      .map((m) => m.user_id);
+  }
 
   async function saveEdit(id: string) {
     setError(null);
@@ -239,9 +375,12 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
         .single();
       if (insErr) throw insErr;
 
-      if (cfg.supportsMentions && mentionIds.length > 0) {
+      const tagged = cfg.supportsMentions ? mentionedIds(body) : [];
+      if (tagged.length > 0) {
+        // Each row notifies that user (bell) and adds the paper to their to-read
+        // list via the on_mention_created trigger.
         const { error: mErr } = await supabase.from("mentions").insert(
-          mentionIds.map((uid) => ({
+          tagged.map((uid) => ({
             paper_id: subjectId,
             team_id: teamId,
             mentioned_user: uid,
@@ -253,7 +392,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
       }
 
       setBody("");
-      setMentionIds([]);
+      setMention(null);
       await qc.invalidateQueries({ queryKey: commentsKey });
       await qc.invalidateQueries({ queryKey: [cfg.countsKey] });
       if (cfg.supportsMentions) await qc.invalidateQueries({ queryKey: ["mentions"] });
@@ -297,7 +436,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
               </div>
             ) : (
               <>
-                <div className="mt-0.5 whitespace-pre-wrap text-sm">{c.body}</div>
+                <CommentBody text={c.body} members={members ?? []} />
                 {c.author_id === userId && (
                   <button
                     type="button"
@@ -317,37 +456,54 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
       ))}
 
       <form onSubmit={submit} className="flex flex-col gap-2">
-        <Textarea
-          rows={2}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Add a comment for your team…"
-        />
-        {teammates.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs text-muted">Notify:</span>
-            {teammates.map((m) => {
-              const on = mentionIds.includes(m.user_id);
-              return (
-                <button
-                  key={m.user_id}
-                  type="button"
-                  onClick={() =>
-                    setMentionIds((ids) =>
-                      on ? ids.filter((x) => x !== m.user_id) : [...ids, m.user_id],
-                    )
-                  }
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-xs transition",
-                    on ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-accent",
-                  )}
-                >
-                  @{m.profiles?.display_name ?? "member"}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <div className="relative">
+          <Textarea
+            ref={inputRef}
+            rows={2}
+            value={body}
+            onChange={(e) => {
+              setBody(e.target.value);
+              syncMention();
+            }}
+            onKeyDown={onKeyDown}
+            onKeyUp={syncMention}
+            onClick={syncMention}
+            onBlur={() => setTimeout(() => setMention(null), 120)} // let a click land first
+            placeholder={
+              cfg.supportsMentions
+                ? "Add a comment… type @ to tag a teammate"
+                : "Add a comment for your team…"
+            }
+          />
+
+          {showMenu && (
+            <ul
+              role="listbox"
+              className="absolute z-20 mt-1 w-64 overflow-hidden rounded-control border border-border bg-surface shadow-lg"
+            >
+              {matches.map((m, i) => (
+                <li key={m.user_id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i === activeIdx}
+                    onMouseDown={(e) => e.preventDefault()} // keep focus in the textarea
+                    onMouseEnter={() => setActiveIdx(i)}
+                    onClick={() => pickMention(m)}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition",
+                      i === activeIdx ? "bg-accent-weak text-accent" : "hover:bg-surface-2",
+                    )}
+                  >
+                    <Avatar name={m.profiles?.display_name ?? "?"} size={20} />
+                    <span className="truncate">{m.profiles?.display_name ?? "member"}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {error && <p className="text-xs text-danger">{error}</p>}
         <div>
           <Button type="submit" size="sm" disabled={busy || !body.trim()}>
