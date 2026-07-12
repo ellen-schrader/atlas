@@ -3,6 +3,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import {
   Compass,
+  Images,
   LayoutGrid,
   LibraryBig,
   LogOut,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
+import { FigureModalProvider } from "@/components/FigureModal";
 import { PaperModalProvider } from "@/components/PaperModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,7 @@ export function useAppContext() {
 const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
+  { to: "/board", label: "Mood board", icon: Images, end: false },
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -152,7 +155,9 @@ export default function Layout({ session, team }: { session: Session; team: Team
 
         <main className="min-w-0 flex-1 overflow-auto">
           <PaperModalProvider teamId={team.id} userId={session.user.id}>
-            <Outlet context={ctx} />
+            <FigureModalProvider teamId={team.id} userId={session.user.id}>
+              <Outlet context={ctx} />
+            </FigureModalProvider>
           </PaperModalProvider>
         </main>
     </div>
