@@ -33,7 +33,7 @@ interface Ctx {
 
 export function PaperEngagement(ctx: Ctx) {
   return (
-    <div className="mt-5 flex flex-col gap-5 border-t border-border pt-4">
+    <div className="flex flex-col gap-5">
       <Reactions {...ctx} />
       <Comments {...ctx} />
     </div>
@@ -201,7 +201,7 @@ function Comments({ paperId, teamId, userId }: Ctx) {
   return (
     <div className="flex flex-col gap-3">
       <div className="text-xs font-medium uppercase tracking-wide text-muted">
-        {list.length > 0 ? `${list.length} comment(s)` : "Comments"}
+        {list.length > 0 ? `${list.length} ${list.length === 1 ? "comment" : "comments"}` : "Comments"}
       </div>
 
       {list.map((c) => (
