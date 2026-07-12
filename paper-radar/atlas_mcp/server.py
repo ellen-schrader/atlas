@@ -72,6 +72,13 @@ def _render(hits: list[dict], empty: str) -> str:
     return "\n\n".join(_format_hit(h) for h in hits)
 
 
+def _papers_result(hits: list[dict], empty: str) -> str:
+    """Render paper hits, framed as untrusted content. Titles, authors, abstracts
+    and lab notes are authored by external sources or teammates and can carry
+    injected instructions — the wrapper tells the model to read them as data."""
+    return _untrusted("lab papers", _render(hits, empty)) if hits else empty
+
+
 @mcp.tool()
 def list_labs() -> str:
     """List the labs (teams) you belong to in Atlas, with their ids and join codes."""
@@ -81,7 +88,9 @@ def list_labs() -> str:
         return f"Error: {exc}"
     if not teams:
         return "You don't belong to any lab."
-    return "\n".join(f"- {t['name']} — id {t['id']}, join code {t['slug']}" for t in teams)
+    return _untrusted(
+        "labs", "\n".join(f"- {t['name']} — id {t['id']}, join code {t['slug']}" for t in teams)
+    )
 
 
 @mcp.tool()
@@ -104,7 +113,7 @@ def search_lab_papers(
         return f"Semantic search is unavailable ({exc}). Try mode=\"keyword\"."
     except lab.LabError as exc:
         return f"Error: {exc}"
-    return _render(hits, f"No papers in {team['name']} match {query!r}.")
+    return _papers_result(hits, f"No papers in {team['name']} match {query!r}.")
 
 
 @mcp.tool()
@@ -120,7 +129,7 @@ def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
         hits = lab.recent(team, _clamp(limit))
     except lab.LabError as exc:
         return f"Error: {exc}"
-    return _render(hits, f"No papers posted in {team['name']} yet.")
+    return _papers_result(hits, f"No papers posted in {team['name']} yet.")
 
 
 @mcp.tool()
@@ -142,7 +151,7 @@ def get_paper(paper_id: str, team_id: str | None = None) -> str:
     parts = [block, "", "Abstract:", abstract or "(no abstract available)"]
     if note:
         parts += ["", f"Lab note: “{note}”"]
-    return "\n".join(parts)
+    return _untrusted("paper", "\n".join(parts))
 
 
 # --- mood board -----------------------------------------------------------
@@ -220,7 +229,7 @@ def list_moodboard(
         return f"Error: {exc}"
     if not figs:
         return f"No figures on {team['name']}'s mood board match that."
-    return "\n\n".join(_format_figure(f) for f in figs)
+    return _untrusted("mood board", "\n\n".join(_format_figure(f) for f in figs))
 
 
 @mcp.tool()
@@ -233,7 +242,9 @@ def moodboard_categories(team_id: str | None = None) -> str:
         return f"Error: {exc}"
     if not cats:
         return f"{team['name']} has no categorised figures yet."
-    return "\n".join(f"- {c['category']} ({c['n']})" for c in cats)
+    return _untrusted(
+        "categories", "\n".join(f"- {c['category']} ({c['n']})" for c in cats)
+    )
 
 
 @mcp.tool()
@@ -254,7 +265,7 @@ def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
         data, mime = moodboard.to_preview(moodboard.download(fig))
     except lab.LabError as exc:
         return [f"Error: {exc}"]
-    return [_format_figure(fig), Image(data=data, format=mime.split("/")[-1])]
+    return [_untrusted("figure", _format_figure(fig)), Image(data=data, format=mime.split("/")[-1])]
 
 
 @mcp.tool()
@@ -272,7 +283,8 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
         hexes = moodboard.palette(moodboard.download(fig), n=max(2, min(int(n), 12)))
     except lab.LabError as exc:
         return f"Error: {exc}"
-    return f"Palette for “{fig.get('title') or fig['id']}”: " + ", ".join(hexes)
+    # The hex list is derived (safe); the figure title is user-authored, so frame it.
+    return _untrusted("figure", f"Palette for “{fig.get('title') or fig['id']}”: " + ", ".join(hexes))
 
 
 @mcp.tool()
