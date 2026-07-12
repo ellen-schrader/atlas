@@ -46,6 +46,17 @@ _POSTER_RE = re.compile(
     r"(?P<ts>\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?:,?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)",
 )
 
+# A *primary* Teams post header renders the sender's name and timestamp as two
+# separate text runs on the *same line* (name, then timestamp just to its
+# right), so the single-line _POSTER_RE — which wants them in one run — never
+# matches it and only catches the inline reply/edit stamps. These match a run
+# that is *only* a name and a run that is *only* a timestamp, which
+# _page_poster_stamps pairs by vertical position.
+_NAME_ONLY_RE = re.compile(r"[A-Z][a-zA-Z.'-]+(?:\s+[A-Z][a-zA-Z.'-]+){0,3}")
+_TS_ONLY_RE = re.compile(
+    r"\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?:,?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?"
+)
+
 # Trailing characters that are almost never part of the real URL.
 _TRAILING_JUNK = ".,);:]}>”’'\""
 
@@ -126,13 +137,34 @@ def _page_poster_stamps(page: fitz.Page) -> list[tuple[float, str, str]]:
     above the message body, so a stamp's vertical position lets us attribute the
     links below it to the right person.
     """
-    stamps: list[tuple[float, str, str]] = []
+    # Collect (x0, y_top, text) runs.
+    runs: list[tuple[float, float, str]] = []
     for block in page.get_text("dict").get("blocks", []):
         for line in block.get("lines", []):
-            txt = "".join(span["text"] for span in line.get("spans", []))
-            m = _POSTER_RE.search(txt)
-            if m:
-                stamps.append((line["bbox"][1], m.group("name").strip(), m.group("ts").strip()))
+            txt = "".join(span["text"] for span in line.get("spans", [])).strip()
+            if txt:
+                runs.append((line["bbox"][0], line["bbox"][1], txt))
+
+    stamps: list[tuple[float, str, str]] = []
+
+    # 1) Inline stamps ("Name DD/MM/YYYY HH:MM") — reply/edit markers on one run.
+    for _x, y, txt in runs:
+        m = _POSTER_RE.search(txt)
+        if m:
+            stamps.append((y, m.group("name").strip(), m.group("ts").strip()))
+
+    # 2) Primary post headers: a name-only run and a timestamp-only run on the
+    #    same visual line (Teams lays them side by side). Pair each bare
+    #    timestamp with the nearest bare-name run just to its left at the same y.
+    names = [(x, y, t) for x, y, t in runs if _NAME_ONLY_RE.fullmatch(t)]
+    for tx, ty, tt in runs:
+        if not _TS_ONLY_RE.fullmatch(tt):
+            continue
+        candidates = [(nx, ny, nt) for nx, ny, nt in names if abs(ny - ty) <= 3.0 and nx < tx]
+        if candidates:
+            nx, ny, nt = max(candidates, key=lambda c: c[0])  # closest to the left
+            stamps.append((min(ny, ty), nt, tt))
+
     stamps.sort(key=lambda s: s[0])
     return stamps
 

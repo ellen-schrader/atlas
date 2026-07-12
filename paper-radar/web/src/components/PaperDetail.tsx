@@ -1,13 +1,14 @@
 import { type FormEvent, type ReactNode, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Cover } from "@/components/Cover";
 import { PaperEngagement } from "@/components/Engagement";
+import { usePaperModal } from "@/components/PaperModal";
 import { supabase } from "@/lib/supabase";
-import type { PaperPost } from "@/lib/types";
+import type { PaperPost, SimilarPaper } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
 export function PaperDetail({
@@ -88,11 +89,56 @@ export function PaperDetail({
           </div>
         )}
 
+        <SimilarPapers paperId={p.id} teamId={teamId} />
+
         <hr className="my-6 border-border" />
         <MetaLabel>Discussion</MetaLabel>
         <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
       </div>
     </div>
+  );
+}
+
+/** The lab's most similar papers by embedding (hidden until embeddings exist). */
+function SimilarPapers({ paperId, teamId }: { paperId: string; teamId: string }) {
+  const { openPaper } = usePaperModal();
+  const { data } = useQuery({
+    queryKey: ["similar-papers", teamId, paperId],
+    queryFn: async (): Promise<SimilarPaper[]> => {
+      const { data, error } = await supabase.rpc("similar_papers", {
+        p_team: teamId,
+        p_paper: paperId,
+      });
+      if (error) throw error;
+      return (data ?? []) as SimilarPaper[];
+    },
+  });
+
+  const similar = data ?? [];
+  if (similar.length === 0) return null;
+
+  return (
+    <>
+      <MetaLabel>Similar papers</MetaLabel>
+      <ul className="flex flex-col gap-0.5">
+        {similar.map((s) => (
+          <li key={s.paper_id}>
+            <button
+              type="button"
+              onClick={() => openPaper(s.paper_id)}
+              className="w-full rounded-control px-2 py-1.5 text-left text-sm transition hover:bg-surface-2"
+            >
+              <span className="text-fg">{s.title ?? "Untitled"}</span>
+              {[s.venue, s.year].filter(Boolean).length > 0 && (
+                <span className="ml-2 font-mono text-xs text-faint">
+                  {[s.venue, s.year].filter(Boolean).join(" · ")}
+                </span>
+              )}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

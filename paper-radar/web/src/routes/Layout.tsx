@@ -37,6 +37,7 @@ export function useAppContext() {
 const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
+  { to: "/map", label: "Map", icon: MapIcon, end: false },
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -119,16 +120,6 @@ export default function Layout({ session, team }: { session: Session; team: Team
                 <Icon size={16} /> {label}
               </NavLink>
             ))}
-            <span
-              aria-disabled
-              className="flex cursor-default items-center gap-3 rounded-control px-2.5 py-2 text-sm font-medium text-faint"
-              title="Coming soon"
-            >
-              <MapIcon size={16} /> Map
-              <span className="ml-auto rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-semibold text-muted">
-                soon
-              </span>
-            </span>
           </nav>
 
           <div className="mt-auto flex flex-col gap-3 border-t border-border pt-4">

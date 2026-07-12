@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Loader2, Plus, Rows3, Search } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles } from "lucide-react";
 
 import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
@@ -14,15 +14,19 @@ import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useTeamTags } from "@/hooks/useTeamTags";
-import { postPaper } from "@/lib/api";
+import { postPaper, semanticSearch } from "@/lib/api";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
+type SearchMode = "keyword" | "semantic";
+
 export default function Papers() {
   const { team, userId } = useAppContext();
+  const [mode, setMode] = useState<SearchMode>("keyword");
   const [rawQuery, setRawQuery] = useState("");
   const query = useDebouncedValue(rawQuery.trim(), 250);
+  const [semanticQuery, setSemanticQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "table">("cards");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -39,11 +43,23 @@ export default function Papers() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const search = usePaperSearch(team.id, query, tag);
+  // Keyword: live, server-side, paginated full-text search.
+  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", tag);
   const { data: total } = usePaperCount(team.id, query, tag);
   const { data: tags } = useTeamTags(team.id);
 
-  const posts = (search.data?.pages ?? []).flat();
+  // Semantic: runs on submit (each search embeds the query), so it isn't live.
+  const semantic = useQuery({
+    queryKey: ["semantic-search", team.id, semanticQuery],
+    enabled: mode === "semantic" && semanticQuery.length > 0,
+    queryFn: () => semanticSearch(semanticQuery, team.id),
+  });
+
+  const posts =
+    mode === "semantic"
+      ? (semantic.data ?? []).map((h) => h.post)
+      : (search.data?.pages ?? []).flat();
+
   const { data: counts } = useEngagementCounts(
     team.id,
     posts.map((p) => p.papers.id),
@@ -53,9 +69,10 @@ export default function Papers() {
 
   const { openPaper } = usePaperModal();
 
-  // Infinite scroll: load the next page when the sentinel scrolls into view.
+  // Infinite scroll (keyword only; semantic returns a ranked top-N).
   const sentinel = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (mode !== "keyword") return;
     const el = sentinel.current;
     if (!el) return;
     const io = new IntersectionObserver((entries) => {
@@ -65,12 +82,38 @@ export default function Papers() {
     });
     io.observe(el);
     return () => io.disconnect();
-  }, [search.hasNextPage, search.isFetchingNextPage, search]);
+  }, [mode, search.hasNextPage, search.isFetchingNextPage, search]);
 
   function clearFilters() {
     setRawQuery("");
     setTag(null);
+    setSemanticQuery("");
   }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (mode === "semantic") setSemanticQuery(rawQuery.trim());
+  }
+
+  // Which results view to show.
+  const state: "loading" | "error" | "prompt" | "empty" | "results" =
+    mode === "semantic"
+      ? semanticQuery.length === 0
+        ? "prompt"
+        : semantic.isFetching
+          ? "loading"
+          : semantic.isError
+            ? "error"
+            : posts.length === 0
+              ? "empty"
+              : "results"
+      : search.isLoading
+        ? "loading"
+        : search.isError
+          ? "error"
+          : posts.length === 0
+            ? "empty"
+            : "results";
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
@@ -87,7 +130,15 @@ export default function Papers() {
 
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative min-w-[220px] flex-1">
+        <div className="inline-flex shrink-0 overflow-hidden rounded-control border border-border">
+          <ModeButton active={mode === "keyword"} onClick={() => setMode("keyword")}>
+            <Search size={14} /> Keyword
+          </ModeButton>
+          <ModeButton active={mode === "semantic"} onClick={() => setMode("semantic")}>
+            <Sparkles size={14} /> Semantic
+          </ModeButton>
+        </div>
+        <form onSubmit={onSubmit} className="relative min-w-[220px] flex-1">
           <Search
             size={15}
             className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
@@ -96,13 +147,17 @@ export default function Papers() {
             ref={searchRef}
             value={rawQuery}
             onChange={(e) => setRawQuery(e.target.value)}
-            placeholder="Search title, author, abstract, tag…"
+            placeholder={
+              mode === "keyword"
+                ? "Search title, author, abstract, tag…"
+                : "Describe a topic, then press Enter…"
+            }
             className="pl-9 pr-12"
           />
           <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] text-faint pointer-fine:block">
             ⌘K
           </kbd>
-        </div>
+        </form>
         <div className="inline-flex overflow-hidden rounded-control border border-border">
           <ViewButton active={view === "cards"} onClick={() => setView("cards")} label="Card view">
             <LayoutGrid size={15} />
@@ -113,32 +168,49 @@ export default function Papers() {
         </div>
       </div>
 
-      {/* tag filters */}
-      <div className="-mt-1 flex flex-wrap gap-2">
-        <FilterChip active={tag === null} onClick={() => setTag(null)}>
-          All
-        </FilterChip>
-        {(tags ?? []).map((t) => (
-          <FilterChip key={t.tag} active={tag === t.tag} onClick={() => setTag(t.tag)}>
-            {t.tag}
+      {/* tag filters (keyword only) */}
+      {mode === "keyword" && (
+        <div className="-mt-1 flex flex-wrap gap-2">
+          <FilterChip active={tag === null} onClick={() => setTag(null)}>
+            All
           </FilterChip>
-        ))}
-      </div>
+          {(tags ?? []).map((t) => (
+            <FilterChip key={t.tag} active={tag === t.tag} onClick={() => setTag(t.tag)}>
+              {t.tag}
+            </FilterChip>
+          ))}
+        </div>
+      )}
 
-      {typeof total === "number" && !search.isLoading && (
+      {/* count label */}
+      {mode === "keyword" && typeof total === "number" && !search.isLoading && (
         <div className="-mb-2 -mt-2 text-xs text-faint tabular-nums">
           {total} {total === 1 ? "paper" : "papers"}
           {(query || tag) && " match"}
         </div>
       )}
+      {mode === "semantic" && state === "results" && (
+        <div className="-mb-2 -mt-2 text-xs text-faint tabular-nums">
+          {posts.length} {posts.length === 1 ? "paper" : "papers"} by relevance
+        </div>
+      )}
 
       {/* results */}
-      {search.isLoading ? (
+      {state === "loading" ? (
         <CardSkeletons />
-      ) : search.isError ? (
-        <ErrorState onRetry={() => search.refetch()} />
-      ) : posts.length === 0 ? (
-        <EmptyState filtered={Boolean(query || tag)} onClear={clearFilters} />
+      ) : state === "error" ? (
+        <ErrorState onRetry={() => (mode === "semantic" ? semantic.refetch() : search.refetch())} />
+      ) : state === "prompt" ? (
+        <SemanticPrompt />
+      ) : state === "empty" ? (
+        mode === "semantic" ? (
+          <MessageState
+            title="No papers match that description"
+            body="Try describing the topic differently, or switch to keyword search."
+          />
+        ) : (
+          <EmptyState filtered={Boolean(query || tag)} onClear={clearFilters} />
+        )
       ) : view === "cards" ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
           {posts.map((post) => (
@@ -158,11 +230,35 @@ export default function Papers() {
         <PaperTable posts={posts} counts={counts} onOpen={(id) => openPaper(id)} />
       )}
 
-      {search.isFetchingNextPage && (
+      {mode === "keyword" && search.isFetchingNextPage && (
         <div className="py-4 text-center text-sm text-muted">Loading more…</div>
       )}
       <div ref={sentinel} aria-hidden className="h-px" />
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition",
+        active ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -336,6 +432,24 @@ function CardSkeletons() {
         </div>
       ))}
     </div>
+  );
+}
+
+function MessageState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
+      <div className="font-semibold text-fg">{title}</div>
+      <p className="text-sm text-muted">{body}</p>
+    </div>
+  );
+}
+
+function SemanticPrompt() {
+  return (
+    <MessageState
+      title="Search by meaning"
+      body="Describe a topic in your own words and press Enter — results are ranked by how close each paper is, not by keywords."
+    />
   );
 }
 
