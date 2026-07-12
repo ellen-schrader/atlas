@@ -16,12 +16,11 @@ Enrichment (summary/tags) still lands later in a worker.
 
 from __future__ import annotations
 
-import json
 import logging
+from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
 
-import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -30,6 +29,7 @@ from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
 from . import embeddings
+from . import overview as overview_mod
 from .config import get_api_settings
 from .supa import get_user_id, service_client, user_client
 
@@ -111,18 +111,37 @@ class SemanticSearchResponse(BaseModel):
     results: list[SemanticHit]
 
 
-class MapPoint(BaseModel):
+class OverviewPoint(BaseModel):
     paper_id: str
     x: float
     y: float
     title: str | None = None
     venue: str | None = None
     year: int | None = None
-    tags: list[str] = []
+    keywords: list[str] = []
+    cluster: int
+    reactions: int = 0
+    comments: int = 0
 
 
-class MapResponse(BaseModel):
-    points: list[MapPoint]
+class Cluster(BaseModel):
+    id: int
+    label: str
+    description: str = ""
+    size: int
+
+
+class OverviewStats(BaseModel):
+    over_time: list[dict]  # [{month: "2026-03", count: N}]
+    by_venue: list[dict]   # [{venue, count}] top venues
+    by_year: list[dict]    # [{year, count}]
+    by_lab: list[dict]     # [{lab, count}] top last-authors (proxy for source lab)
+
+
+class OverviewResponse(BaseModel):
+    points: list[OverviewPoint]
+    clusters: list[Cluster]
+    stats: OverviewStats
     total: int     # posts in the lab
     embedded: int  # posts whose paper has an embedding (points returned)
 
@@ -203,36 +222,6 @@ def _embed_and_store(paper_id: str, title: str | None, abstract: str | None) -> 
         ).eq("id", paper_id).is_("embedded_at", "null").execute()
     except Exception as exc:
         log.warning("embedding paper %s failed (backfill will retry): %s", paper_id, exc)
-
-
-def _parse_vector(value: object) -> list[float]:
-    """An embedding as PostgREST returns it: a '[...]' string (or already a list)."""
-    if isinstance(value, str):
-        return json.loads(value)
-    return value  # type: ignore[return-value]
-
-
-class MapCache:
-    """Per-team cache of UMAP layouts, keyed by the exact set of embedded papers.
-
-    The key is ``frozenset of (paper_id, embedded_at)`` — a new post, a removed
-    post, or a re-embed all produce a different key and force a recompute.
-    """
-
-    def __init__(self) -> None:
-        self._layouts: dict[str, tuple[frozenset, list[MapPoint]]] = {}
-
-    def get(self, team_id: str, key: frozenset) -> list[MapPoint] | None:
-        entry = self._layouts.get(team_id)
-        if entry and entry[0] == key:
-            return entry[1]
-        return None
-
-    def put(self, team_id: str, key: frozenset, points: list[MapPoint]) -> None:
-        self._layouts[team_id] = (key, points)
-
-
-_map_cache = MapCache()
 
 
 def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: str | None):
@@ -359,53 +348,105 @@ def semantic_search(
     )
 
 
-@app.get("/map", response_model=MapResponse)
-def map_overview(team_id: str, token: str = Depends(require_token)) -> MapResponse:
-    """2-D UMAP layout of the lab's embedded papers (per-lab; RLS-scoped).
+def _last_author_lab(authors: list) -> str | None:
+    """Last author as a rough proxy for 'the lab that produced the paper' (§4.1a)."""
+    return authors[-1] if authors else None
 
-    Layouts are cached per team and recomputed only when the set of embedded
-    papers changes (see MapCache).
+
+def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
+    """(reactions, comments) per paper for the team, RLS-scoped. {} if no ids."""
+    counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
+    if not paper_ids:
+        return {}
+    rx = uc.table("reactions").select("paper_id").eq("team_id", team_id).execute().data or []
+    cm = uc.table("comments").select("paper_id").eq("team_id", team_id).execute().data or []
+    for r in rx:
+        if r["paper_id"] in counts:
+            counts[r["paper_id"]][0] += 1
+    for c in cm:
+        if c["paper_id"] in counts:
+            counts[c["paper_id"]][1] += 1
+    return {k: (v[0], v[1]) for k, v in counts.items()}
+
+
+def _compute_stats(rows: list[dict]) -> OverviewStats:
+    """Aggregate the lab's posts (joined papers) into the stat panels."""
+    over_time: Counter = Counter()
+    by_venue: Counter = Counter()
+    by_year: Counter = Counter()
+    by_lab: Counter = Counter()
+    for r in rows:
+        p = r.get("papers") or {}
+        if r.get("posted_at"):
+            over_time[r["posted_at"][:7]] += 1  # YYYY-MM
+        if p.get("venue"):
+            by_venue[p["venue"]] += 1
+        if p.get("year"):
+            by_year[p["year"]] += 1
+        lab = _last_author_lab(p.get("authors") or [])
+        if lab:
+            by_lab[lab] += 1
+    return OverviewStats(
+        over_time=[{"month": m, "count": n} for m, n in sorted(over_time.items())],
+        by_venue=[{"venue": v, "count": n} for v, n in by_venue.most_common(10)],
+        by_year=[{"year": y, "count": n} for y, n in sorted(by_year.items())],
+        by_lab=[{"lab": lab, "count": n} for lab, n in by_lab.most_common(10)],
+    )
+
+
+@app.get("/overview", response_model=OverviewResponse)
+def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
+    """Insights overview for a lab: UMAP + named clusters + stats (RLS-scoped).
+
+    The UMAP + clustering + cluster names are cached per team by the embedded
+    set; engagement and stats are computed fresh so they stay live.
     """
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     uc = user_client(token)
+    cols = (
+        "paper_id, posted_at, "
+        "papers(id, title, venue, year, keywords, authors, embedding, embedded_at)"
+    )
     rows = (
         uc.table("paper_posts")
-        .select("paper_id, papers(id, title, venue, year, tags, embedding, embedded_at)")
+        .select(cols)
         .eq("team_id", team_id)
         .execute()
         .data
         or []
     )
     total = len(rows)
+    stats = _compute_stats(rows)
+
     papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
     if not papers:
-        return MapResponse(points=[], total=total, embedded=0)
-    # Sort for a deterministic layout: UMAP has a fixed seed, but the layout
-    # still depends on input order.
-    papers.sort(key=lambda p: p["id"])
+        return OverviewResponse(points=[], clusters=[], stats=stats, total=total, embedded=0)
+    papers.sort(key=lambda p: p["id"])  # deterministic layout/cluster order
 
-    key = frozenset((p["id"], p["embedded_at"]) for p in papers)
-    points = _map_cache.get(team_id, key)
-    if points is None:
-        vectors = np.array([_parse_vector(p["embedding"]) for p in papers], dtype=np.float32)
-        # Imported lazily: pulls in umap/numba (and the first fit pays the JIT).
-        from paper_radar.embed.index import compute_umap
+    point_by_id, clusters = overview_mod.cached_layout(team_id, papers)
+    eng = _engagement_counts(uc, team_id, [p["id"] for p in papers])
 
-        coords = compute_umap(vectors)
-        points = [
-            MapPoint(
-                paper_id=p["id"],
-                x=float(x),
-                y=float(y),
-                title=p.get("title"),
-                venue=p.get("venue"),
-                year=p.get("year"),
-                tags=p.get("tags") or [],
-            )
-            for p, (x, y) in zip(papers, coords, strict=True)
-        ]
-        _map_cache.put(team_id, key, points)
-
-    return MapResponse(points=points, total=total, embedded=len(papers))
+    points = [
+        OverviewPoint(
+            paper_id=p["id"],
+            x=point_by_id[p["id"]]["x"],
+            y=point_by_id[p["id"]]["y"],
+            cluster=point_by_id[p["id"]]["cluster"],
+            title=p.get("title"),
+            venue=p.get("venue"),
+            year=p.get("year"),
+            keywords=p.get("keywords") or [],
+            reactions=eng.get(p["id"], (0, 0))[0],
+            comments=eng.get(p["id"], (0, 0))[1],
+        )
+        for p in papers
+    ]
+    return OverviewResponse(
+        points=points,
+        clusters=[Cluster(**c) for c in clusters],
+        stats=stats,
+        total=total,
+        embedded=len(papers),
+    )

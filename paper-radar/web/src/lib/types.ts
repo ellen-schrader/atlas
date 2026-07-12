@@ -62,19 +62,39 @@ export interface SimilarPaper {
   similarity: number;
 }
 
-/** One paper on the GET /map UMAP layout. */
-export interface MapPoint {
+/** One paper on the GET /overview UMAP layout. */
+export interface OverviewPoint {
   paper_id: string;
   x: number;
   y: number;
   title: string | null;
   venue: string | null;
   year: number | null;
-  tags: string[];
+  keywords: string[];
+  cluster: number;
+  reactions: number;
+  comments: number;
 }
 
-export interface MapData {
-  points: MapPoint[];
+/** A named theme cluster (LLM-labeled from its papers' titles). */
+export interface Cluster {
+  id: number;
+  label: string;
+  description: string;
+  size: number;
+}
+
+export interface OverviewStats {
+  over_time: { month: string; count: number }[];
+  by_venue: { venue: string; count: number }[];
+  by_year: { year: number; count: number }[];
+  by_lab: { lab: string; count: number }[];
+}
+
+export interface OverviewData {
+  points: OverviewPoint[];
+  clusters: Cluster[];
+  stats: OverviewStats;
   total: number; // posts in the lab
   embedded: number; // posts with an embedded paper (points returned)
 }

@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { MapData, SemanticHit } from "@/lib/types";
+import type { OverviewData, SemanticHit } from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -86,7 +86,7 @@ export async function semanticSearch(
   return data.results;
 }
 
-/** 2-D UMAP layout of the lab's embedded papers. */
-export function fetchMap(teamId: string): Promise<MapData> {
-  return authedRequest<MapData>(`/map?team_id=${encodeURIComponent(teamId)}`);
+/** Insights overview: UMAP layout + named clusters + stats for the lab. */
+export function fetchOverview(teamId: string): Promise<OverviewData> {
+  return authedRequest<OverviewData>(`/overview?team_id=${encodeURIComponent(teamId)}`);
 }
