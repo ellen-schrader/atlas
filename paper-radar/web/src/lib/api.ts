@@ -90,3 +90,16 @@ export async function semanticSearch(
 export function fetchOverview(teamId: string): Promise<OverviewData> {
   return authedRequest<OverviewData>(`/overview?team_id=${encodeURIComponent(teamId)}`);
 }
+
+/** Cosine similarity of every embedded paper in the lab to a query (for the
+ *  map's Relevance color mode). Returns { paper_id: similarity }. */
+export async function fetchSimilarity(
+  query: string,
+  teamId: string,
+): Promise<Record<string, number>> {
+  const data = await authedRequest<{ similarities: Record<string, number> }>("/similarity", {
+    method: "POST",
+    body: JSON.stringify({ query, team_id: teamId }),
+  });
+  return data.similarities;
+}

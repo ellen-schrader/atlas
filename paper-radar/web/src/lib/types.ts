@@ -71,6 +71,7 @@ export interface OverviewPoint {
   venue: string | null;
   year: number | null;
   keywords: string[];
+  lab: string | null; // last author — proxy for the source lab
   cluster: number;
   reactions: number;
   comments: number;

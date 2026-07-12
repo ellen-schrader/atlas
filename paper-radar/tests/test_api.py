@@ -48,6 +48,11 @@ def test_overview_requires_bearer_token():
     assert resp.status_code == 401
 
 
+def test_similarity_requires_bearer_token():
+    resp = client.post("/similarity", json={"query": "x", "team_id": "t"})
+    assert resp.status_code == 401
+
+
 def test_compute_stats_aggregates_posts():
     from api.app import _compute_stats
 

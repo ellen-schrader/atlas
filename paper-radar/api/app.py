@@ -119,6 +119,7 @@ class OverviewPoint(BaseModel):
     venue: str | None = None
     year: int | None = None
     keywords: list[str] = []
+    lab: str | None = None  # last author — proxy for the source lab (§4.1a)
     cluster: int
     reactions: int = 0
     comments: int = 0
@@ -348,6 +349,54 @@ def semantic_search(
     )
 
 
+class SimilarityRequest(BaseModel):
+    query: str
+    team_id: str
+
+
+class SimilarityResponse(BaseModel):
+    # cosine similarity of every embedded paper in the lab to the query, in
+    # [-1, 1]. Powers the map's "Relevance" color mode (rank-scaled client-side).
+    similarities: dict[str, float]
+
+
+@app.post("/similarity", response_model=SimilarityResponse)
+def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> SimilarityResponse:
+    """Similarity of *all* the lab's embedded papers to a query (not just top-N).
+
+    The authenticated role's PostgREST caps RPC returns, so we can't get every
+    paper's score via the user client. Instead we gate on RLS — a non-member can
+    see no posts in the team — then run the (uncapped) ranking with the service
+    client, scoped to that same team_id. A non-member gets an empty result.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    query = req.query.strip()
+    if not query:
+        return SimilarityResponse(similarities={})
+
+    uc = user_client(token)
+    visible = (
+        uc.table("paper_posts").select("id").eq("team_id", req.team_id).limit(1).execute().data
+    )
+    if not visible:  # not a member (RLS returns nothing), or an empty lab
+        return SimilarityResponse(similarities={})
+
+    try:
+        query_vector = embeddings.embed_query(query)
+    except embeddings.EmbeddingError as exc:
+        raise HTTPException(status_code=503, detail=f"Embeddings unavailable: {exc}") from exc
+
+    rows = (
+        service_client()
+        .rpc("match_papers", {"p_team": req.team_id, "p_query": query_vector, "p_limit": 100000})
+        .execute()
+        .data
+        or []
+    )
+    return SimilarityResponse(similarities={r["paper_id"]: r["similarity"] for r in rows})
+
+
 def _last_author_lab(authors: list) -> str | None:
     """Last author as a rough proxy for 'the lab that produced the paper' (§4.1a)."""
     return authors[-1] if authors else None
@@ -438,6 +487,7 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
             venue=p.get("venue"),
             year=p.get("year"),
             keywords=p.get("keywords") or [],
+            lab=_last_author_lab(p.get("authors") or []),
             reactions=eng.get(p["id"], (0, 0))[0],
             comments=eng.get(p["id"], (0, 0))[1],
         )
