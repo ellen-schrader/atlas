@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Plus, Rows3, Search } from "lucide-react";
+import { LayoutGrid, Loader2, Plus, Rows3, Search } from "lucide-react";
 
 import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
@@ -99,7 +99,7 @@ export default function Papers() {
             placeholder="Search title, author, abstract, tag…"
             className="pl-9 pr-12"
           />
-          <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] text-faint">
+          <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] text-faint pointer-fine:block">
             ⌘K
           </kbd>
         </div>
@@ -303,15 +303,17 @@ function PostPaperBar({ teamId }: { teamId: string }) {
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <Input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="Paste a paper URL — arXiv, DOI, PubMed, or a publisher page"
+          disabled={busy}
           required
         />
-        <Button type="submit" disabled={busy || !url.trim()}>
-          <Plus size={15} /> {busy ? "…" : "Post"}
+        <Button type="submit" disabled={busy || !url.trim()} className="w-full sm:w-auto">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+          {busy ? "Posting…" : "Post"}
         </Button>
       </div>
       {msg && <p className="text-xs text-muted">{msg}</p>}

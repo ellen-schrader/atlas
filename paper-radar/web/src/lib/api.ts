@@ -15,13 +15,20 @@ export async function postPaper(url: string, teamId: string): Promise<PostResult
   const token = data.session?.access_token;
   if (!token) throw new Error("Not signed in.");
 
-  const res = await fetch(`${API_URL}/posts`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ url, team_id: teamId }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/posts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ url, team_id: teamId }),
+    });
+  } catch {
+    // fetch throws on network failure / CORS / service down — give the user
+    // something actionable rather than the raw "Failed to fetch".
+    throw new Error("Couldn’t reach the paper service. Check your connection and try again.");
+  }
   if (!res.ok) {
-    let detail = `Request failed (${res.status})`;
+    let detail = `Couldn’t post that paper (error ${res.status}).`;
     try {
       detail = (await res.json()).detail ?? detail;
     } catch {
