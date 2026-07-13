@@ -96,7 +96,23 @@ export function ClaudeScope({ teamName }: { teamName: string }) {
       </Line>
       <Line kind="allow">Read the note attached to a post, and who posted it</Line>
       <Line kind="allow">
-        Read the mood board and derive your palette + a matplotlib style sheet
+        Recommend what to read next and surface similar papers, from the embeddings of your posts
+      </Line>
+      <Line kind="allow">
+        Tailor recommendations and your digest from <strong className="font-semibold text-fg">your
+        own</strong> reads, reactions and @-mentions
+      </Line>
+      <Line kind="allow">
+        Summarise recent activity — new posts, the <em>number</em> of new comments, and papers you
+        were tagged on
+      </Line>
+      <Line kind="allow">
+        Check whether an idea is novel to the lab, and draft a cited related-work section from its
+        papers
+      </Line>
+      <Line kind="allow">
+        Read the mood board, derive your palette + a matplotlib style sheet, and check it for
+        colourblind-safety
       </Line>
       <Line kind="write">
         <strong className="font-semibold text-fg">Post a paper</strong> into {teamName}, optionally
@@ -105,8 +121,8 @@ export function ClaudeScope({ teamName }: { teamName: string }) {
         default and only writes when you confirm.
       </Line>
       <Line kind="deny">
-        Read your lab’s <strong className="font-semibold">comments or reactions</strong> — the
-        discussion stays between people
+        Read the <strong className="font-semibold">text of comments</strong>, or who reacted with
+        what — the discussion itself stays between people
       </Line>
       <Line kind="deny">Anything in another lab</Line>
       <Line kind="deny">Delete or edit existing papers, comments, or reactions</Line>

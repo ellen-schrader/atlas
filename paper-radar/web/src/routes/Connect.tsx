@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { ShieldAlert } from "lucide-react";
+import { PenLine, ShieldAlert } from "lucide-react";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
@@ -52,11 +52,17 @@ export default function Connect() {
   // stdio server has no refresh token to renew it with — so it's the safer choice
   // for a shared machine and the password is the one that keeps working. Offer both
   // and say which trade-off you're taking, rather than quietly emitting a password.
+  // Deep links in tool results default to the Vite dev server; a connected user's
+  // Atlas is wherever this page is served, so pre-fill it so citations are clickable.
+  const webUrl = typeof window !== "undefined" ? window.location.origin : "";
+  const webLine = `ATLAS_WEB_URL=${webUrl}`;
   const envPassword = `ATLAS_EMAIL=you@your-lab.org
 ATLAS_PASSWORD=your-atlas-password
-ATLAS_TEAM_ID=${team.id}`;
+ATLAS_TEAM_ID=${team.id}
+${webLine}`;
   const envToken = `ATLAS_TOKEN=your-supabase-access-token
-ATLAS_TEAM_ID=${team.id}`;
+ATLAS_TEAM_ID=${team.id}
+${webLine}`;
   const envFile = auth === "password" ? envPassword : envToken;
 
   return (
@@ -71,6 +77,10 @@ ATLAS_TEAM_ID=${team.id}`;
           Setup is a config file and a login; it runs locally against your own database.
         </p>
       </header>
+
+      {/* Prerequisite, first — nothing below works until an owner turns access on, so
+          it leads rather than trailing the setup steps a user would test at step 4. */}
+      <AccessPanel />
 
       {/* client picker — the config differs per surface */}
       <div className="flex gap-1.5">
@@ -191,6 +201,10 @@ ATLAS_TEAM_ID=${team.id}`;
           <span className="text-muted">ATLAS_TEAM_ID=</span>
           <span className="text-accent">{team.id}</span>{" "}
           <span className="text-faint"># {team.name} — filled in for you</span>
+          {"\n"}
+          <span className="text-muted">ATLAS_WEB_URL=</span>
+          <span className="text-accent">{webUrl}</span>{" "}
+          <span className="text-faint"># so the links Claude cites open your Atlas</span>
         </CopyBlock>
       </Step>
 
@@ -207,21 +221,25 @@ ATLAS_TEAM_ID=${team.id}`;
               the composer.
             </>
           )}{" "}
-          Then try:
+          Then try a question about something your lab actually works on:
         </p>
         <div className="rounded-control border border-border bg-surface-2 px-3 py-2 text-sm italic text-fg">
-          “What has our lab posted on myeloid cells?”
+          “What has our lab posted on <span className="text-muted">[your topic]</span>?”
         </div>
       </Step>
 
-      {/* the switch — lab-wide, owner-only */}
-      <AccessPanel />
+      {/* the payoff: what you can actually ask for, once connected */}
+      <Capabilities teamName={team.name} />
 
-      {/* what it can actually touch */}
+      {/* what it can actually touch — permissions, distinct from the capabilities above */}
       <section className="rounded-card border border-border bg-surface p-5">
-        <h2 className="mb-3 font-serif text-lg font-semibold tracking-tight">
-          What Claude can do with {team.name}
+        <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
+          What Claude can and can’t see
         </h2>
+        <p className="mb-3 text-sm text-muted">
+          The capabilities above run entirely within these limits — scoped to {team.name} by your
+          own login.
+        </p>
         <ClaudeScope teamName={team.name} />
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
@@ -282,7 +300,8 @@ function AccessPanel() {
       />
       {!enabled && (
         <p className="mt-3 text-xs text-faint">
-          The steps above won’t work until this is on.
+          Turn this on first — until it’s on, every Claude tool call for {team.name} is refused, so
+          the setup below can’t be tested. Only a lab owner can flip it.
         </p>
       )}
     </section>
@@ -300,6 +319,90 @@ function ActivityLog() {
         attempts show up here too.
       </p>
       <ClaudeActivity teamId={team.id} teamName={team.name} />
+    </section>
+  );
+}
+
+/**
+ * The capability catalogue — "what can I actually ask?" — grouped by the job a
+ * scientist is doing, each with a copy-ready example prompt in the lab's own voice.
+ *
+ * This is deliberately separate from ClaudeScope: that answers "what can Claude
+ * *see*?" (permissions), this answers "what can Claude *do for me*?" (the payoff).
+ * Conflating the two is what made the old page read like a privacy notice with no
+ * reason to opt in.
+ */
+const CAPABILITIES: { group: string; items: { can: string; ask: string; write?: boolean }[] }[] = [
+  {
+    group: "Find & cite papers",
+    items: [
+      { can: "Search the lab by keyword or meaning", ask: "What has our lab posted on myeloid cells?" },
+      { can: "Pull one paper’s full details + a deep link", ask: "Show me the abstract and DOI for that Nature paper" },
+      { can: "Find more papers like a given one", ask: "Find papers similar to the Wu et al. spatial atlas" },
+    ],
+  },
+  {
+    group: "Decide what to read",
+    items: [
+      { can: "Recommend what to read next, from your history", ask: "What should I read next?" },
+      { can: "Digest recent lab activity", ask: "Summarise what happened in the lab this week" },
+    ],
+  },
+  {
+    group: "Write & get unstuck",
+    items: [
+      { can: "Check whether the lab has already covered an idea", ask: "Have we already looked at CRISPR screens in exhausted T cells?" },
+      { can: "Draft a cited related-work section from lab papers", ask: "Draft a related-work paragraph on spatial transcriptomics from our papers" },
+      { can: "Post a paper to the lab, optionally tagging a teammate", ask: "Add this arXiv paper and tag Maya to read it", write: true },
+    ],
+  },
+  {
+    group: "Plot in your lab’s style",
+    items: [
+      { can: "Derive your palette + a matplotlib style sheet", ask: "Give me a matplotlib style that matches our lab’s figures" },
+      { can: "Check a palette is colourblind-safe", ask: "Is this figure’s colour palette safe for colourblind readers?" },
+    ],
+  },
+];
+
+function Capabilities({ teamName }: { teamName: string }) {
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <h2 className="font-serif text-lg font-semibold tracking-tight">
+        What you can ask Claude to do
+      </h2>
+      <p className="mb-4 mt-1 max-w-[60ch] text-sm text-muted">
+        Once connected, ask in plain language — Claude picks the right tool and answers with real,
+        citable papers from {teamName}. A few things to try:
+      </p>
+      <div className="flex flex-col gap-5">
+        {CAPABILITIES.map((section) => (
+          <div key={section.group}>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+              {section.group}
+            </h3>
+            <ul className="flex flex-col gap-2.5">
+              {section.items.map((item) => (
+                <li key={item.can} className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
+                  <span className="flex items-baseline gap-1.5 text-sm text-fg sm:w-[46%] sm:shrink-0">
+                    {item.write && (
+                      <PenLine size={13} className="translate-y-0.5 shrink-0 text-danger" aria-label="writes to the lab" />
+                    )}
+                    {item.can}
+                  </span>
+                  <span className="min-w-0 flex-1 text-sm italic text-muted">
+                    “{item.ask}”
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <p className="mt-4 flex items-center gap-1.5 text-xs text-faint">
+        <PenLine size={12} className="shrink-0 text-danger" />
+        writes to the shared lab — previews first, and only posts when you confirm.
+      </p>
     </section>
   );
 }
