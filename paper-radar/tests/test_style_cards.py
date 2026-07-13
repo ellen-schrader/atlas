@@ -19,7 +19,12 @@ def test_minimal_spec_fills_defaults():
     assert norm["axes"] == {"x_scale": "linear", "y_scale": "linear", "grid": "y", "spines": "open"}
     assert norm["palette"] == list(card_spec.DEFAULT_PALETTE)
     assert len(norm["series"]) == 2  # default n_series
-    assert norm["series"][0] == {"line_width": 1.8, "dash": "solid", "marker": "none"}
+    assert norm["series"][0] == {
+        "line_width": 1.8,
+        "dash": "solid",
+        "marker": "none",
+        "drawstyle": "linear",
+    }
     assert norm["legend"] == {"mode": "direct"}
     assert norm["data_hints"]["trend"] == "rising"
     assert "notes" not in norm and "cvd" not in norm
@@ -146,6 +151,40 @@ def test_every_chart_type_renders(ctype):
         }
     )
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_step_drawstyle_renders_and_is_monotone():
+    # A Kaplan-Meier / CDF staircase: the spec accepts drawstyle=step on a line
+    # chart, and the synthetic data must not wander back up under noise.
+    import numpy as np
+
+    from atlas_mcp import render as card_render
+
+    norm = card_spec.validate_spec(
+        {
+            "chart": {"type": "line"},
+            "series": [{"drawstyle": "step"}, {"drawstyle": "step"}],
+            "palette": ["#2f6fd0", "#e8b820"],
+            "data_hints": {"trend": "falling", "noise": "high", "n_points": 40},
+        }
+    )
+    assert norm["series"][0]["drawstyle"] == "step"
+    png, _, _ = card_render.render(norm, 5)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # the monotone guard, exercised directly on the curve the renderer builds
+    rng = np.random.default_rng(5)
+    t = np.linspace(0.0, 1.0, 40)
+    y = card_render._curve("falling", t, 0) + rng.normal(0.0, 0.12, 40)
+    y = np.minimum.accumulate(np.clip(y, 0.02, None))
+    assert np.all(np.diff(y) <= 0), "a survival curve must never step back up"
+
+
+def test_drawstyle_defaults_to_linear_and_is_line_only():
+    norm = card_spec.validate_spec({"chart": {"type": "line"}})
+    assert norm["series"][0]["drawstyle"] == "linear"
+    with pytest.raises(card_spec.SpecError, match="drawstyle"):
+        card_spec.validate_spec({"chart": {"type": "bar"}, "series": [{"drawstyle": "step"}]})
 
 
 def test_log_axes_render():

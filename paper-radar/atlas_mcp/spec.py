@@ -29,6 +29,9 @@ GRIDS = ("none", "x", "y", "both")
 SPINES = ("open", "box")
 DASHES = ("solid", "dashed", "dotted", "dashdot")
 MARKERS = ("none", "circle", "square", "triangle", "diamond", "plus", "x")
+# How a line connects its points. "step" is what makes a Kaplan-Meier curve or an
+# empirical CDF read as itself — a smooth line through the same points doesn't.
+DRAWSTYLES = ("linear", "step")
 LEGEND_MODES = ("direct", "box", "none")
 LEGEND_LOCS = (
     "best",
@@ -184,14 +187,17 @@ def _series(raw: object, chart_type: str, n_default: int) -> list[dict]:
     out = []
     for i, s in enumerate(raw):
         d = _section(s, f"series[{i}]")
-        _reject_unknown(d, f"series[{i}]", ("line_width", "dash", "marker"))
-        out.append(
-            {
-                "line_width": _number(d, f"series[{i}]", "line_width", 0.25, 6.0, 1.8),
-                "dash": _enum(d, f"series[{i}]", "dash", DASHES, "solid"),
-                "marker": _enum(d, f"series[{i}]", "marker", MARKERS, default_marker),
-            }
-        )
+        _reject_unknown(d, f"series[{i}]", ("line_width", "dash", "marker", "drawstyle"))
+        entry = {
+            "line_width": _number(d, f"series[{i}]", "line_width", 0.25, 6.0, 1.8),
+            "dash": _enum(d, f"series[{i}]", "dash", DASHES, "solid"),
+            "marker": _enum(d, f"series[{i}]", "marker", MARKERS, default_marker),
+        }
+        drawstyle = _enum(d, f"series[{i}]", "drawstyle", DRAWSTYLES, "linear")
+        if drawstyle != "linear" and chart_type != "line":
+            raise SpecError('series[].drawstyle only applies to a "line" chart.')
+        entry["drawstyle"] = drawstyle
+        out.append(entry)
     return out
 
 

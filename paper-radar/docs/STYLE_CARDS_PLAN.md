@@ -39,6 +39,10 @@ https://claude.ai/code/artifact/a42e0cc4-b28a-448f-8422-69c53b09756a
     stored row reproduces it byte-identically. Bounded by the schema (≤8
     series, ≤500 points, log axes only for line/scatter, palette ≥ series),
     300 dpi.
+  - Spec v1 vocabulary: six chart types; per-series `line_width` / `dash` /
+    `marker` / `drawstyle` (`step` is what makes a Kaplan–Meier curve or a CDF
+    read as itself — a smooth line through the same points does not, and the
+    synthetic data is made monotone so a survival staircase never steps back up).
   - MCP: `preview_plot_spec` (validate + render, writes nothing) and
     `add_plot_to_moodboard` (previews by default; `confirm=true` + elicitation
     gate, exactly the `post_paper` pattern; `@audited`; CVD verdict stamped
@@ -61,6 +65,103 @@ https://claude.ai/code/artifact/a42e0cc4-b28a-448f-8422-69c53b09756a
   own auth (RLS unchanged); the original is discarded. Prereqs: lift
   `spec.py`/`render.py` into a module both `atlas_mcp` and `api/` import, and a
   plain consent line (the image goes to Anthropic — matters for own figures).
+
+## Spec v2 — composite figures (design, not yet built)
+
+The v1 spec describes **one panel**. The figures this lab actually publishes are
+often composites: a heatmap of phenotype × marker, a **percent-stacked bar** of
+each phenotype's composition, and a **count plot** of its abundance — three
+panels sharing one row axis, where **each row is a cell phenotype**. v1 cannot
+express that, and the gap is not "more fields": it's that a composite has
+**shared structure across panels**, which a flat single-chart spec has nowhere
+to put.
+
+What v2 has to add, in rough order of how load-bearing it is:
+
+1. **A shared categorical domain — the keystone.** Name the row axis once
+   (`domains: {phenotype: {n_categories: 12, order: "clustered"}}`) and let each
+   panel bind to it (`rows: "$phenotype"`). Without this, every panel would
+   generate its own synthetic categories and the rows wouldn't correspond —
+   the figure would be nonsense. The domain also carries the **row order rule**
+   (`clustered` / `by_value` / `fixed`), which is itself a style fact: these
+   figures are usually sorted by abundance or by a dendrogram.
+2. **Named semantic palettes, not one flat cycle.** A composite has *several*
+   colour meanings at once: the heatmap's scale, the stacked bar's category
+   colours (region / sample / compartment), and any annotation strip. v1's
+   single `palette` can't keep "colour follows the entity" true across panels.
+   v2 needs `palettes: {region: [...], lineage: [...]}` with panels referencing
+   a palette **by name**, so the same category is the same colour everywhere
+   (and in the legend).
+3. **A layout block**: `layout: {rows, cols, width_ratios, height_ratios, gap,
+   share_y: "$phenotype"}` → a matplotlib GridSpec. Width ratios are a genuine
+   style fact of these figures (a wide heatmap, a narrow bar strip).
+4. **`panels: [...]`** — each entry a v1-shaped chart spec plus `kind`, grid
+   `position`/`span`, and per-panel `ticks`/`labels` visibility. "Row labels on
+   the leftmost panel only, ticks hidden elsewhere" is exactly the kind of thing
+   that makes a composite read as one figure rather than three glued together.
+5. **New panel kinds** the composite needs: `stacked_bar` (with
+   `mode: grouped | stacked | percent`), `annotation_track` (the categorical
+   colour strips beside a heatmap), and `dendrogram`. Plus `orientation:
+   horizontal|vertical` — a count plot on a row axis is horizontal, which v1's
+   bar renderer cannot do.
+6. **Colour-scale kind on the heatmap**: `sequential` vs `diverging` with a
+   neutral midpoint. A z-scored expression heatmap is diverging around 0, and
+   rendering it with v1's single-hue ramp gets the look materially wrong.
+7. **A colorbar block** (`show`, `loc`, `label`) and **figure-level legend
+   placement** (outside right / below) — in a composite the legend usually
+   belongs to the figure, not to a panel.
+8. **Per-panel `data_hints`, plus distribution shape for the new kinds**:
+   composition needs `even | dominant_one | long_tail`, counts need
+   `uniform | long_tail`. Still shape-level only.
+
+### Two constraints that get *sharper* for composites, not looser
+
+- **Row labels are the leak vector.** For a composite, the natural instinct is
+  to write the real phenotype names into the spec. For an `own` (unpublished)
+  figure, the *set and ordering* of phenotypes can itself be the finding.
+  Default to synthetic labels (`Phenotype A…N`); allow real `category_labels`
+  only on explicit opt-in, and warn on `own` figures. Likewise the composition
+  fractions and counts **are** the result in most of these papers — they must
+  stay synthetic, which is what keeps `data_hints` shape-level by design.
+- **Composition-cloning risk.** A faithful panel-by-panel reproduction of a
+  specific published composite edges toward copying its "selection and
+  arrangement" — the one copyright flank a style card is supposed to close. So
+  v2 should offer a vocabulary of common layout *idioms*, and the capture copy
+  should steer toward "a heatmap with a composition bar beside it" rather than
+  "panel-for-panel, this exact figure".
+
+### Sketch
+
+```json
+{
+  "spec_version": 2,
+  "domains": { "phenotype": { "n_categories": 12, "order": "clustered" } },
+  "palettes": { "region": ["#0f8f8b", "#b4791a", "#6a5cd8", "#c23c86"] },
+  "layout":  { "rows": 1, "cols": 3, "width_ratios": [3, 1, 1], "gap": 0.04,
+               "share_y": "$phenotype" },
+  "panels": [
+    { "kind": "heatmap", "rows": "$phenotype", "position": [0, 0],
+      "scale": { "kind": "diverging", "midpoint": 0 },
+      "colorbar": { "show": true, "loc": "right", "label": "z-score" },
+      "labels": { "rows": true } },
+    { "kind": "stacked_bar", "rows": "$phenotype", "position": [0, 1],
+      "mode": "percent", "orientation": "horizontal", "palette": "$region",
+      "labels": { "rows": false },
+      "data_hints": { "composition": "dominant_one" } },
+    { "kind": "bar", "rows": "$phenotype", "position": [0, 2],
+      "orientation": "horizontal", "axes": { "x_scale": "log" },
+      "labels": { "rows": false },
+      "data_hints": { "distribution": "long_tail" } }
+  ],
+  "legend": { "mode": "figure", "loc": "below" },
+  "notes": "Rows ordered by clustering; ticks only on the heatmap; hairline panel gaps."
+}
+```
+
+v1 specs stay valid (`spec_version: 1` keeps the single-panel path); the
+renderer grows a GridSpec path for v2. Seeding stays deterministic by deriving
+each panel's RNG from `spec_seed(spec)` + panel index, so a composite still
+re-renders byte-identically.
 
 ## Backlog
 

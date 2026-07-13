@@ -31,6 +31,9 @@ _MARKER = {
     "x": "X",
 }
 _NOISE = {"none": 0.0, "low": 0.02, "medium": 0.05, "high": 0.12}
+# "step" holds each value until the next x — the staircase that makes a
+# Kaplan-Meier curve or an empirical CDF legible as such.
+_DRAWSTYLE = {"linear": "default", "step": "steps-post"}
 _INK = "#222222"
 
 
@@ -76,6 +79,10 @@ def _draw_line(ax, spec: dict, rng) -> None:
     for i, s in enumerate(spec["series"]):
         y = _curve(hints["trend"], t, i) + rng.normal(0.0, sigma, n)
         y = np.clip(y, 0.02, None)  # keep a log y-axis renderable
+        if s["drawstyle"] == "step":
+            # A staircase reads as a survival/CDF curve only if it's monotone —
+            # noise must dent the step heights, never make the line go back up.
+            y = np.minimum.accumulate(y) if hints["trend"] != "rising" else np.maximum.accumulate(y)
         ax.plot(
             x,
             y,
@@ -83,6 +90,7 @@ def _draw_line(ax, spec: dict, rng) -> None:
             linewidth=s["line_width"],
             marker=_MARKER[s["marker"]],
             markersize=4.0 + s["line_width"],
+            drawstyle=_DRAWSTYLE[s["drawstyle"]],
             label=f"series {_letter(i)}",
         )
     ax.set_xlabel("x")
