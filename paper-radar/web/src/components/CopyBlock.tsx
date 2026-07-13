@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -21,12 +21,17 @@ export function CopyBlock({
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  // Copy-then-navigate is the expected flow here (you copy a command and leave for
+  // the terminal), so the reset timer routinely outlives the component.
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard blocked (insecure origin, denied permission) — the text is on
       // screen and selectable, so the user can still copy it by hand.
@@ -36,7 +41,7 @@ export function CopyBlock({
   return (
     <div
       className={cn(
-        "group relative rounded-control border border-border bg-bg font-mono text-xs",
+        "relative rounded-control border border-border bg-bg font-mono text-xs",
         className,
       )}
     >

@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { Check, ChevronRight, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
 
 import { CopyBlock } from "@/components/CopyBlock";
 import { cn } from "@/lib/utils";
@@ -24,9 +24,12 @@ const CLIENTS: { id: Client; label: string }[] = [
   { id: "desktop", label: "Claude Desktop" },
 ];
 
+type Auth = "password" | "token";
+
 export default function Connect() {
   const { team } = useAppContext();
   const [client, setClient] = useState<Client>("code");
+  const [auth, setAuth] = useState<Auth>("password");
 
   // Claude Code runs from the repo, so a relative --directory resolves. Claude
   // Desktop does not, so it needs an absolute path or the server won't spawn.
@@ -42,9 +45,17 @@ export default function Connect() {
   }
 }`;
 
-  const envFile = `ATLAS_EMAIL=you@your-lab.org
+  // Two credential paths, and lab.py checks ATLAS_TOKEN *first*. A token is a
+  // scoped Supabase JWT and keeps your password off disk, but it expires and the
+  // stdio server has no refresh token to renew it with — so it's the safer choice
+  // for a shared machine and the password is the one that keeps working. Offer both
+  // and say which trade-off you're taking, rather than quietly emitting a password.
+  const envPassword = `ATLAS_EMAIL=you@your-lab.org
 ATLAS_PASSWORD=your-atlas-password
 ATLAS_TEAM_ID=${team.id}`;
+  const envToken = `ATLAS_TOKEN=your-supabase-access-token
+ATLAS_TEAM_ID=${team.id}`;
+  const envFile = auth === "password" ? envPassword : envToken;
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
@@ -117,12 +128,64 @@ ATLAS_TEAM_ID=${team.id}`;
       <Step n={3} title="Add your lab credentials">
         <p className="mb-2.5 text-sm text-muted">
           In <Code>paper-radar/api/.env</Code> — gitignored, and read by the server directly, so you
-          never paste a password into a Claude config file. <b className="text-fg">Your own login
+          never paste a credential into a Claude config file. <b className="text-fg">Your own login
           scopes the access</b>: Claude sees exactly what you see, and nothing from other labs.
         </p>
+
+        <div className="mb-2.5 flex gap-1.5">
+          {(
+            [
+              { id: "password", label: "Password" },
+              { id: "token", label: "Access token" },
+            ] as const
+          ).map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              aria-pressed={auth === a.id}
+              onClick={() => setAuth(a.id)}
+              className={cn(
+                "rounded-control border px-2.5 py-1 text-xs font-medium transition",
+                auth === a.id
+                  ? "border-accent bg-accent-weak text-accent"
+                  : "border-border text-muted hover:text-fg",
+              )}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+
+        <p className="mb-2.5 text-xs leading-relaxed text-faint">
+          {auth === "password" ? (
+            <>
+              Simplest, and it keeps working — the server signs in and renews itself. It does mean
+              your account password sits in a file on disk.{" "}
+              <b className="text-muted">On a shared or managed machine, use an access token instead.</b>
+            </>
+          ) : (
+            <>
+              Keeps your password off disk. A token is a Supabase access token (JWT) — the server
+              prefers it when set.{" "}
+              <b className="text-muted">
+                It expires, and the local server has no refresh token, so you’ll re-paste it
+                periodically.
+              </b>
+            </>
+          )}
+        </p>
+
         <CopyBlock value={envFile} label="Copy .env">
-          <span className="text-muted">ATLAS_EMAIL=</span>you@your-lab.org{"\n"}
-          <span className="text-muted">ATLAS_PASSWORD=</span>your-atlas-password{"\n"}
+          {auth === "password" ? (
+            <>
+              <span className="text-muted">ATLAS_EMAIL=</span>you@your-lab.org{"\n"}
+              <span className="text-muted">ATLAS_PASSWORD=</span>your-atlas-password{"\n"}
+            </>
+          ) : (
+            <>
+              <span className="text-muted">ATLAS_TOKEN=</span>your-supabase-access-token{"\n"}
+            </>
+          )}
           <span className="text-muted">ATLAS_TEAM_ID=</span>
           <span className="text-accent">{team.id}</span>{" "}
           <span className="text-faint"># {team.name} — filled in for you</span>
@@ -155,20 +218,20 @@ ATLAS_TEAM_ID=${team.id}`;
           What Claude can do with {team.name}
         </h2>
         <ul className="flex flex-col gap-2">
-          <Perm ok>
+          <Perm kind="allow">
             Read papers your lab has posted — titles, abstracts, tags, venues, DOIs
           </Perm>
-          <Perm ok>Read comments and reactions — the signal your lab’s taste is built from</Perm>
-          <Perm ok>
+          <Perm kind="allow">Read comments and reactions — the signal your lab’s taste is built from</Perm>
+          <Perm kind="allow">
             Read the mood board and derive your palette + a matplotlib style sheet
           </Perm>
-          <Perm warn>
+          <Perm kind="write">
             <b className="text-fg">Post a paper</b> into the lab, optionally with a comment that
             @-mentions a teammate. This <b className="text-fg">writes to the shared lab</b> — it
             previews by default and only writes when you confirm.
           </Perm>
-          <Perm no>Anything in another lab — papers, comments, figures</Perm>
-          <Perm no>Delete or edit existing papers, comments, or reactions</Perm>
+          <Perm kind="deny">Anything in another lab — papers, comments, figures</Perm>
+          <Perm kind="deny">Delete or edit existing papers, comments, or reactions</Perm>
         </ul>
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
@@ -234,25 +297,25 @@ function Step({
   );
 }
 
-function Perm({
-  children,
-  ok,
-  warn,
-  no,
-}: {
-  children: ReactNode;
-  ok?: boolean;
-  warn?: boolean;
-  no?: boolean;
-}) {
+/**
+ * One capability. A single `kind` rather than three booleans, so `ok + no` is not
+ * representable and the icon, its colour, and the text colour all derive from one
+ * source. `write` gets a genuine warning glyph — the one dangerous capability here
+ * (Claude posting into the shared lab) must not rest on colour alone to be noticed.
+ */
+function Perm({ kind, children }: { kind: "allow" | "write" | "deny"; children: ReactNode }) {
+  const icon = {
+    allow: <Check size={15} className="text-accent" />,
+    write: <AlertTriangle size={15} className="text-danger" />,
+    deny: <X size={15} className="text-faint" />,
+  }[kind];
+
   return (
     <li className="flex gap-2.5 text-sm">
-      <span className="mt-0.5 shrink-0">
-        {ok && <Check size={15} className="text-accent" />}
-        {warn && <ChevronRight size={15} className="text-danger" />}
-        {no && <X size={15} className="text-faint" />}
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span className={cn("leading-relaxed", kind === "deny" ? "text-faint" : "text-muted")}>
+        {children}
       </span>
-      <span className={cn("leading-relaxed", no ? "text-faint" : "text-muted")}>{children}</span>
     </li>
   );
 }

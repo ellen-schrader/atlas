@@ -9,8 +9,8 @@ import {
   LogOut,
   Map as MapIcon,
   Menu,
-  Sparkles,
   Settings as SettingsIcon,
+  Sparkles,
   Users,
   X,
 } from "lucide-react";

@@ -7,12 +7,12 @@ import { useSession } from "@/hooks/useSession";
 import Dashboard from "@/routes/Dashboard";
 import Layout from "@/routes/Layout";
 import Login from "@/routes/Login";
+import Connect from "@/routes/Connect";
 import MapView from "@/routes/Map";
 import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
 import Papers from "@/routes/Papers";
 import ReadingList from "@/routes/ReadingList";
-import Connect from "@/routes/Connect";
 import Settings from "@/routes/Settings";
 
 function Center({ children }: { children: ReactNode }) {
