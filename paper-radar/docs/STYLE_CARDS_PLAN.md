@@ -79,7 +79,7 @@ https://claude.ai/code/artifact/a42e0cc4-b28a-448f-8422-69c53b09756a
   `spec.py`/`render.py` into a module both `atlas_mcp` and `api/` import, and a
   plain consent line (the image goes to Anthropic — matters for own figures).
 
-## Spec v2 — composite figures (design, not yet built)
+## Spec v2 — composite figures (BUILT)
 
 The v1 spec describes **one panel**. The figures this lab actually publishes are
 often composites: a heatmap of phenotype × marker, a **percent-stacked bar** of
@@ -105,9 +105,11 @@ What v2 has to add, in rough order of how load-bearing it is:
    v2 needs `palettes: {region: [...], lineage: [...]}` with panels referencing
    a palette **by name**, so the same category is the same colour everywhere
    (and in the legend).
-3. **A layout block**: `layout: {rows, cols, width_ratios, height_ratios, gap,
-   share_y: "$phenotype"}` → a matplotlib GridSpec. Width ratios are a genuine
-   style fact of these figures (a wide heatmap, a narrow bar strip).
+3. **A layout block**: `layout: {rows, cols, width_ratios, height_ratios, gap}`
+   → a matplotlib GridSpec. Width ratios are a genuine style fact of these
+   figures (a wide heatmap, a narrow bar strip). Panels declare the shared axis
+   through their own `rows: <domain>`; a separate `share_y` would say the same
+   thing twice and could only ever contradict it.
 4. **`panels: [...]`** — each entry a v1-shaped chart spec plus `kind`, grid
    `position`/`span`, and per-panel `ticks`/`labels` visibility. "Row labels on
    the leftmost panel only, ticks hidden elsewhere" is exactly the kind of thing
@@ -150,8 +152,7 @@ What v2 has to add, in rough order of how load-bearing it is:
   "spec_version": 2,
   "domains": { "phenotype": { "n_categories": 12, "order": "clustered" } },
   "palettes": { "region": ["#0f8f8b", "#b4791a", "#6a5cd8", "#c23c86"] },
-  "layout":  { "rows": 1, "cols": 3, "width_ratios": [3, 1, 1], "gap": 0.04,
-               "share_y": "$phenotype" },
+  "layout":  { "rows": 1, "cols": 3, "width_ratios": [3, 1, 1], "gap": 0.04 },
   "panels": [
     { "kind": "heatmap", "rows": "$phenotype", "position": [0, 0],
       "scale": { "kind": "diverging", "midpoint": 0 },
@@ -171,10 +172,48 @@ What v2 has to add, in rough order of how load-bearing it is:
 }
 ```
 
-v1 specs stay valid (`spec_version: 1` keeps the single-panel path); the
-renderer grows a GridSpec path for v2. Seeding stays deterministic by deriving
-each panel's RNG from `spec_seed(spec)` + panel index, so a composite still
-re-renders byte-identically.
+### What shipped
+
+`atlas_mcp/composite.py`, routed from `validate_spec`/`render` on `spec_version`
+(v1 specs already on the board keep the v1 path untouched, forever).
+
+The load-bearing implementation decision, and the one the design under-stated:
+panels must share a synthetic **dataset**, not merely an axis.
+
+    one domain  ->  one synthetic dataset  ->  every panel projects it
+
+`_Domain` draws the abundance, the composition and the expression matrix once,
+decides the row order once, and hands the same rows to every bound panel. If each
+panel generated its own categories, row 3 of the heatmap would not be row 3 of
+the composition bar — the figure would be a lie, and it would *look* fine. That
+invariant is what `test_every_panel_sees_the_same_rows_in_the_same_order` pins,
+because no rendering test can catch it.
+
+Also true of the implementation:
+
+- The expression matrix is built from a few latent programmes, so the rows
+  genuinely cluster — otherwise `order: clustered` and the dendrogram would be
+  decoration over noise.
+- **One UPGMA linkage produces BOTH the clustered row order and the tree drawn
+  beside it.** They are the same claim about the same data, so they must not be
+  two algorithms that merely happen to agree (they were, and the tree could
+  bracket rows the ordering never grouped). A dendrogram's height *is* distance:
+  tight clusters join early on short branches, an outlier joins last on a long
+  one. Evenly-spaced merges make a perfectly balanced comb, which no real data
+  produces — it is the detail a domain reader clocks as fake. Tests pin that the
+  tree is a valid ultrametric (n-1 merges, non-decreasing heights) and that its
+  leaf order is planar, i.e. every merged cluster is contiguous in the row order,
+  so no branch has to cross another.
+- Row panels are aligned by pinning identical limits, NOT by matplotlib's
+  `sharey`: shared axes share one tick locator, so the panel that hides its row
+  ticks would wipe the labels off the panel that shows them.
+- Composites lay out with matplotlib's `constrained` engine and put the figure
+  legend `outside`; `tight_layout` cannot place a colorbar plus a figure legend
+  (it says so, and it is right).
+- The CVD verdict checks each named *categorical* palette and skips a heatmap's
+  ramp — a pairwise check says nothing about a continuous scale.
+- Real category labels are opt-in and echoed in the confirm preview, so a human
+  approving the write sees exactly which phenotype names would be stored.
 
 ## Backlog
 

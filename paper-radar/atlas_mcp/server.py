@@ -744,6 +744,53 @@ def get_moodboard_style(
     )
 
 
+def _spec_summary(norm: dict) -> str:
+    """One line describing what a spec will draw — v1 or v2."""
+    if card_spec.is_composite(norm):
+        kinds = ", ".join(p["kind"] for p in norm["panels"])
+        doms = ", ".join(
+            f"{n} x{c['n_categories']}" for n, c in norm["domains"].items()
+        )
+        return (
+            f"composite: {len(norm['panels'])} panels ({kinds})"
+            + (f" over shared rows [{doms}]" if doms else "")
+        )
+    return f"{norm['chart']['type']} chart, {len(norm['series'])} series"
+
+
+def _spec_cvd(norm: dict) -> tuple[bool, str]:
+    """The CVD verdict for a whole spec.
+
+    A composite carries several palettes with different jobs, so the question is
+    not "which palettes are declared" but **which colours a reader has to tell
+    apart**. Those are the palettes actually used by a CATEGORICAL panel — named
+    or inline. Checking only the named ones let an inline palette of four
+    near-identical blues be stamped "safe"; skipping any palette a heatmap touched
+    let a palette used as BOTH a ramp and a category set escape entirely.
+    """
+    if not card_spec.is_composite(norm):
+        return _cvd_verdict(norm["palette"], norm["chart"]["type"])
+
+    checked: dict[str, list[str]] = {}
+    for p in norm["panels"]:
+        if p["kind"] == "heatmap":
+            continue  # this USE of the palette is a ramp; a pairwise check says nothing
+        pal = p.get("palette")
+        if isinstance(pal, str):
+            checked.setdefault(pal, norm["palettes"][pal])
+        elif isinstance(pal, list) and pal:
+            checked.setdefault(f"{p['kind']} @{p['position']}", pal)
+    if not checked:
+        return True, "no categorical palette to check"
+
+    verdicts, all_safe = [], True
+    for name in sorted(checked):  # sorted: dict order is not stable across jsonb
+        safe, msg = _cvd_verdict(checked[name])
+        all_safe = all_safe and safe
+        verdicts.append(f"{name}: {msg}")
+    return all_safe, "; ".join(verdicts)
+
+
 def _cvd_verdict(palette: list[str], chart_type: str = "line") -> tuple[bool, str]:
     """Whether a palette survives all three dichromacies, with a short verdict.
 
@@ -806,6 +853,30 @@ def preview_plot_spec(spec: dict, team_id: str | None = None) -> list:
                          noise: none|low|medium|high} — the SHAPE of the
                          synthetic data, never real values.
             notes: free text for anything the vocabulary can't carry.
+
+            COMPOSITE figures (spec_version 2) — several panels over a shared
+            axis, e.g. a heatmap of phenotype x marker beside a composition bar
+            and an abundance count plot. Use when the figure is more than one
+            panel. Instead of chart/series/palette, give:
+            domains: {<name>: {n_categories: 2-40, order: fixed|by_value|clustered,
+                      labels: [...]}} — the SHARED ROW AXIS. Every row panel binds
+                      to it, so the rows line up. `labels` is optional and stores
+                      real category names: leave it out (synthetic names are used)
+                      unless the user wants them, since for an unpublished figure
+                      the set of phenotypes can itself be the finding.
+            palettes: {<name>: ["#rrggbb", …]} — named, so a category keeps its
+                      colour in every panel and in the legend.
+            layout: {rows, cols, width_ratios, height_ratios, gap}
+            panels: [{kind: line|scatter|bar|histogram|heatmap|box|stacked_bar|
+                            annotation_track|dendrogram,
+                      position: [row, col], rows: <domain>, palette: <name or list>,
+                      columns: <heatmap width>, mode: grouped|stacked|percent,
+                      orientation: vertical|horizontal,
+                      scale: {kind: sequential|diverging, midpoint},
+                      colorbar: {show, label}, labels: {rows, values}, title,
+                      axes: {...}, data_hints: {composition: even|dominant_one|
+                            long_tail, distribution: uniform|long_tail, …}}]
+            legend: {mode: figure|panel|none, loc: right|below}
         team_id: Which lab, if you belong to more than one.
     """
     try:
@@ -825,11 +896,10 @@ def preview_plot_spec(spec: dict, team_id: str | None = None) -> list:
         return [f"Error: {exc}"]
     except Exception as exc:  # noqa: BLE001 — renderer failure → clean tool error
         return [f"Error: could not render the spec: {exc}"]
-    _safe, verdict = _cvd_verdict(norm["palette"], norm["chart"]["type"])
+    _safe, verdict = _spec_cvd(norm)
     text = (
-        f"Spec is valid: {norm['chart']['type']} chart, {len(norm['series'])} series, "
-        f"renders at {w}×{h}px with synthetic data; {verdict}. "
-        "Nothing saved — add_plot_to_moodboard stores it as a style card."
+        f"Spec is valid — {_spec_summary(norm)}; renders at {w}×{h}px with synthetic "
+        f"data; {verdict}. Nothing saved — add_plot_to_moodboard stores it as a style card."
     )
     return [text, Image(data=data, format=mime.split("/")[-1])]
 
@@ -896,14 +966,31 @@ async def add_plot_to_moodboard(
     except lab.LabError as exc:
         return f"Error: {exc}"
 
-    safe, verdict = _cvd_verdict(norm["palette"], norm["chart"]["type"])
+    safe, verdict = _spec_cvd(norm)
     norm["cvd"] = {"checked": True, "safe": safe}
 
-    detail = [
-        title,
-        f"chart: {norm['chart']['type']} · {len(norm['series'])} series",
-        f"palette: {', '.join(norm['palette'])}",
-    ]
+    detail = [title, _spec_summary(norm)]
+    if card_spec.is_composite(norm):
+        for name, colours in norm["palettes"].items():
+            detail.append(f"palette {name}: {', '.join(colours)}")
+        # Free text is the leak vector for a composite: for an unpublished figure
+        # the SET of phenotypes — or a panel title, or a colorbar label — can be the
+        # finding, and all of it is both stored and DRAWN onto the shared board
+        # image. Surface every such string, so the human approving the write sees
+        # exactly what would be persisted.
+        for dname, cfg in norm["domains"].items():
+            if cfg.get("labels"):
+                detail.append(f"{dname} labels: {', '.join(cfg['labels'])}")
+        text_bits = [p["title"] for p in norm["panels"] if p.get("title")]
+        text_bits += [
+            p["colorbar"]["label"]
+            for p in norm["panels"]
+            if p.get("colorbar", {}).get("label")
+        ]
+        if text_bits:
+            detail.append("panel text: " + " · ".join(text_bits))
+    else:
+        detail.append(f"palette: {', '.join(norm['palette'])}")
     if category.strip():
         detail.append(f"category: {category.strip()}")
     if attribution:

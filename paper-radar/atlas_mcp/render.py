@@ -58,6 +58,8 @@ _NOISE = {"none": 0.0, "low": 0.02, "medium": 0.05, "high": 0.12}
 # Kaplan-Meier curve or an empirical CDF legible as such.
 _DRAWSTYLE = {"linear": "default", "step": "steps-post"}
 _INK = "#222222"
+# A composite's axes live per panel; these are the figure-wide fallbacks.
+SECTION_DEFAULTS_AXES = card_spec.SECTION_DEFAULTS["axes"]
 
 
 def _letter(i: int) -> str:
@@ -254,10 +256,25 @@ def _draw_box(fig, ax, spec: dict, rng) -> None:
 def _rc(spec: dict) -> dict:
     """rcParams for the spec — white scientific ground, neutral ink, the spec's
     palette as the colour cycle. The font is matplotlib's bundled DejaVu Sans so
-    output is identical across machines."""
+    output is identical across machines.
+
+    A composite (v2) carries axes and palettes PER PANEL, so the figure-wide
+    rcParams take the ink/type defaults and let each panel set its own.
+    """
     from cycler import cycler
 
-    axes_s, typo = spec["axes"], spec["typography"]
+    typo = spec["typography"]
+    if card_spec.is_composite(spec):
+        axes_s = SECTION_DEFAULTS_AXES
+        # A FIXED fallback cycle, never "the first named palette": dict order is not
+        # stable across a jsonb round-trip (Postgres sorts object keys), so picking a
+        # palette by position would repaint the figure after a save/reload. Each panel
+        # sets its own cycle from its own palette (composite.draw), so this is only
+        # the ground state for a panel that names none.
+        palette = list(card_spec.DEFAULT_PALETTE)
+    else:
+        axes_s = spec["axes"]
+        palette = spec["palette"]
     open_spines = axes_s["spines"] == "open"
     rc = {
         "figure.facecolor": "white",
@@ -277,7 +294,7 @@ def _rc(spec: dict) -> dict:
         "font.size": typo["base_size"],
         "axes.titlesize": typo["base_size"] + 2,
         "axes.titleweight": typo["title_weight"],
-        "axes.prop_cycle": cycler("color", list(spec["palette"])),
+        "axes.prop_cycle": cycler("color", list(palette)),
         "axes.grid": axes_s["grid"] != "none",
         "grid.color": "#dddddd",
         "grid.linewidth": 0.6,
@@ -345,6 +362,7 @@ def render(raw_spec: dict, seed: int) -> tuple[bytes, int, int]:
     rng = np.random.default_rng(seed)
     w_in, h_in = spec["chart"]["aspect"]
     ctype = spec["chart"]["type"]
+    composite = card_spec.is_composite(spec)
     buf = io.BytesIO()
 
     # Start from matplotlib's DEFAULTS, not the ambient rcParams: a developer's
@@ -354,16 +372,28 @@ def render(raw_spec: dict, seed: int) -> tuple[bytes, int, int]:
     # we are already on Agg and switching it here would re-initialise it.
     base = {k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}
     with _RENDER_LOCK, plt.rc_context({**base, **_rc(spec)}):
-        fig, ax = plt.subplots(figsize=(w_in, h_in), dpi=DPI)
+        if composite:
+            # `constrained`, not tight_layout: a composite has colorbar axes and a
+            # figure-level legend, which tight_layout cannot lay out (it warns that
+            # "results might be incorrect" — and they are).
+            fig = plt.figure(figsize=(w_in, h_in), dpi=DPI, layout="constrained")
+        else:
+            fig, ax = plt.subplots(figsize=(w_in, h_in), dpi=DPI)
         try:
-            # Table, not an if/elif chain ending in a fallback: an unhandled
-            # chart type must raise here, not quietly render as some other chart
-            # and get stored as the style the user approved.
-            _DRAW[ctype](fig, ax, spec, rng)
-            if ctype != "heatmap":
-                _apply_scales(ax, spec)
-                _finish_legend(ax, spec, ctype)
-            fig.tight_layout()
+            if composite:
+                from . import composite as comp
+
+                comp.draw(fig, spec, rng)
+            else:
+                # Table, not an if/elif chain ending in a fallback: an unhandled
+                # chart type must raise here, not quietly render as some other
+                # chart and get stored as the style the user approved.
+                _DRAW[ctype](fig, ax, spec, rng)
+                if ctype != "heatmap":
+                    _apply_scales(ax, spec)
+                    _finish_legend(ax, spec, ctype)
+            if not composite:
+                fig.tight_layout()
             # metadata: drop the Software chunk so bytes don't vary across
             # matplotlib versions — determinism is part of the contract.
             fig.savefig(buf, format="png", dpi=DPI, metadata={"Software": None})
