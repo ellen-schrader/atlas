@@ -192,6 +192,7 @@ export default function ReadingList() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search title or author…"
+              aria-label="Search reading list by title or author"
               className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
             />
             {query && (
@@ -266,7 +267,7 @@ export default function ReadingList() {
         <>
           {filtering && (
             <p className="-mt-2 text-xs text-faint">
-              {shown.length} of {total} shown
+              {shown.length} of {items.length} shown
               <button onClick={clearFilters} className="ml-2 font-medium text-accent hover:underline">
                 Clear
               </button>
