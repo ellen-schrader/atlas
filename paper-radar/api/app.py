@@ -656,30 +656,39 @@ def _last_author_lab(authors: list) -> str | None:
     return authors[-1] if authors else None
 
 
+# PostgREST caps a single response at max_rows (supabase/config.toml: 1000). Page
+# through so team-wide aggregates see every row instead of a silent first-1000
+# slice once a lab grows past that.
+_PAGE_SIZE = 1000
+
+
+def _fetch_all(make_query) -> list[dict]:
+    """Collect every row of a PostgREST select, one page at a time. `make_query`
+    returns a fresh (unexecuted) query builder each call and must impose a stable
+    order so pages don't overlap or skip."""
+    out: list[dict] = []
+    start = 0
+    while True:
+        page = make_query().range(start, start + _PAGE_SIZE - 1).execute().data or []
+        out.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return out
+        start += _PAGE_SIZE
+
+
 def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
     """(reactions, comments) per paper for the team, RLS-scoped. {} if no ids."""
     if not paper_ids:
         return {}
     counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
-    # Filter to the loaded papers (not the whole team) — fewer rows, and avoids
-    # a truncated count if a busy lab hits PostgREST's max-rows.
-    rx = (
-        uc.table("reactions")
-        .select("paper_id")
-        .eq("team_id", team_id)
-        .in_("paper_id", paper_ids)
-        .execute()
-        .data
-        or []
+    # Count every reaction/comment in the lab (paged, so a busy lab isn't capped at
+    # max-rows), tallying only the papers we're showing. Counting team-wide also
+    # avoids a huge paper_id `in_` list once the lab has more than a page of papers.
+    rx = _fetch_all(
+        lambda: uc.table("reactions").select("paper_id").eq("team_id", team_id).order("id")
     )
-    cm = (
-        uc.table("comments")
-        .select("paper_id")
-        .eq("team_id", team_id)
-        .in_("paper_id", paper_ids)
-        .execute()
-        .data
-        or []
+    cm = _fetch_all(
+        lambda: uc.table("comments").select("paper_id").eq("team_id", team_id).order("id")
     )
     for r in rx:
         if r["paper_id"] in counts:
@@ -781,8 +790,8 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
-    rows = (
-        uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).execute().data or []
+    rows = _fetch_all(
+        lambda: uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).order("id")
     )
     return _build_overview(uc, team_id, rows)
 
