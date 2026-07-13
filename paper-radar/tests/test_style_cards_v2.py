@@ -210,6 +210,45 @@ def test_composite_render_is_deterministic():
     assert a != c
 
 
+def test_render_survives_jsonb_key_reordering():
+    """Postgres jsonb does NOT preserve object key order (it sorts by key length,
+    then bytewise), so a spec read back from `figures.spec` hands us its domains
+    in a different order than we wrote. Each domain consumes draws from the shared
+    rng, so an order-dependent loop would re-render a DIFFERENT figure from the
+    same stored spec — silently breaking "the stored row reproduces the board
+    image". The renderer must be blind to key order.
+    """
+    two_domains = {
+        "spec_version": 2,
+        "chart": {"aspect": [6, 3.5]},
+        "domains": {
+            "zzz_phenotype": {"n_categories": 6, "order": "by_value"},
+            "b": {"n_categories": 5, "order": "fixed"},
+        },
+        "layout": {"rows": 1, "cols": 2},
+        "panels": [
+            {"kind": "heatmap", "position": [0, 0], "rows": "zzz_phenotype", "columns": 6},
+            {"kind": "bar", "position": [0, 1], "rows": "b", "orientation": "horizontal"},
+        ],
+    }
+    norm = card_spec.validate_spec(two_domains)
+    # exactly what jsonb does to the key order on the way back out
+    reordered = {
+        **norm,
+        "domains": dict(sorted(norm["domains"].items(), key=lambda kv: (len(kv[0]), kv[0]))),
+    }
+    assert list(reordered["domains"]) != list(norm["domains"]), "the fixture must reorder"
+
+    pytest.importorskip("matplotlib")
+    from atlas_mcp import render as card_render
+
+    seed = card_spec.spec_seed(norm)
+    assert seed == card_spec.spec_seed(reordered)  # the seed already sorts keys
+    a, _, _ = card_render.render(norm, seed)
+    b, _, _ = card_render.render(reordered, seed)
+    assert a == b, "a jsonb key reorder must not change the rendered figure"
+
+
 @pytest.mark.parametrize("kind", card_spec.PANEL_KINDS)
 def test_every_panel_kind_renders(kind):
     rows_bound = kind in card_spec.ROW_KINDS

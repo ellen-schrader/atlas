@@ -275,7 +275,13 @@ def draw(fig, spec: dict, rng) -> None:
         if p.get("rows") and p["kind"] == "heatmap":
             cols_for[p["rows"]] = max(cols_for.get(p["rows"], 0), p.get("columns", 8))
     domains = {}
-    for name, cfg in spec["domains"].items():
+    # SORTED, not dict order: each domain consumes draws from the shared rng, so
+    # the iteration order decides the synthetic data. Postgres jsonb does NOT
+    # preserve object key order (it sorts by key length, then bytewise), so a spec
+    # read back from the DB hands us its domains in a different order than the one
+    # we wrote — and an unsorted loop would re-render a *different* figure from the
+    # same stored spec. Sorting makes the draw order canonical either way.
+    for name, cfg in sorted(spec["domains"].items()):
         hints = next(
             (p["data_hints"] for p in spec["panels"] if p.get("rows") == name),
             {"composition": "dominant_one", "distribution": "long_tail"},
