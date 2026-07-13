@@ -136,7 +136,7 @@ def _arxiv_id(url: str) -> str | None:
     return m.group("id") if m else None
 
 
-def _doi(text: str) -> str | None:
+def _doi(text: str, *, from_url: bool = True) -> str | None:
     """Extract a DOI from a URL or meta value.
 
     Publisher URLs often embed the DOI mid-path (e.g. ``/doi/10.1158/<suffix>/
@@ -147,9 +147,15 @@ def _doi(text: str) -> str | None:
     if not m:
         return None
     doi = re.split(r"[?#\s]", m.group(1))[0]
-    parts = doi.split("/")
-    if len(parts) > 2:
-        doi = "/".join(parts[:2])
+    # A DOI suffix may itself contain slashes (legacy Wiley/SICI DOIs). Only trim
+    # trailing path segments when parsing a publisher URL, where the extras are
+    # /pdf, /full, an internal id or a slug appended after the DOI — never for a
+    # bare DOI from a citation meta tag, where truncating would corrupt the DOI and
+    # can merge two distinct papers onto the same key.
+    if from_url:
+        parts = doi.split("/")
+        if len(parts) > 2:
+            doi = "/".join(parts[:2])
     return doi.rstrip(".,);]")
 
 
@@ -446,7 +452,7 @@ def parse_citation_html(html: str, url: str) -> PaperMetadata | None:
         )
     )
     doi_raw = first_of("citation_doi", "dc.identifier", "prism.doi")
-    doi = _doi(doi_raw) if doi_raw else None
+    doi = _doi(doi_raw, from_url=False) if doi_raw else None
     abstract = _clean_text(
         first_of("citation_abstract", "dc.description", "og:description", "description")
     )

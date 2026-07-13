@@ -145,9 +145,10 @@ def _store_names(
     """Persist theme names for this signature (replaces the team's trends rows)."""
     try:
         svc = service_client()
-        # Only clear prior *naming* rows (those carry a signature), so any other
-        # future use of the trends table for this team is left intact.
-        svc.table("trends").delete().eq("team_id", team_id).not_.is_("signature", "null").execute()
+        # Replace only THIS signature's rows. Deleting every signature-carrying row
+        # made the lab overview and each map's theme names wipe each other, forcing
+        # a fresh (and differently-worded) Claude call on every lab<->map switch.
+        svc.table("trends").delete().eq("team_id", team_id).eq("signature", signature).execute()
         svc.table("trends").insert(
             [
                 {
