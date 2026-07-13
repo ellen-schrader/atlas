@@ -3,6 +3,23 @@ import type { OverviewData, Recommendation, SemanticHit } from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
+/** Error from the Atlas API. `status` is the HTTP code; undefined means the
+ *  service was unreachable (network failure / CORS / machine cold-booting). */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
+
+/** Worth retrying: unreachable or 5xx — the shapes a cold-booting machine
+ *  produces (connection refused, proxy 502s). 4xx never heals on retry. */
+export function isTransientApiError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === undefined || error.status >= 500);
+}
+
 export interface PostResult {
   post_id: string;
   paper_id: string;
@@ -31,7 +48,7 @@ export async function postPaper(url: string, teamId: string): Promise<PostResult
   } catch {
     // fetch throws on network failure / CORS / service down — give the user
     // something actionable rather than the raw "Failed to fetch".
-    throw new Error("Couldn’t reach the paper service. Check your connection and try again.");
+    throw new ApiError("Couldn’t reach the paper service. Check your connection and try again.");
   }
   if (!res.ok) {
     let detail = `Couldn’t post that paper (error ${res.status}).`;
@@ -40,7 +57,7 @@ export async function postPaper(url: string, teamId: string): Promise<PostResult
     } catch {
       // non-JSON error body
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json();
 }
@@ -59,7 +76,7 @@ async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T
       },
     });
   } catch {
-    throw new Error("Couldn’t reach the paper service. Check your connection and try again.");
+    throw new ApiError("Couldn’t reach the paper service. Check your connection and try again.");
   }
   if (!res.ok) {
     let detail = `Request failed (error ${res.status}).`;
@@ -68,7 +85,7 @@ async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T
     } catch {
       // non-JSON error body
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json();
 }
