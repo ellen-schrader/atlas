@@ -11,7 +11,6 @@ pytest.importorskip("supabase")
 from atlas_mcp import lab  # noqa: E402
 from paper_radar.ingest import url_guard  # noqa: E402
 
-
 # --- URL hygiene (SSRF guard) ----------------------------------------------
 
 
@@ -23,7 +22,13 @@ from paper_radar.ingest import url_guard  # noqa: E402
         "https://doi.org/10.1016/j.cell.2020.01.001",
     ],
 )
-def test_validate_share_url_accepts_public_http(url):
+def test_validate_share_url_accepts_public_http(url, monkeypatch):
+    # validate now resolves DNS (the check moved into url_guard), so stub the resolver:
+    # otherwise this nominally-offline test hits the network and a sinkhole resolver
+    # (Pi-hole, split-horizon) could map these names to an internal IP and fail it.
+    monkeypatch.setattr(
+        url_guard.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))]
+    )
     assert lab.validate_share_url(url) == url
 
 
@@ -41,7 +46,10 @@ def test_validate_share_url_accepts_public_http(url):
         "http://169.254.169.254/latest/meta-data",  # cloud metadata endpoint
         "http://192.168.1.1/a",
         "http://[::1]/a",
+        "http://100.100.100.200/",  # CGNAT — was a bypass
+        "http://239.255.255.250/",  # multicast — was a bypass
         "https://svc.internal/x",
+        "http://[::1",  # malformed → LabError, not a raw ValueError to the MCP tool
     ],
 )
 def test_validate_share_url_blocks_unsafe(url):

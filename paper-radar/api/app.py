@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections import Counter
 from dataclasses import asdict
@@ -211,32 +212,53 @@ class _PerUserRateLimiter:
 
     In-process, so it bounds one worker rather than the fleet — enough to stop a single
     caller looping an endpoint that makes an outbound request every time, which is what
-    /resolve does. If the API ever runs several workers in anger this wants a shared
-    store (Redis); as a single process it is honest about what it covers.
+    /resolve does. Multi-process (gunicorn -w N, or several Fly machines) multiplies the
+    effective cap by the process count; a fleet-wide limit wants a shared store (Redis).
+
+    FastAPI runs these sync endpoints in a threadpool, so `check` is called from several
+    threads at once. Without the lock the read-modify-write races (two callers both see
+    room and both append, defeating the cap) and the eviction rebuild can hit
+    "dictionary changed size during iteration"; the lock makes each check atomic.
     """
 
     def __init__(self, max_events: int, window_seconds: float) -> None:
         self.max_events = max_events
         self.window = window_seconds
         self._events: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
 
     def check(self, key: str) -> None:
         now = time.monotonic()
-        events = [t for t in self._events.get(key, []) if now - t < self.window]
-        if len(events) >= self.max_events:
-            raise HTTPException(status_code=429, detail="Too many lookups — give it a minute.")
-        events.append(now)
-        self._events[key] = events
-        # Don't let the map grow without bound as users come and go.
-        if len(self._events) > 10_000:
-            self._events = {
-                k: v for k, v in self._events.items() if v and now - v[-1] < self.window
-            }
+        with self._lock:
+            events = [t for t in self._events.get(key, []) if now - t < self.window]
+            if len(events) >= self.max_events:
+                raise HTTPException(status_code=429, detail="Too many lookups — give it a minute.")
+            events.append(now)
+            self._events[key] = events
+            # Don't let the map grow without bound as users come and go.
+            if len(self._events) > 10_000:
+                self._events = {
+                    k: v for k, v in self._events.items() if v and now - v[-1] < self.window
+                }
 
 
 # Someone adding papers by hand does a handful a minute. 30 is far above real use and
 # far below what would make the endpoint useful as a scanner.
 _resolve_limiter = _PerUserRateLimiter(max_events=30, window_seconds=60.0)
+
+
+def _validated_fetch_url(raw: str) -> str:
+    """Clean + SSRF-check a URL we're about to fetch, as a 400 on rejection.
+
+    `resolve=False` keeps this to the syntactic checks (scheme, literal internal IP,
+    internal name) for a fast, clean 400 — the DNS-resolution check runs again inside
+    `fetch_metadata` (which every fetch path shares), so a public name pointing at an
+    internal address is still caught there without resolving the host twice here.
+    """
+    try:
+        return _clean_url(url_guard.validate_public_url(raw, resolve=False))
+    except url_guard.BlockedUrl as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # --- helpers ---------------------------------------------------------------
@@ -440,13 +462,11 @@ def resolve(req: ResolveRequest, token: str = Depends(require_token)) -> Resolve
     user_id = get_user_id(token)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Validate before spending quota: a blocked/malformed URL never fetches, so it
+    # shouldn't cost the caller one of their 30/min. The limiter bounds outbound work.
+    url = _validated_fetch_url(req.url)
     _resolve_limiter.check(user_id)
-
-    try:
-        url = _clean_url(url_guard.validate_public_url(req.url))
-    except url_guard.BlockedUrl as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     meta = fetch_metadata(url, network=req.network)
     return _resolved(meta, url, _normalize_key(url))
 
@@ -463,22 +483,24 @@ def create_post(
     # every other lab sharing that paper can see.
     user_id = _require_member(token, req.team_id)
 
-    # Same SSRF sink as /resolve: with no `fields`, this resolves the URL server-side.
-    # Membership narrows who can reach it; it doesn't make the fetch safe.
-    try:
-        url = _clean_url(url_guard.validate_public_url(req.url))
-    except url_guard.BlockedUrl as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if req.fields is not None:
+        # The web dialog resolved first and posts back what the user approved: we store
+        # what they saw and never re-fetch (which would overwrite a hand-typed title
+        # with the empty record a bot-walled publisher returns). No outbound request, so
+        # no SSRF check and no rate limit — and crucially no server-side URL validation,
+        # so a hand-entered link the resolver couldn't reach (a bare DOI, a bot-walled
+        # publisher page) still posts.
+        url = _clean_url(req.url)
+        meta = PaperMetadata(url=url, **req.fields.model_dump())
+    else:
+        # No fields: this resolves the URL server-side — the same SSRF sink as /resolve,
+        # so it gets the same rate limit and validation. Membership narrows who can reach
+        # it; it doesn't make the fetch safe or free. Validate before the limiter, so a
+        # blocked URL doesn't spend quota.
+        url = _validated_fetch_url(req.url)
+        _resolve_limiter.check(user_id)
+        meta = fetch_metadata(url)
     url_norm = _normalize_key(url)
-    # The web dialog resolves first and posts back what the user approved, so we
-    # store what they saw — and never re-fetch (which would overwrite a hand-typed
-    # title with the empty record a bot-walled publisher returns). Clients that
-    # send no fields keep the original resolve-on-post behaviour.
-    meta = (
-        PaperMetadata(url=url, **req.fields.model_dump())
-        if req.fields is not None
-        else fetch_metadata(url)
-    )
     paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
     post_id, already = _create_post(token, req.team_id, paper_id, user_id, req.note)
 

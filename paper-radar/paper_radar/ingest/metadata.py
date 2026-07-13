@@ -82,7 +82,10 @@ def _get(url: str, *, browser: bool = False) -> bytes | None:
     ua = _BROWSER_UA if browser else _API_UA
     try:
         with url_guard.open_public_url(url, headers={"User-Agent": ua}, timeout=_TIMEOUT) as resp:
-            return resp.read(_MAX_HTML_BYTES) if browser else resp.read()
+            # Cap both branches: a single paper's metadata (arXiv Atom, Crossref JSON,
+            # a landing page) is well under 1 MB, and now that _get follows redirects a
+            # redirect to a multi-GB public stream would otherwise be read whole.
+            return resp.read(_MAX_HTML_BYTES)
     except (
         url_guard.BlockedUrl,
         urllib.error.URLError,

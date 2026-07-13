@@ -19,9 +19,11 @@ The **service-role key is server-side only** — it bypasses RLS. Never put it i
 ## Endpoints (phase 4)
 
 - `GET  /health` → `{"status": "ok"}`
-- `POST /resolve` `{ "url": "..." }` → resolved metadata (title, authors,
-  abstract, DOI, venue, year, keywords, source) + `url_norm`, the dedup key.
-  Reuses `ingest/metadata.py` and `ingest/pdf_extract.py` unchanged.
+- `POST /resolve` `{ "url": "..." }`, `Authorization: Bearer <jwt>` → resolved
+  metadata (title, authors, abstract, DOI, venue, year, keywords, source) +
+  `url_norm`, the dedup key. Reuses `ingest/metadata.py` and `ingest/pdf_extract.py`.
+  Makes the server fetch the URL, so it's authenticated, rate-limited, and
+  SSRF-guarded (`ingest/url_guard.py`); a non-public target is a `400`.
 - `POST /posts` `{ "url", "team_id", "note?" }`, `Authorization: Bearer <jwt>` →
   verifies the caller's Supabase token, upserts the global `papers` row
   (service role, dedup on DOI/`url_norm`), and inserts the `paper_post` **as the

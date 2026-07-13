@@ -25,28 +25,83 @@ def test_allows_public_http(monkeypatch, url):
     assert validate_public_url(url) == url
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "",
-        "ftp://host/x",
-        "file:///etc/passwd",
-        "javascript:alert(1)",
-        "http://localhost/x",
-        "http://foo.localhost/x",
-        "http://127.0.0.1/x",
-        "https://10.0.0.5/a",
-        "http://169.254.169.254/latest/meta-data",  # cloud metadata endpoint
-        "http://192.168.1.1/a",
-        "http://[::1]/a",
-        "http://0.0.0.0/a",
-        "https://svc.internal/x",
-        "https://x.example/" + "a" * 3000,  # over MAX_URL_LEN
-    ],
-)
+# These must be blocked by the STRING alone — no getaddrinfo — so validate_public_url
+# with resolve=False (the API layer's fast path) catches them too. Kept in one list so a
+# new blocked category can't be added to the resolving path but forgotten on the fast one.
+SYNTACTIC_BLOCKS = [
+    "",
+    "ftp://host/x",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "http://localhost/x",
+    "http://foo.localhost/x",
+    "http://localhost./x",  # trailing dot must not defeat the name filter
+    "http://127.0.0.1/x",
+    "https://10.0.0.5/a",
+    "http://169.254.169.254/latest/meta-data",  # cloud metadata endpoint
+    "http://169.254.169.254./",  # trailing dot on a literal IP
+    "http://192.168.1.1/a",
+    "http://[::1]/a",
+    "http://0.0.0.0/a",
+    "http://100.100.100.200/latest/meta-data/",  # CGNAT 100.64.0.0/10 — was a bypass
+    "http://[::ffff:100.100.100.200]/",  # IPv4-mapped CGNAT
+    "http://239.255.255.250/",  # SSDP multicast — was a bypass
+    "http://224.0.0.1/",  # all-hosts multicast
+    "http://[ff02::1]/",  # IPv6 link-local multicast
+    "https://svc.internal/x",
+    "https://svc.internal./x",  # trailing dot
+    "https://x.example/" + "a" * 3000,  # over MAX_URL_LEN
+    "http://[::1",  # malformed — must be BlockedUrl, not a raw ValueError
+    "http://a[b].com/x",  # malformed host
+]
+
+
+@pytest.mark.parametrize("url", SYNTACTIC_BLOCKS)
 def test_blocks_unsafe(url):
     with pytest.raises(BlockedUrl):
         validate_public_url(url)
+
+
+@pytest.mark.parametrize("url", SYNTACTIC_BLOCKS)
+def test_blocks_unsafe_without_dns_too(url):
+    """resolve=False (the API layer) must reject every syntactically-internal URL — and
+    must NOT touch the network to do it."""
+
+    def _no_dns(*_a, **_k):
+        raise AssertionError("resolve=False must not call getaddrinfo")
+
+    import paper_radar.ingest.url_guard as ug
+
+    orig, ug.socket.getaddrinfo = ug.socket.getaddrinfo, _no_dns
+    try:
+        with pytest.raises(BlockedUrl):
+            validate_public_url(url, resolve=False)
+    finally:
+        ug.socket.getaddrinfo = orig
+
+
+def test_validate_only_ever_raises_blockedurl(monkeypatch):
+    """The whole contract: never leak a ValueError/UnicodeError to a caller that only
+    catches BlockedUrl (which is every call site) — those must become a clean rejection."""
+    # A >63-char DNS label makes getaddrinfo raise UnicodeError, not OSError.
+    long_label = "http://" + "a" * 100 + ".example.com/p"
+    with pytest.raises(BlockedUrl):
+        validate_public_url(long_label)  # resolve=True path hits getaddrinfo
+    # Malformed URLs make urlsplit raise ValueError.
+    for bad in ("http://[::1", "http://a[b].com/x"):
+        with pytest.raises(BlockedUrl):
+            validate_public_url(bad)
+
+
+def test_resolve_false_allows_public_name_without_dns(monkeypatch):
+    """The API layer skips DNS: a plain public name passes the fast check offline (the
+    resolving check at the fetch layer is what vets where it actually points)."""
+
+    def _no_dns(*_a, **_k):
+        raise AssertionError("resolve=False must not call getaddrinfo")
+
+    monkeypatch.setattr(url_guard.socket, "getaddrinfo", _no_dns)
+    assert validate_public_url("https://arxiv.org/abs/1706.03762", resolve=False)
 
 
 def test_blocks_public_hostname_resolving_to_internal(monkeypatch):
