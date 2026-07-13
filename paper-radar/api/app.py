@@ -330,6 +330,23 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
     return True
 
 
+def _norm_doi(doi: str | None) -> str | None:
+    """DOIs are case-insensitive (ISO 26324), so store and compare them folded.
+
+    AACR registers "10.1158/2159-8290.CD-25-1745" while PubMed reports it
+    lowercased; matching case-sensitively let the same paper in twice — once via
+    the publisher link, once via PubMed. Strip the resolver prefix too, so
+    "https://doi.org/10.x/y" and "10.x/y" are the same key.
+    """
+    if not doi:
+        return None
+    d = doi.strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if d.startswith(prefix):
+            d = d[len(prefix) :]
+    return d.strip("/") or None
+
+
 def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:
     """Find the canonical paper (by url_norm, then DOI) or insert it. Service role.
 
@@ -348,11 +365,12 @@ def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bo
     if found.data:
         row = found.data[0]
         return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
-    if meta.doi:
+    doi = _norm_doi(meta.doi)
+    if doi:
         by_doi = (
             svc.table("papers")
             .select("id, title, embedded_at")
-            .eq("doi", meta.doi)
+            .eq("doi", doi)
             .limit(1)
             .execute()
         )
@@ -363,7 +381,7 @@ def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bo
     row = {
         "url": url,
         "url_norm": url_norm,
-        "doi": meta.doi,
+        "doi": doi,
         "title": meta.title,
         "authors": meta.authors,
         "abstract": meta.abstract,
@@ -1547,7 +1565,7 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
     svc = service_client()
 
     norms = {e.identifier: _normalize_key(e.identifier) for e in entries if e.identifier}
-    dois = [e.doi for e in entries if e.doi]
+    dois = [d for d in (_norm_doi(e.doi) for e in entries) if d]
 
     by_norm: dict[str, str] = {}
     by_doi: dict[str, str] = {}
@@ -1558,7 +1576,7 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
         by_norm |= {r["url_norm"]: r["id"] for r in rows}
     for batch in _chunked(list(set(dois))):
         rows = svc.table("papers").select("id, doi").in_("doi", batch).execute().data or []
-        by_doi |= {r["doi"]: r["id"] for r in rows if r.get("doi")}
+        by_doi |= {_norm_doi(r["doi"]): r["id"] for r in rows if r.get("doi")}
 
     known_ids = list(set(by_norm.values()) | set(by_doi.values()))
     posted: set[str] = set()
@@ -1583,13 +1601,14 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
             out.append(_preview(e, "rejected", "No DOI or URL"))
             continue
 
-        key = e.doi or norms[ident]
+        doi = _norm_doi(e.doi)
+        key = doi or norms[ident]
         if key in seen:
             out.append(_preview(e, "duplicate", "Listed twice in this file"))
             continue
         seen.add(key)
 
-        paper_id = by_norm.get(norms[ident]) or (by_doi.get(e.doi) if e.doi else None)
+        paper_id = by_norm.get(norms[ident]) or (by_doi.get(doi) if doi else None)
         if paper_id and paper_id in posted:
             out.append(_preview(e, "duplicate", "Already in this lab"))
         elif not e.doi:
@@ -1660,7 +1679,7 @@ def bibtex_import(
             url = _clean_url(ident)
             url_norm = _normalize_key(url)
 
-            key = e.doi or url_norm
+            key = _norm_doi(e.doi) or url_norm
             if key in seen:
                 skipped += 1
                 continue
