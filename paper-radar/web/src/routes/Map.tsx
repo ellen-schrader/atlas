@@ -1,6 +1,6 @@
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Search, X } from "lucide-react";
+import { ChevronRight, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
 import { Input } from "@/components/ui/input";
@@ -18,12 +18,62 @@ type ColorMode = "cluster" | "year" | "venue" | "relevance";
 type SizeMode = "uniform" | "engagement";
 type BarHover = { kind: "year" | "venue" | "lab"; value: string } | null;
 
+// Fixed pseudo-scatter for the loading skeleton (percent coordinates).
+const LOADING_DOTS: ReadonlyArray<readonly [number, number]> = [
+  [18, 32], [27, 61], [36, 22], [42, 74], [48, 45], [55, 28],
+  [61, 66], [70, 38], [78, 57], [85, 27], [64, 82], [24, 44],
+];
+
+function MapLoadingSkeleton() {
+  // The layout computes in a couple of seconds when the API is warm, but the
+  // first request after an idle spell also pays the machine's cold boot
+  // (~half a minute). Stage the message so a long wait reads as progress,
+  // not a hang.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const message =
+    elapsed < 6
+      ? "Computing the map of your lab’s papers…"
+      : elapsed < 20
+        ? "Waking the paper service — it sleeps when nobody’s around…"
+        : "Still working. The first load after a quiet spell can take up to a minute.";
+
+  return (
+    <div className="rounded-card border border-border bg-surface p-4">
+      <div className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
+        {LOADING_DOTS.map(([x, y], i) => (
+          <span
+            key={i}
+            className="absolute h-2.5 w-2.5 animate-pulse rounded-full bg-fg/10"
+            style={{ left: `${x}%`, top: `${y}%`, animationDelay: `${(i % 4) * 350}ms` }}
+            aria-hidden
+          />
+        ))}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+          <Loader2 className="animate-spin text-muted" size={22} aria-hidden />
+          <p className="max-w-sm px-6 text-center text-sm text-muted" aria-live="polite">
+            {message}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MapView() {
   const { team } = useAppContext();
   const { data, isLoading, error } = useQuery({
     queryKey: ["overview", team.id],
     queryFn: () => fetchOverview(team.id),
     staleTime: 5 * 60 * 1000,
+    // Ride out the API machine's cold boot (~half a minute of connection
+    // errors) instead of surfacing an error a few retries in; the skeleton
+    // stays up while these run.
+    retry: 6,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 15_000),
   });
 
   const [colorBy, setColorBy] = useState<ColorMode>("cluster");
@@ -85,8 +135,12 @@ export default function MapView() {
         </p>
       </div>
 
-      {isLoading && <p className="text-sm text-muted">Computing the overview… (first load can take a moment)</p>}
-      {error && <p className="text-sm text-danger">Couldn’t load the overview.</p>}
+      {isLoading && <MapLoadingSkeleton />}
+      {error && (
+        <p className="text-sm text-danger">
+          Couldn’t load the overview — give it a moment and reload the page.
+        </p>
+      )}
 
       {data && points.length === 0 && (
         <p className="text-sm text-muted">
