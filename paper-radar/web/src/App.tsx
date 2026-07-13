@@ -6,6 +6,7 @@ import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
 import Dashboard from "@/routes/Dashboard";
 import Layout from "@/routes/Layout";
+import Landing from "@/routes/Landing";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
 import MapView from "@/routes/Map";
@@ -27,10 +28,16 @@ export default function App() {
   if (loading) return <Center>Loading…</Center>;
 
   if (!session) {
+    // Signed out, "/" is now the public landing page rather than a redirect to the
+    // login form. Until this, the app had no public surface at all — there was
+    // nothing to link anyone to. Signed *in*, "/" is the Dashboard (below), so the
+    // split is purely on session state and neither route needs to know about the
+    // other.
     return (
       <Routes>
+        <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
   }
