@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -29,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, StringConstraints
 
 from paper_radar.ingest import bibtex as bib
+from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
@@ -200,6 +202,42 @@ class OverviewResponse(BaseModel):
 # The token dependency lives in `deps.py` (imported above) so routers can share it
 # without importing this module; `require_token` is re-exported here for the many
 # endpoints below that depend on it.
+
+# --- rate limiting ---------------------------------------------------------
+
+
+class _PerUserRateLimiter:
+    """Sliding-window cap, keyed by user.
+
+    In-process, so it bounds one worker rather than the fleet — enough to stop a single
+    caller looping an endpoint that makes an outbound request every time, which is what
+    /resolve does. If the API ever runs several workers in anger this wants a shared
+    store (Redis); as a single process it is honest about what it covers.
+    """
+
+    def __init__(self, max_events: int, window_seconds: float) -> None:
+        self.max_events = max_events
+        self.window = window_seconds
+        self._events: dict[str, list[float]] = {}
+
+    def check(self, key: str) -> None:
+        now = time.monotonic()
+        events = [t for t in self._events.get(key, []) if now - t < self.window]
+        if len(events) >= self.max_events:
+            raise HTTPException(status_code=429, detail="Too many lookups — give it a minute.")
+        events.append(now)
+        self._events[key] = events
+        # Don't let the map grow without bound as users come and go.
+        if len(self._events) > 10_000:
+            self._events = {
+                k: v for k, v in self._events.items() if v and now - v[-1] < self.window
+            }
+
+
+# Someone adding papers by hand does a handful a minute. 30 is far above real use and
+# far below what would make the endpoint useful as a scanner.
+_resolve_limiter = _PerUserRateLimiter(max_events=30, window_seconds=60.0)
+
 
 # --- helpers ---------------------------------------------------------------
 
@@ -382,9 +420,33 @@ def health() -> dict[str, str]:
 
 
 @app.post("/resolve", response_model=ResolvedPaper)
-def resolve(req: ResolveRequest) -> ResolvedPaper:
-    """Resolve a pasted URL to metadata + its normalized dedup key."""
-    url = _clean_url(req.url)
+def resolve(req: ResolveRequest, token: str = Depends(require_token)) -> ResolvedPaper:
+    """Resolve a pasted URL to metadata + its normalized dedup key.
+
+    Makes the server fetch a URL the caller chose, so it is an SSRF sink and is
+    guarded on three sides:
+
+      * **Authenticated.** It used to be open to the internet, which made it a free
+        port scanner for whatever network the API runs in. It needs an account now —
+        that doesn't fix SSRF (a member can still call it) but it ends drive-by use
+        and puts a user id next to every fetch in the log.
+      * **Validated**, so a blocked URL is an honest 400 rather than a silently empty
+        record that looks like an ordinary bot-walled publisher.
+      * **Rate-limited**, because each call costs an outbound request.
+
+    The fetch itself is guarded again inside `fetch_metadata` — that's the layer that
+    catches a redirect to an internal address, which no check on the submitted URL can.
+    """
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    _resolve_limiter.check(user_id)
+
+    try:
+        url = _clean_url(url_guard.validate_public_url(req.url))
+    except url_guard.BlockedUrl as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     meta = fetch_metadata(url, network=req.network)
     return _resolved(meta, url, _normalize_key(url))
 
@@ -401,7 +463,12 @@ def create_post(
     # every other lab sharing that paper can see.
     user_id = _require_member(token, req.team_id)
 
-    url = _clean_url(req.url)
+    # Same SSRF sink as /resolve: with no `fields`, this resolves the URL server-side.
+    # Membership narrows who can reach it; it doesn't make the fetch safe.
+    try:
+        url = _clean_url(url_guard.validate_public_url(req.url))
+    except url_guard.BlockedUrl as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     url_norm = _normalize_key(url)
     # The web dialog resolves first and posts back what the user approved, so we
     # store what they saw — and never re-fetch (which would overwrite a hand-typed

@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("supabase")
 
 from atlas_mcp import lab  # noqa: E402
+from paper_radar.ingest import url_guard  # noqa: E402
 
 
 # --- URL hygiene (SSRF guard) ----------------------------------------------
@@ -112,24 +113,28 @@ def test_resolve_member_refuses_self_and_unknown(team):
 
 
 def test_reject_private_dns_blocks_hostname_resolving_internal(monkeypatch):
-    # A public-looking hostname whose DNS points at a private/loopback address.
-    def fake_getaddrinfo(host, *a, **k):
-        return [(2, 1, 6, "", ("127.0.0.1", 0))]
-
-    monkeypatch.setattr(lab.socket, "getaddrinfo", fake_getaddrinfo)
+    # A public-looking hostname whose DNS points at a private/loopback address. The
+    # guard moved to paper_radar.ingest.url_guard (the HTTP API needs it too), but
+    # validate_share_url still has to enforce it for the MCP tools.
+    monkeypatch.setattr(
+        url_guard.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 0))]
+    )
     with pytest.raises(lab.LabError):
-        lab._reject_private_dns("evil.example.com")
+        lab.validate_share_url("https://evil.example.com/paper")
 
 
 def test_reject_private_dns_allows_public(monkeypatch):
-    monkeypatch.setattr(lab.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
-    lab._reject_private_dns("example.com")  # no raise
-    # unresolvable host is left for the fetch to error on, not blocked here
+    monkeypatch.setattr(
+        url_guard.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))]
+    )
+    assert lab.validate_share_url("https://example.com/p") == "https://example.com/p"
+
+    # An unresolvable host is left for the fetch to error on, not blocked here.
     def boom(*a, **k):
         raise OSError("nxdomain")
 
-    monkeypatch.setattr(lab.socket, "getaddrinfo", boom)
-    lab._reject_private_dns("does-not-exist.invalid")  # no raise
+    monkeypatch.setattr(url_guard.socket, "getaddrinfo", boom)
+    assert lab.validate_share_url("https://does-not-exist.invalid/p")
 
 
 # --- untrusted-content wrapper ---------------------------------------------
@@ -183,7 +188,13 @@ def _drive_post_paper(monkeypatch, *, confirm, ctx):
             "meta": SimpleNamespace(title="A Paper", authors=[], venue=None, year=None),
         },
     )
-    monkeypatch.setattr(L, "post_paper", lambda team, resolved: (writes.__setitem__("n", writes["n"] + 1) or ("post1", "paper1", False)))
+    monkeypatch.setattr(
+        L,
+        "post_paper",
+        lambda team, resolved: (
+            writes.__setitem__("n", writes["n"] + 1) or ("post1", "paper1", False)
+        ),
+    )
     monkeypatch.setattr(L, "add_comment_with_mention", lambda *a: None)
     monkeypatch.setattr(L, "paper_link", lambda pid: f"http://x/{pid}")
     fn = getattr(server.post_paper, "fn", server.post_paper)
@@ -277,7 +288,9 @@ def test_normalize_hexes_parses_and_dedupes():
     from atlas_mcp import moodboard
 
     assert moodboard.normalize_hexes("#4477AA, EE6677 228833") == [
-        "#4477aa", "#ee6677", "#228833",
+        "#4477aa",
+        "#ee6677",
+        "#228833",
     ]
     assert moodboard.normalize_hexes(["#4477AA", "#4477aa", "nothex"]) == ["#4477aa"]
     assert moodboard.normalize_hexes("") == []
@@ -327,7 +340,7 @@ def test_centroid_is_mean_of_unit_vectors():
     # Two opposite unit vectors cancel; orthogonal ones average to the diagonal.
     assert lab._centroid([[1.0, 0.0], [-1.0, 0.0]]) is None  # zero mean → no direction
     c = lab._centroid([[1.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+    assert _almost(c, [2**-0.5, 2**-0.5])
     assert lab._centroid([]) is None
     assert lab._centroid([[0.0, 0.0]]) is None  # only unusable vectors
 
@@ -335,13 +348,13 @@ def test_centroid_is_mean_of_unit_vectors():
 def test_centroid_weights_each_paper_equally():
     # A long vector must not dominate a short one — both are unit-normalised first.
     c = lab._centroid([[100.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+    assert _almost(c, [2**-0.5, 2**-0.5])
 
 
 def test_centroid_skips_mismatched_dimension_vectors():
     # A stray vector of the wrong dimension is skipped, not a crash or corruption.
     c = lab._centroid([[1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2 ** -0.5, 2 ** -0.5])  # only the two 2-D vectors count
+    assert _almost(c, [2**-0.5, 2**-0.5])  # only the two 2-D vectors count
 
 
 def test_parse_embedding_handles_json_string_and_list():
@@ -358,7 +371,9 @@ def test_citation_key_author_year():
     pytest.importorskip("mcp")
     from atlas_mcp import server
 
-    assert server._citation_key({"authors": ["Jane Doe", "Bo Li"], "year": 2021}) == "Doe et al., 2021"
+    assert (
+        server._citation_key({"authors": ["Jane Doe", "Bo Li"], "year": 2021}) == "Doe et al., 2021"
+    )
     assert server._citation_key({"authors": ["Alan Turing"], "year": 1950}) == "Turing, 1950"
     assert server._citation_key({"authors": [], "year": None}) == "Unknown, n.d."
     # a single-token name still yields a usable surname

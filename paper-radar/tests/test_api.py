@@ -19,10 +19,33 @@ def test_health():
     assert resp.json() == {"status": "ok"}
 
 
-def test_resolve_recognizes_scheme_and_computes_dedup_key():
+AUTH = {"Authorization": "Bearer good"}
+
+
+@pytest.fixture
+def signed_in(monkeypatch):
+    """/resolve needs an account now — it makes the server fetch a URL you chose."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "user-1")
+    # A fresh limiter per test, so one test's calls can't 429 the next one's.
+    monkeypatch.setattr(
+        app_mod, "_resolve_limiter", app_mod._PerUserRateLimiter(max_events=30, window_seconds=60.0)
+    )
+
+
+def test_resolve_requires_a_bearer_token():
+    """It used to be open to the internet: an unauthenticated caller could make the
+    server GET any URL, which is a port scanner for whatever network it runs in."""
+    resp = client.post("/resolve", json={"url": "https://arxiv.org/abs/2401.01234"})
+    assert resp.status_code == 401
+
+
+def test_resolve_recognizes_scheme_and_computes_dedup_key(signed_in):
     resp = client.post(
         "/resolve",
         json={"url": "https://arxiv.org/abs/2401.01234", "network": False},
+        headers=AUTH,
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -132,17 +155,78 @@ def test_compute_stats_aggregates_posts():
     assert labs == {"B. Last": 1, "C. Only": 1}
 
 
-def test_resolve_dedup_key_strips_tracking_params():
+def test_resolve_dedup_key_strips_tracking_params(signed_in):
     resp = client.post(
         "/resolve",
         json={
             "url": "https://www.nature.com/articles/s41586-024-01234-5?utm_source=x&fbclid=y",
             "network": False,
         },
+        headers=AUTH,
     )
     assert resp.status_code == 200
     norm = resp.json()["url_norm"]
     assert norm == "//nature.com/articles/s41586-024-01234-5"
+
+
+# --- SSRF guard on the URL-fetching endpoints ------------------------------
+
+
+SSRF_URLS = [
+    "http://169.254.169.254/latest/meta-data/",  # cloud metadata — the classic target
+    "http://127.0.0.1:8000/admin",
+    "http://localhost/x",
+    "https://10.0.0.5/a",
+    "http://192.168.1.1/a",
+    "http://[::1]/a",
+    "https://svc.internal/x",
+    "file:///etc/passwd",
+    "ftp://host/x",
+]
+
+
+@pytest.mark.parametrize("url", SSRF_URLS)
+def test_resolve_refuses_to_fetch_internal_addresses(signed_in, monkeypatch, url):
+    """A member can still reach /resolve, so auth alone doesn't make the fetch safe."""
+    import api.app as app_mod
+
+    def _no_fetch(*_a, **_k):
+        raise AssertionError(f"the server must not fetch {url}")
+
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_fetch)
+
+    resp = client.post("/resolve", json={"url": url}, headers=AUTH)
+    assert resp.status_code == 400, f"{url} was accepted"
+
+
+@pytest.mark.parametrize("url", SSRF_URLS)
+def test_posts_refuses_to_fetch_internal_addresses(monkeypatch, url):
+    """/posts resolves the URL server-side when the client sends no `fields` — the
+    same sink as /resolve, reachable by any lab member."""
+    import api.app as app_mod
+
+    def _no_fetch(*_a, **_k):
+        raise AssertionError(f"the server must not fetch {url}")
+
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_fetch)
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_fetch)
+
+    resp = client.post("/posts", json={"url": url, "team_id": "t"}, headers=AUTH)
+    assert resp.status_code == 400, f"{url} was accepted"
+
+
+def test_resolve_is_rate_limited(signed_in, monkeypatch):
+    """Each call costs an outbound request, so it's an amplifier if left unbounded."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(
+        app_mod, "_resolve_limiter", app_mod._PerUserRateLimiter(max_events=3, window_seconds=60.0)
+    )
+    body = {"url": "https://arxiv.org/abs/2401.01234", "network": False}
+    for _ in range(3):
+        assert client.post("/resolve", json=body, headers=AUTH).status_code == 200
+    assert client.post("/resolve", json=body, headers=AUTH).status_code == 429
 
 
 # --- BibTeX import ---------------------------------------------------------

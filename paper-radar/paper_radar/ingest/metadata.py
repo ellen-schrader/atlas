@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from xml.etree import ElementTree
 
+from paper_radar.ingest import url_guard
+
 _ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"'<>]+)", re.IGNORECASE)
 _NATURE_RE = re.compile(r"nature\.com/articles/(?P<id>[a-z0-9.\-]+)", re.IGNORECASE)
@@ -67,12 +69,22 @@ class PaperMetadata:
 
 
 def _get(url: str, *, browser: bool = False) -> bytes | None:
+    """Fetch a URL, or None on any failure.
+
+    Every HTTP request this module makes goes through here — the identifier APIs and
+    the landing-page scrape alike — so it is the one place an SSRF guard has to hold.
+    `open_public_url` refuses a non-public target *and* re-checks each redirect hop,
+    which a check on the submitted URL alone cannot do (urllib follows redirects
+    silently, so a public URL that 302s to 169.254.169.254 would otherwise sail
+    through). A blocked URL is treated as a failed fetch: ingest never blocks on a
+    bad link, it just gets no metadata for it.
+    """
     ua = _BROWSER_UA if browser else _API_UA
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": ua})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (trusted hosts)
+        with url_guard.open_public_url(url, headers={"User-Agent": ua}, timeout=_TIMEOUT) as resp:
             return resp.read(_MAX_HTML_BYTES) if browser else resp.read()
     except (
+        url_guard.BlockedUrl,
         urllib.error.URLError,
         TimeoutError,
         OSError,
