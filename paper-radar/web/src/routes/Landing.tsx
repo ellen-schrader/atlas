@@ -63,7 +63,7 @@ export default function Landing() {
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center sm:py-36">
           <h1 className="text-balance font-serif text-4xl font-semibold leading-[1.05] tracking-tight text-fg sm:text-6xl">
             Every lab has a taste.{" "}
-            <em className="not-italic text-accent">Atlas gives yours to Claude.</em>
+            <span className="text-accent">Atlas gives yours to Claude.</span>
           </h1>
           <p className="mx-auto mt-6 max-w-xl text-balance text-base leading-relaxed text-muted sm:text-lg">
             The papers you save, the figures you admire, the ones you argue about — Atlas learns your
@@ -73,7 +73,7 @@ export default function Landing() {
 
           <div className="mt-9 flex flex-wrap justify-center gap-3">
             <Link
-              to="/login"
+              to="/login?mode=signup"
               className="inline-flex items-center gap-2 rounded-control bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition hover:brightness-110"
             >
               Create your lab <ArrowRight size={16} />
@@ -152,7 +152,7 @@ export default function Landing() {
         <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
           <h2 className="max-w-[18ch] text-balance font-serif text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-5xl">
             When the postdoc leaves,{" "}
-            <em className="not-italic text-accent">the taste stays.</em>
+            <span className="text-accent">the taste stays.</span>
           </h2>
           <p className="mt-5 max-w-[58ch] text-muted">
             Five years of judgment about what’s worth reading walks out of your lab with every person
@@ -162,7 +162,7 @@ export default function Landing() {
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
-              to="/login"
+              to="/login?mode=signup"
               className="inline-flex items-center gap-2 rounded-control bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition hover:brightness-110"
             >
               Create your lab <ArrowRight size={16} />
@@ -215,6 +215,8 @@ function Section({
   );
 }
 
+type Channel = "ch-1" | "ch-2" | "ch-3" | "ch-4" | "ch-5" | "ch-6" | "ch-off";
+
 /** One engagement signal and what it teaches — the real weights from `_taste_vector`. */
 function Lesson({
   channel,
@@ -222,7 +224,7 @@ function Lesson({
   means,
   weight,
 }: {
-  channel: string;
+  channel: Channel;
   action: string;
   means: string;
   weight?: string;

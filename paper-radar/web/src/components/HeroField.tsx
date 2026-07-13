@@ -70,10 +70,17 @@ function buildNodes(): Node[] {
 export function HeroField({ className }: { className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const { categorical } = usePalette();
-  // The palette is read on each render; keep it in a ref so the animation loop always
-  // sees current colours without being torn down and restarted on a theme change.
+  // Held in a ref so the animation loop reads current colours without being torn
+  // down and restarted whenever the theme flips.
   const colors = useRef(categorical);
-  colors.current = categorical;
+  // Written in an effect, not during render: a render that React starts and discards
+  // must not mutate anything. `redraw` lets a *static* field (reduced motion, where
+  // there is no rAF loop to pick the change up) repaint itself on a theme change.
+  const redraw = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    colors.current = categorical;
+    redraw.current?.();
+  }, [categorical]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -84,6 +91,9 @@ export function HeroField({ className }: { className?: string }) {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let raf: number | null = null;
     let start: number | null = null;
+    // Elapsed time survives a pause, so returning to the hero resumes the settled
+    // field instead of rewinding it to noise and replaying the whole intro.
+    let elapsed = 0;
 
     function size() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -114,42 +124,60 @@ export function HeroField({ className }: { className?: string }) {
 
     function frame(ts: number) {
       if (start === null) start = ts;
-      const seconds = (ts - start) / 1000;
+      const seconds = elapsed + (ts - start) / 1000;
       draw(seconds / SETTLE_SECONDS, seconds);
       raf = requestAnimationFrame(frame);
+    }
+
+    function pause() {
+      if (raf === null) return;
+      cancelAnimationFrame(raf);
+      raf = null;
+      elapsed += performance.now() / 1000 - (start ?? performance.now()) / 1000;
+      start = null;
+    }
+
+    /** Repaint at the current point in time — used for resize and theme changes. */
+    function paintNow() {
+      draw(reduced ? 1 : elapsed / SETTLE_SECONDS, reduced ? 0 : elapsed);
     }
 
     size();
     const onResize = () => {
       size();
-      if (reduced) draw(1, 0);
+      if (raf === null) paintNow(); // the rAF loop repaints itself; a paused/static one doesn't
     };
     window.addEventListener("resize", onResize, { passive: true });
 
     if (reduced) {
       // Honour the preference by showing the *settled* state — the argument the
-      // animation makes is in its destination, so nothing is lost by skipping the
-      // journey.
-      draw(1, 0);
+      // animation makes lives in its destination, so nothing is lost by skipping the
+      // journey. There's no loop, so a theme change has to repaint via `redraw`.
+      elapsed = SETTLE_SECONDS;
+      paintNow();
+      redraw.current = paintNow;
     } else {
       raf = requestAnimationFrame(frame);
+      redraw.current = () => {
+        if (raf === null) paintNow(); // only needed while paused; the loop handles the rest
+      };
     }
 
-    // Don't burn a rAF loop on a hero the reader has scrolled past.
+    // Don't burn a rAF loop on a hero the reader has scrolled past. Resuming carries
+    // `elapsed` forward, so the field picks up where it left off.
     const io = new IntersectionObserver(([entry]) => {
       if (reduced) return;
       if (entry.isIntersecting && raf === null) {
-        start = null;
         raf = requestAnimationFrame(frame);
-      } else if (!entry.isIntersecting && raf !== null) {
-        cancelAnimationFrame(raf);
-        raf = null;
+      } else if (!entry.isIntersecting) {
+        pause();
       }
     });
     io.observe(canvas);
 
     return () => {
       if (raf !== null) cancelAnimationFrame(raf);
+      redraw.current = null;
       io.disconnect();
       window.removeEventListener("resize", onResize);
     };

@@ -20,7 +20,9 @@
       content="Your lab's reading, mapped — and its taste and visual style served to Claude over MCP."
     />
     <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
+    <!-- `summary`, not `summary_large_image`: we ship no og:image, and claiming the
+         large card renders an empty image slot rather than a clean text unfurl. -->
+    <meta name="twitter:card" content="summary" />
   </head>
   <body>
     <div id="root"></div>
