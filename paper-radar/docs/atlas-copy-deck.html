@@ -1,0 +1,408 @@
+<title>Atlas — copy &amp; positioning deck</title>
+<style>
+  :root {
+    --bg:#f1f3f2; --surface:#fff; --surface-2:#e9ecec; --border:#dfe3e3; --border-2:#c8cfcf;
+    --fg:#12181a; --muted:#576466; --faint:#7f8b8c;
+    --accent:#0e8e8a; --accent-2:#0a6b68; --accent-weak:rgba(14,142,138,.10); --accent-fg:#fff;
+    --good:#2f8f52; --warn:#b07515; --crit:#c2412f;
+    --ch1:#0f8f8b; --ch2:#c23c86; --ch3:#b4791a; --ch4:#2f8f52; --ch5:#6a5cd8; --ch6:#c8503a;
+    --serif:"Iowan Old Style","Charter","Bitstream Charter","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+    --rctl:.5rem; --rcard:.75rem;
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme:dark){ :root{
+    --bg:#080b11; --surface:#0f141c; --surface-2:#161d27; --border:#1c242f; --border-2:#2c3743;
+    --fg:#e6ecec; --muted:#9aa8aa; --faint:#6f7c7e;
+    --accent:#2fd4cf; --accent-2:#5ee3df; --accent-weak:rgba(47,212,207,.13); --accent-fg:#04100f;
+    --good:#4ec97b; --warn:#e0a63c; --crit:#ef6a55;
+    --ch1:#2fd4cf; --ch2:#e75fae; --ch3:#e0a63c; --ch4:#4ec97b; --ch5:#9a8cf5; --ch6:#f0705a;
+    color-scheme:dark; } }
+  :root[data-theme="dark"]{
+    --bg:#080b11; --surface:#0f141c; --surface-2:#161d27; --border:#1c242f; --border-2:#2c3743;
+    --fg:#e6ecec; --muted:#9aa8aa; --faint:#6f7c7e;
+    --accent:#2fd4cf; --accent-2:#5ee3df; --accent-weak:rgba(47,212,207,.13); --accent-fg:#04100f;
+    --good:#4ec97b; --warn:#e0a63c; --crit:#ef6a55;
+    --ch1:#2fd4cf; --ch2:#e75fae; --ch3:#e0a63c; --ch4:#4ec97b; --ch5:#9a8cf5; --ch6:#f0705a;
+    color-scheme:dark; }
+  :root[data-theme="light"]{
+    --bg:#f1f3f2; --surface:#fff; --surface-2:#e9ecec; --border:#dfe3e3; --border-2:#c8cfcf;
+    --fg:#12181a; --muted:#576466; --faint:#7f8b8c;
+    --accent:#0e8e8a; --accent-2:#0a6b68; --accent-weak:rgba(14,142,138,.10); --accent-fg:#fff;
+    --good:#2f8f52; --warn:#b07515; --crit:#c2412f;
+    --ch1:#0f8f8b; --ch2:#c23c86; --ch3:#b4791a; --ch4:#2f8f52; --ch5:#6a5cd8; --ch6:#c8503a;
+    color-scheme:light; }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .wrap{max-width:940px;margin:0 auto;padding:clamp(2rem,5vw,4rem) clamp(1rem,3vw,2rem) 6rem}
+
+  .mast{border-bottom:1px solid var(--border-2);padding-bottom:2rem;margin-bottom:3rem}
+  .locked{display:flex;gap:.8rem;align-items:flex-start;background:color-mix(in srgb,var(--good) 8%,transparent);border:1px solid var(--good);border-radius:var(--rcard);padding:.9rem 1.1rem;margin:0 0 1.6rem}
+  .lock-tag{font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--good);border:1px solid var(--good);border-radius:999px;padding:.1rem .5rem;flex-shrink:0;font-weight:700;margin-top:.15rem}
+  .locked b{display:block;font-family:var(--serif);font-size:1.1rem;font-weight:600;margin-bottom:.2rem}
+  .locked span{display:block;font-size:.82rem;color:var(--muted);line-height:1.5}
+  .kick{font-family:var(--mono);font-size:.68rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);margin:0 0 1rem}
+  h1{font-family:var(--serif);font-size:clamp(2rem,5vw,3rem);line-height:1.08;letter-spacing:-.015em;font-weight:600;margin:0 0 1rem;text-wrap:balance;max-width:20ch}
+  .lede{font-size:1.08rem;color:var(--muted);max-width:62ch;margin:0}
+  .lede b{color:var(--fg);font-weight:600}
+
+  h2{font-family:var(--serif);font-size:clamp(1.5rem,3vw,2rem);font-weight:600;letter-spacing:-.01em;margin:0 0 .6rem;text-wrap:balance}
+  .sec{margin-top:4rem}
+  .sec > p.intro{margin:0 0 1.8rem;color:var(--muted);max-width:64ch}
+  .sec > p.intro b{color:var(--fg);font-weight:600}
+  .eyebrow{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600}
+
+  /* the shift */
+  .shift{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media(min-width:760px){.shift{grid-template-columns:1fr 1fr}}
+  .shift-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rcard);padding:1.3rem}
+  .shift-card.old{border-top:3px solid var(--crit)}
+  .shift-card.new{border-top:3px solid var(--good)}
+  .shift-card .eyebrow{display:block;margin-bottom:.7rem}
+  .shift-card blockquote{margin:0 0 .8rem;font-family:var(--serif);font-size:1.12rem;line-height:1.35;color:var(--fg)}
+  .shift-card.old blockquote{opacity:.6;text-decoration:line-through;text-decoration-thickness:1px}
+  .shift-card p{margin:0;font-size:.86rem;color:var(--muted)}
+  .shift-card p b{color:var(--fg);font-weight:600}
+
+  /* territory */
+  .terr{background:var(--surface);border:1px solid var(--border);border-radius:var(--rcard);overflow:hidden;margin-bottom:1.4rem}
+  .terr-h{display:flex;align-items:center;gap:.7rem;padding:.9rem 1.2rem;border-bottom:1px solid var(--border);background:var(--surface-2);flex-wrap:wrap}
+  .terr-n{font-family:var(--mono);font-size:.7rem;color:var(--accent-fg);background:var(--accent);border-radius:999px;width:20px;height:20px;display:grid;place-items:center;flex-shrink:0;font-weight:700}
+  .terr-name{font-weight:700;font-size:.95rem}
+  .terr-tag{font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border-2);border-radius:999px;padding:.1rem .5rem;margin-left:auto}
+  .terr-tag.rec{color:var(--good);border-color:var(--good);font-weight:700}
+  .terr-b{padding:1.3rem}
+
+  .oneliner{font-family:var(--serif);font-size:clamp(1.35rem,3.2vw,1.85rem);line-height:1.22;font-weight:600;letter-spacing:-.012em;margin:0 0 1rem;text-wrap:balance}
+  .oneliner em{font-style:italic;color:var(--accent)}
+  .subhead{font-size:.95rem;color:var(--muted);margin:0 0 1.2rem;max-width:60ch;line-height:1.6}
+  .subhead b{color:var(--fg);font-weight:600}
+
+  .alts{border-top:1px dashed var(--border);padding-top:.9rem;margin-top:.3rem}
+  .alts .eyebrow{display:block;margin-bottom:.5rem}
+  .alt{font-family:var(--serif);font-size:1.02rem;color:var(--fg);padding:.28rem 0;padding-left:1rem;position:relative;line-height:1.35}
+  .alt::before{content:"›";position:absolute;left:0;color:var(--accent)}
+  .alt span{font-family:var(--sans);font-size:.76rem;color:var(--faint);display:block;padding-top:.1rem}
+
+  .terr-meta{display:grid;gap:1rem;grid-template-columns:1fr;margin-top:1.2rem;padding-top:1.1rem;border-top:1px dashed var(--border)}
+  @media(min-width:700px){.terr-meta{grid-template-columns:1fr 1fr}}
+  .tm h4{margin:0 0 .35rem;font-size:.78rem;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+  .tm p{margin:0;font-size:.83rem;color:var(--muted);line-height:1.5}
+  .tm p b{color:var(--fg);font-weight:600}
+  .tm .risk{color:var(--warn)}
+
+  .ctas{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.2rem}
+  .btn{font-size:.82rem;font-weight:600;border-radius:var(--rctl);padding:.45rem .85rem;border:1px solid var(--border-2);background:var(--surface);color:var(--fg);display:inline-flex;align-items:center;gap:.4rem}
+  .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+
+  /* section headline sets */
+  .sethead{display:flex;flex-direction:column;gap:.5rem;margin-top:1rem}
+  .sh{display:flex;gap:.7rem;align-items:baseline;padding:.4rem 0;border-bottom:1px dashed var(--border)}
+  .sh:last-child{border-bottom:0}
+  .sh i{font-style:normal;font-family:var(--mono);font-size:.62rem;color:var(--faint);width:62px;flex-shrink:0;text-transform:uppercase;letter-spacing:.06em}
+  .sh div{flex:1}
+  .sh b{display:block;font-family:var(--serif);font-size:1.02rem;font-weight:600;line-height:1.3}
+  .sh span{display:block;font-size:.8rem;color:var(--muted);margin-top:.1rem}
+
+  /* microcopy table */
+  .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--rcard);background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:620px;font-size:.86rem}
+  th,td{text-align:left;padding:.7rem .9rem;border-bottom:1px solid var(--border);vertical-align:top}
+  thead th{font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  tbody tr:last-child td{border-bottom:0}
+  td.was{color:var(--muted);text-decoration:line-through;text-decoration-thickness:1px;opacity:.7}
+  td.now b{color:var(--accent);font-weight:600}
+  td.why{color:var(--muted);font-size:.8rem}
+
+  /* voice */
+  .voice{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media(min-width:760px){.voice{grid-template-columns:1fr 1fr}}
+  .vcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--rcard);padding:1.2rem}
+  .vcard.no{border-left:3px solid var(--crit)}
+  .vcard.yes{border-left:3px solid var(--good)}
+  .vcard h4{margin:0 0 .7rem;font-size:.95rem}
+  .vlist{display:flex;flex-direction:column;gap:.4rem}
+  .vrow{font-size:.84rem;line-height:1.45}
+  .vrow code{font-family:var(--mono);font-size:.9em;color:var(--muted);background:var(--surface-2);padding:.05rem .3rem;border-radius:3px}
+  .vrow b{font-weight:600}
+  .vrow small{display:block;color:var(--faint);font-size:.75rem}
+
+  .callout{margin-top:2rem;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--rcard);padding:1.2rem 1.4rem}
+  .callout h4{margin:0 0 .4rem;font-family:var(--serif);font-size:1.12rem;font-weight:600}
+  .callout p{margin:0;font-size:.9rem;color:var(--muted);max-width:76ch}
+  .callout p b{color:var(--fg);font-weight:600}
+  .callout + .callout{margin-top:1rem}
+
+  footer{margin-top:4rem;padding-top:2rem;border-top:1px solid var(--border);font-family:var(--mono);font-size:.72rem;color:var(--faint)}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <p class="kick">Atlas · positioning &amp; copy · v4 — <span style="color:var(--good)">№2 approved &amp; shipped</span></p>
+    <div class="locked">
+      <span class="lock-tag">✓ Locked</span>
+      <div>
+        <b>“Every lab has a taste. Atlas gives yours to Claude.”</b>
+        <span>Territory №2 is the approved positioning. It's now live in the app's sign-in page, nav, empty states,
+          and engagement tooltips — see “Microcopy, rewritten” below for the exact strings that shipped.</span>
+      </div>
+    </div>
+    <h1>We've been selling the filing cabinet.</h1>
+    <p class="lede">
+      Every version of this copy has sold Atlas as <b>a better place to put papers</b> — import them, search them,
+      map them, keep track of what you've read. That's the <b>mechanism</b>, not the product. The product is that a
+      lab has a <b>taste</b> and a <b>look</b>, both of which currently live only in people's heads — and Atlas is
+      the first thing that writes them down and hands them to Claude.
+    </p>
+  </header>
+
+  <!-- ── THE SHIFT ── -->
+  <section class="sec">
+    <h2>The strategic shift</h2>
+    <p class="intro">
+      The reading tools are not the offer. They're <b>how the offer gets built</b>. Every save, reaction, comment and
+      figure upload is a lesson — so using Atlas <em>is</em> training Atlas. That single idea resolves the tension
+      we've been stuck on: we don't have to choose between "useful on day one" and "taste is the point".
+      <b>Day one is the first lesson.</b>
+    </p>
+    <div class="shift">
+      <div class="shift-card old">
+        <span class="eyebrow">What we were saying</span>
+        <blockquote>“One home for everything your lab reads.”</blockquote>
+        <p>
+          True, and <b>commodity</b>. Zotero, Mendeley, Paperpile and a shared Drive folder all say this. It gives a PI
+          no reason to move, and it makes the taste model sound like a bonus feature.
+        </p>
+      </div>
+      <div class="shift-card new">
+        <span class="eyebrow">What we should say</span>
+        <blockquote>“Your lab's taste is its most valuable asset. Atlas is where it lives.”</blockquote>
+        <p>
+          Judgment — what's worth reading, what's worth arguing with, what a good figure looks like — is the
+          <b>scarce thing a lab actually owns</b>. Nobody else is selling it, and it's the only story that makes the
+          MCP integration inevitable rather than a feature.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── TERRITORIES ── -->
+  <section class="sec">
+    <h2>Four territories</h2>
+    <p class="intro">
+      Each is a complete, self-consistent way to sell Atlas — one-liner, hero, and the section headlines beneath it.
+      They're <b>mutually exclusive as a headline</b> but they borrow from each other in the body. My recommendation
+      is <b>№2</b>, with lines from №4 used as supporting copy.
+    </p>
+
+    <!-- T1 -->
+    <article class="terr">
+      <div class="terr-h">
+        <span class="terr-n">1</span><span class="terr-name">Institutional memory</span>
+        <span class="terr-tag">most emotional</span>
+      </div>
+      <div class="terr-b">
+        <p class="oneliner">When the postdoc leaves, <em>the taste stays</em>.</p>
+        <p class="subhead">
+          Five years of judgment about what's worth reading walks out of your lab with every person who finishes.
+          Atlas keeps it — the papers, the arguments, the figures you admired — so the next person inherits
+          <b>the lab's mind, not just its Dropbox</b>.
+        </p>
+        <div class="ctas">
+          <span class="btn primary">Start your lab's memory</span><span class="btn">See what it captures</span>
+        </div>
+        <div class="alts">
+          <span class="eyebrow">Alternates</span>
+          <div class="alt">A lab is more than its papers. It's what the lab thinks of them.<span>Editorial opener; works as a scroll-in line under the hero.</span></div>
+          <div class="alt">Your lab's judgment, on the record.<span>Tighter, more corporate.</span></div>
+        </div>
+        <div class="terr-meta">
+          <div class="tm"><h4>Why it works</h4><p>Names a loss every PI has actually felt. <b>Attrition is the most reliable pain in academia</b> and nobody is selling to it.</p></div>
+          <div class="tm"><h4>Risk</h4><p class="risk">Slightly melancholy, and it sells <b>insurance</b> rather than daily utility. Better as a section than as the front door.</p></div>
+        </div>
+      </div>
+    </article>
+
+    <!-- T2 — RECOMMENDED -->
+    <article class="terr" style="border-color:var(--good);box-shadow:0 0 0 1px var(--good)">
+      <div class="terr-h" style="background:color-mix(in srgb,var(--good) 8%,transparent)">
+        <span class="terr-n" style="background:var(--good)">2</span><span class="terr-name">Taste, made usable</span>
+        <span class="terr-tag rec">★ recommended</span>
+      </div>
+      <div class="terr-b">
+        <p class="oneliner">Every lab has a taste. <em>Atlas gives yours to Claude.</em></p>
+        <p class="subhead">
+          The papers you save, the figures you admire, the ones you argue about — Atlas learns your lab's
+          judgment from how you already work, then hands it to <b>Claude Code</b> and <b>Claude for Life Sciences</b>.
+          So Claude searches <b>your</b> corpus, cites <b>your</b> papers, ranks by <b>your</b> lab's taste, and plots
+          in <b>your</b> lab's palette — instead of the field's generic average.
+        </p>
+        <div class="ctas">
+          <span class="btn primary">Teach Claude your lab</span><span class="btn">How it learns</span>
+        </div>
+        <div class="alts">
+          <span class="eyebrow">Alternates</span>
+          <div class="alt">Your lab has a taste. Now Claude has it too.<span>Punchier, less formal. Good for a landing hero.</span></div>
+          <div class="alt">Taste is the hardest thing to hand over. Atlas hands it to Claude.<span>More writerly; good for the About page.</span></div>
+          <div class="alt">Claude, but it's read everything your lab has read.<span>Most concrete benefit; riskiest claim — only use if we can back it.</span></div>
+        </div>
+        <div class="terr-meta">
+          <div class="tm"><h4>Why it works</h4><p>It's the <b>only claim a competitor can't make</b>, it explains why the MCP work exists, and it turns every existing feature into evidence for the pitch.</p></div>
+          <div class="tm"><h4>Risk</h4><p class="risk">Requires Claude to be part of the buyer's world. For a lab that doesn't use Claude, this headline lands on nothing — <b>they need territory 1 or 3</b>.</p></div>
+        </div>
+        <div class="sethead">
+          <span class="eyebrow" style="margin-top:.5rem">The page beneath it</span>
+          <div class="sh"><i>Section 1</i><div><b>It learns by being used.</b><span>Every save, reaction and comment is a lesson. No configuration, no training step — <em>the work is the training</em>.</span></div></div>
+          <div class="sh"><i>Section 2</i><div><b>Your mood board is a style sheet.</b><span>Upload the figures your lab admires. Atlas derives the palette — and a real matplotlib stylesheet Claude will plot with.</span></div></div>
+          <div class="sh"><i>Section 3</i><div><b>Two readers: your lab, and Claude.</b><span>The same corpus, the same taste, the same palette — served to people through the app and to Claude over MCP.</span></div></div>
+          <div class="sh"><i>Section 4</i><div><b>Start with the library you already have.</b><span>Export a .bib from Zotero. Atlas does the rest — and that import is the first thing it learns.</span></div></div>
+        </div>
+      </div>
+    </article>
+
+    <!-- T3 -->
+    <article class="terr">
+      <div class="terr-h">
+        <span class="terr-n">3</span><span class="terr-name">Scientific identity</span>
+        <span class="terr-tag">broadest</span>
+      </div>
+      <div class="terr-b">
+        <p class="oneliner">What your lab reads. How your lab draws. <em>One identity.</em></p>
+        <p class="subhead">
+          A research group is recognisable — in the papers it rates, the questions it returns to, the way its figures
+          look. Atlas holds both halves of that identity in one place, and makes them <b>something you can hand to a new
+          student, a collaborator, or Claude</b>.
+        </p>
+        <div class="ctas">
+          <span class="btn primary">Define your lab</span><span class="btn">See an example lab</span>
+        </div>
+        <div class="alts">
+          <span class="eyebrow">Alternates</span>
+          <div class="alt">Your lab's scientific identity, in one place.<span>Flattest and safest. Use if we need a neutral tagline for a grant or a poster.</span></div>
+          <div class="alt">The papers you keep. The figures you admire. The judgment in between.<span>Rhythmic three-beat; strong sub-hero line.</span></div>
+        </div>
+        <div class="terr-meta">
+          <div class="tm"><h4>Why it works</h4><p>Captures <b>both halves</b> — taste <em>and</em> style — which no other framing does. Doesn't depend on the reader caring about Claude.</p></div>
+          <div class="tm"><h4>Risk</h4><p class="risk">“Identity” is abstract. It describes what Atlas holds but not <b>what you get</b>, so it needs a very concrete second line.</p></div>
+        </div>
+      </div>
+    </article>
+
+    <!-- T4 -->
+    <article class="terr">
+      <div class="terr-h">
+        <span class="terr-n">4</span><span class="terr-name">The compounding asset</span>
+        <span class="terr-tag">best sub-copy</span>
+      </div>
+      <div class="terr-b">
+        <p class="oneliner">The more your lab uses it, <em>the more it becomes your lab</em>.</p>
+        <p class="subhead">
+          Atlas doesn't ask you to fill in a profile or tune a model. It watches how your lab already works — what
+          gets saved, what gets a 🤔, what gets three replies — and <b>gets sharper every week</b>. On day one it's a
+          shared library. By month three it knows what your lab will care about before you do.
+        </p>
+        <div class="ctas">
+          <span class="btn primary">Start now, it gets better</span><span class="btn">How the taste model works</span>
+        </div>
+        <div class="alts">
+          <span class="eyebrow">Alternates</span>
+          <div class="alt">No setup. It learns you by watching you work.<span>Handles the "another tool to maintain" objection head-on.</span></div>
+          <div class="alt">Day one: a shared library. Month three: your lab's judgment, on tap.<span>The honest arc, stated as a promise.</span></div>
+        </div>
+        <div class="terr-meta">
+          <div class="tm"><h4>Why it works</h4><p>It's the <b>honest answer to cold start</b> — it turns "the taste model is empty at first" from a weakness into the reason to start today.</p></div>
+          <div class="tm"><h4>Risk</h4><p class="risk">As a <em>headline</em> it's vague — it never says what the product <b>is</b>. <b>Use it as the second beat</b>, under territory 2.</p></div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <!-- ── RECOMMENDATION ── -->
+  <section class="sec">
+    <h2>The recommendation</h2>
+    <div class="callout">
+      <h4>Lead with №2, resolve cold start with №4, close with №1.</h4>
+      <p>
+        <b>Hero:</b> “Every lab has a taste. Atlas gives yours to Claude.” — the only claim no competitor can make.
+        <b>Immediately beneath it:</b> “It learns by being used” (№4), which turns the empty taste model from an
+        objection into the reason to start today. <b>At the bottom of the page, before the CTA:</b> “When the postdoc
+        leaves, the taste stays” (№1) — the emotional close, once they already understand the mechanism.
+        Territory 3 becomes the About page.
+      </p>
+    </div>
+    <div class="callout" style="border-left-color:var(--warn)">
+      <h4>The one thing this copy must not do</h4>
+      <p>
+        Promise that Claude “knows your lab” <b>on day one</b>. It doesn't — the taste vector is empty until people
+        engage, and a PI who tests that claim in week one and finds it hollow will never come back. Every line above
+        is written to promise <b>a trajectory</b>, not an instant. <b>“It learns” is a sellable claim. “It knows” is a
+        lie with a 30-day fuse.</b>
+      </p>
+    </div>
+  </section>
+
+  <!-- ── MICROCOPY ── -->
+  <section class="sec">
+    <h2>Microcopy, rewritten</h2>
+    <p class="intro">
+      The positioning is only real if it survives into the buttons. <b><span style="color:var(--good)">✓ Shipped</span></b>
+      strings are <b>live in <code style="font-family:var(--mono)">web/src</code> now</b> — the app typechecks and builds.
+      The rest land with the screens they belong to.
+    </p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Where</th><th>Was</th><th>Now</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><b style="color:var(--good)">✓</b> Sign-in</td><td class="was">Your lab's paper firehose, turned into a shared radar.</td><td class="now"><b>Every lab has a taste. Atlas gives yours to Claude.</b></td><td class="why">The headline claim, at the first thing anyone reads.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Sign-up</td><td class="was">Start discovering papers with your lab.</td><td class="now"><b>Create a lab, and Atlas starts learning its taste.</b></td><td class="why">Signing up is the first lesson, not an account.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Mood board</td><td class="was">Mood board</td><td class="now"><b>Your lab's look</b> <span style="color:var(--faint)">(page + nav)</span></td><td class="why">“Mood board” sounds decorative. This is a style sheet with a job.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Look, empty</td><td class="was">No figures on the board yet.</td><td class="now"><b>Add ones you admire — your own or others' — and Atlas learns your lab's palette from them.</b></td><td class="why">States the payoff, so uploading isn't a chore with no reward.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Reaction 🤔</td><td class="was">—</td><td class="now"><b>Sceptical — counts less toward your lab's taste</b> <span style="color:var(--faint)">(tooltip)</span></td><td class="why">Teaches the model by explaining it. Makes engagement feel consequential.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Save</td><td class="was">Save to reading list</td><td class="now"><b>Save — the strongest signal of your lab's taste</b> <span style="color:var(--faint)">(tooltip)</span></td><td class="why">The heaviest-weighted signal (1.5×) should say so.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Cold-start recs</td><td class="was">Based on recent posts — add a research profile for personalized picks.</td><td class="now"><b>Newest first — Atlas doesn't know your lab's taste yet. Save and react to a few papers and this becomes yours.</b></td><td class="why">Honest, and names the exact action that fixes it.</td></tr>
+          <tr><td><b style="color:var(--good)">✓</b> Papers, empty</td><td class="was">Post one above to get started.</td><td class="now"><b>Post one above — every paper your lab shares teaches Atlas its taste.</b></td><td class="why">Every empty state is a chance to restate the thesis.</td></tr>
+          <tr style="opacity:.72"><td>Import screen</td><td class="was">Import your library</td><td class="now"><b>Teach Atlas what your lab reads</b></td><td class="why">Ships with BibTeX import.</td></tr>
+          <tr style="opacity:.72"><td>Import, done</td><td class="was">402 papers imported</td><td class="now"><b>402 papers. Atlas is already learning your lab.</b></td><td class="why">Ships with BibTeX import.</td></tr>
+          <tr style="opacity:.72"><td>Connect</td><td class="was">—</td><td class="now"><b>Give Claude your lab's context</b></td><td class="why">Ships with the Connect screen.</td></tr>
+          <tr style="opacity:.72"><td>Connect, done</td><td class="was">—</td><td class="now"><b>Claude can now read your lab's papers, taste, and style.</b></td><td class="why">Ships with the Connect screen.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── VOICE ── -->
+  <section class="sec">
+    <h2>Voice</h2>
+    <p class="intro">
+      We're talking to <b>working scientists</b>, who are allergic to marketing and can smell an overclaim from the
+      abstract. The voice is a smart colleague explaining something, not a vendor.
+    </p>
+    <div class="voice">
+      <div class="vcard yes">
+        <h4>Do</h4>
+        <div class="vlist">
+          <div class="vrow"><b>Be specific about the mechanism.</b><small>“Learns from what you save and react to” beats “AI-powered personalisation”.</small></div>
+          <div class="vrow"><b>Say “your lab”, not “users” or “teams”.</b><small>The lab is the unit of identity. It's also how they refer to themselves.</small></div>
+          <div class="vrow"><b>Promise a trajectory, not a miracle.</b><small>“It learns” / “it gets sharper” — verifiable, and it survives week one.</small></div>
+          <div class="vrow"><b>Name the real objects.</b><small>A .bib file. A palette. A matplotlib stylesheet. Concrete nouns build trust.</small></div>
+        </div>
+      </div>
+      <div class="vcard no">
+        <h4>Don't</h4>
+        <div class="vlist">
+          <div class="vrow"><code>AI-powered</code> <code>supercharge</code> <code>revolutionise</code> <code>seamless</code><small>Instant credibility loss with this audience.</small></div>
+          <div class="vrow"><code>Claude knows your lab</code><small>It doesn't, until you've used it. Say <b>learns</b>.</small></div>
+          <div class="vrow"><code>Never miss a paper again</code><small>An unkeepable promise, and it sells anxiety.</small></div>
+          <div class="vrow"><code>Your second brain</code> <code>knowledge graph</code><small>Category clichés. They make us sound like every other tool.</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Atlas · copy &amp; positioning deck v4 · companion to atlas-redesign-mockup.html · written after user testing cut saved maps
+  </footer>
+</div>

@@ -10,6 +10,14 @@ import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 const EMOJIS = ["👍", "❤️", "🎉", "💡", "🤔"];
 
+// What each reaction teaches the taste model (api/app.py `_taste_vector`). Surfaced
+// as a tooltip so engagement feels consequential — 🤔 is scepticism, not endorsement,
+// and weighs far less.
+const REACTION_MEANING: Record<string, string> = {
+  "🤔": "Sceptical — counts less toward your lab’s taste",
+};
+const REACTION_DEFAULT = "Counts toward your lab’s taste";
+
 interface ReactionRow {
   emoji: string;
   user_id: string;
@@ -227,7 +235,12 @@ function Reactions({ kind, subjectId, teamId, userId }: Ctx) {
             key={e}
             type="button"
             onClick={() => toggle(e)}
-            title={who.length > 0 ? who.join(", ") : undefined}
+            title={[
+              who.length > 0 ? who.join(", ") : null,
+              REACTION_MEANING[e] ?? REACTION_DEFAULT,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             className={cn(
               "rounded-full border px-2.5 py-1 text-sm transition",
               mine ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-accent",

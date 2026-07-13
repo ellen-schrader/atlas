@@ -69,7 +69,7 @@ export default function ReadingList() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-bold tracking-tight">Reading list</h1>
+          <h1 className="text-display font-serif font-semibold tracking-tight">Reading list</h1>
           <p className="mt-1.5 text-sm text-muted">Papers you saved to read in {team.name}.</p>
         </div>
         <div className="flex rounded-control border border-border bg-surface p-0.5 text-sm">
