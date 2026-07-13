@@ -617,6 +617,10 @@ class _RateLimiter:
 # an injected preview loop can't drive unbounded outbound requests.
 _post_limiter = _RateLimiter(max_events=20, window_seconds=3600)
 _fetch_limiter = _RateLimiter(max_events=40, window_seconds=3600)
+# Style cards are the mood board's other write path, and each one uploads a
+# rendered PNG as well as inserting a row — so an injected loop costs storage,
+# not just rows. Capped like post_paper.
+_card_limiter = _RateLimiter(max_events=20, window_seconds=3600)
 
 
 @with_refresh

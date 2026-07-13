@@ -8,18 +8,25 @@ palettes. See docs/MOODBOARD_MCP_PLAN.md.
 from __future__ import annotations
 
 import io
+import uuid
 
 from . import lab
 from .lab import LabError
+from .spec import DEFAULT_PALETTE, normalize_hex, spec_seed
 
 BUCKET = "figures"
 
 # Explicit columns + the uploader profile and linked paper (for provenance).
+# LIST omits `spec` on purpose — it would drag a full JSON document per row into
+# every board listing (and into the model's context). DETAIL includes it: the
+# spec is the machine-readable half of a style card, and "plot X in the style of
+# that card" needs to read it back losslessly rather than re-guess it from pixels.
 FIGURE_COLUMNS = (
     "id, team_id, uploaded_by, storage_path, title, caption, category, paper_id, tags, "
     "width, height, mime_type, origin, source_url, license, attribution, created_at, "
     "uploader:profiles!figures_uploaded_by_fkey(display_name), papers(id, title, doi)"
 )
+FIGURE_DETAIL_COLUMNS = FIGURE_COLUMNS + ", spec"
 
 
 @lab.with_refresh
@@ -57,11 +64,12 @@ def list_figures(
 
 @lab.with_refresh
 def get_figure(team: dict, figure_id: str) -> dict:
-    """One figure in the lab, hydrated with uploader + linked paper."""
+    """One figure in the lab, hydrated with uploader + linked paper (and, for a
+    style card, its spec)."""
     client = lab.get_client()
     rows = (
         client.table("figures")
-        .select(FIGURE_COLUMNS)
+        .select(FIGURE_DETAIL_COLUMNS)
         .eq("team_id", team["id"])
         .eq("id", figure_id)
         .limit(1)
@@ -84,6 +92,84 @@ def categories(team: dict) -> list[dict]:
 @lab.with_refresh
 def _download_raw(figure: dict) -> bytes:
     return lab.get_client().storage.from_(BUCKET).download(figure["storage_path"])
+
+
+@lab.with_refresh
+def _insert_style_card(team: dict, row: dict, png: bytes, path: str) -> dict:
+    """Upload the render, then insert the row — the raw ops, so an expired token
+    is refreshed and retried by @with_refresh (it re-raises LabError untouched,
+    so a function that wrapped its own errors could never be retried)."""
+    client = lab.get_client()
+    client.storage.from_(BUCKET).upload(path, png, {"content-type": "image/png"})
+    try:
+        rows = client.table("figures").insert(row).execute().data or []
+    except Exception:
+        try:  # roll back the orphaned object; best-effort, never masks the cause
+            client.storage.from_(BUCKET).remove([path])
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    return rows[0] if rows else row
+
+
+def add_style_card(
+    team: dict,
+    *,
+    spec: dict,
+    title: str,
+    category: str = "",
+    tags: list[str] | None = None,
+    source_url: str | None = None,
+    attribution: str | None = None,
+    paper_id: str | None = None,
+) -> dict:
+    """Create a style card: render the (validated) spec with synthetic data,
+    store the render in the figures bucket, insert the row (origin='style_card').
+
+    The render is seeded from the spec's content (spec_seed) — the same seed
+    preview_plot_spec uses — so the board shows exactly the image the user
+    approved, and the stored row (which carries the spec) can always reproduce
+    it. Mirrors the web upload's orphan handling: if the row insert fails, the
+    just-uploaded object is best-effort removed.
+    """
+    from . import render as figrender
+
+    lab._card_limiter.check()  # bounds an injection-driven loop of card writes
+    uid = lab.current_user_id()
+    if not uid:
+        raise LabError("Couldn't determine your user id to attribute the style card to.")
+    figure_id = str(uuid.uuid4())
+    try:
+        png, width, height = figrender.render(spec, spec_seed(spec))
+    except Exception as exc:  # noqa: BLE001 — surface renderer failures cleanly
+        raise LabError(f"Could not render the spec: {exc}") from exc
+
+    path = f"{team['id']}/{figure_id}.png"
+    row = {
+        "id": figure_id,
+        "team_id": team["id"],
+        "uploaded_by": uid,
+        "storage_path": path,
+        "title": title,
+        "caption": "",
+        "category": category,
+        "tags": tags or [],
+        "width": width,
+        "height": height,
+        "mime_type": "image/png",
+        "file_size": len(png),
+        "origin": "style_card",
+        "spec": spec,
+        "source_url": source_url,
+        "attribution": attribution,
+        "paper_id": paper_id,
+    }
+    try:
+        return _insert_style_card(team, row, png, path)
+    except LabError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — wrap OUTSIDE the retry boundary
+        raise LabError(f"Could not save the style card: {exc}") from exc
 
 
 def download(figure: dict) -> bytes:
@@ -223,8 +309,9 @@ def aggregate_palette(raws: list[bytes], n: int = 6) -> list[str]:
 
 # --- colour-vision-deficiency (CVD) safety -------------------------------------
 # A CVD-safe qualitative default (Paul Tol 'bright') to recommend when a palette
-# collides. Distinguishable under all three dichromacies by construction.
-SAFE_CYCLE = ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377"]
+# collides. Distinguishable under all three dichromacies by construction. Single
+# source of truth is spec.DEFAULT_PALETTE, which style cards also fall back to.
+SAFE_CYCLE = list(DEFAULT_PALETTE)
 
 # Machado et al. (2009) dichromacy simulation matrices, severity 1.0, applied in
 # LINEAR RGB. Rows are the R/G/B outputs; columns the R/G/B inputs.
@@ -297,7 +384,8 @@ def _delta_e(a: tuple[float, float, float], b: tuple[float, float, float]) -> fl
 
 def normalize_hexes(raw) -> list[str]:
     """Parse a hex palette from a list or a comma/space-separated string; keep only
-    well-formed 6-digit colours, normalised to ``#rrggbb`` lower-case, de-duped."""
+    well-formed 6-digit colours, normalised to ``#rrggbb`` lower-case, de-duped.
+    Single-colour parsing lives in ``spec.normalize_hex`` — one hex parser."""
     import re
 
     if isinstance(raw, str):
@@ -306,9 +394,9 @@ def normalize_hexes(raw) -> list[str]:
         tokens = list(raw or [])
     out: list[str] = []
     for t in tokens:
-        t = str(t).strip().lstrip("#").lower()
-        if re.fullmatch(r"[0-9a-f]{6}", t) and f"#{t}" not in out:
-            out.append(f"#{t}")
+        hexv = normalize_hex(t)
+        if hexv and hexv not in out:
+            out.append(hexv)
     return out
 
 
@@ -335,10 +423,7 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
     look"); axis/text ink stays neutral. When the mood board is monochrome we ship
     a CVD-safe scientific default cycle rather than an all-white one."""
     fallback = not hexes
-    # Paul Tol 'bright' — a safe, colourful default when nothing could be derived.
-    cycle = [h.lstrip("#") for h in hexes] or [
-        "4477AA", "EE6677", "228833", "CCBB44", "66CCEE", "AA3377"
-    ]
+    cycle = [h.lstrip("#") for h in (hexes or SAFE_CYCLE)]
     ink = "222222"
     header = f"# Atlas mood-board style — {lab_name}"
     if fallback:
@@ -364,6 +449,10 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
         "grid.linewidth: 0.6",
         "axes.spines.top: False",
         "axes.spines.right: False",
+        # Frameless, as the style cards render (render.py's `legend.frameon`) —
+        # without this the sheet a lab plots with would box its legends while
+        # every card on their board doesn't, from the same claimed "lab look".
+        "legend.frameon: False",
         "axes.titlesize: 13",
         "axes.titleweight: bold",
         "font.size: 11",

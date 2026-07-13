@@ -143,20 +143,24 @@ export function useFigureEngagementCounts(teamId: string, figureIds: string[]) {
 }
 
 export interface Provenance {
-  origin: "own" | "third_party";
+  origin: Figure["origin"];
   sourceUrl: string | null;
   license: string | null;
   attribution: string | null;
 }
 
-/** Third-party provenance is only stored for third-party figures; 'own' clears it. */
+/** Provenance is kept for third-party figures (source + licence) and style cards
+ *  (citation of the style's inspiration); 'own' clears it. A style card carries no
+ *  LICENCE: its image is our own synthetic render, so there is no third-party
+ *  copy to licence — only an inspiration to cite. */
 function provenanceColumns(p: Provenance) {
-  const third = p.origin === "third_party";
+  const cited = p.origin !== "own";
+  const licensed = p.origin === "third_party";
   return {
     origin: p.origin,
-    source_url: third ? p.sourceUrl?.trim() || null : null,
-    license: third ? p.license?.trim() || null : null,
-    attribution: third ? p.attribution?.trim() || null : null,
+    source_url: cited ? p.sourceUrl?.trim() || null : null,
+    license: licensed ? p.license?.trim() || null : null,
+    attribution: cited ? p.attribution?.trim() || null : null,
   };
 }
 
@@ -219,7 +223,7 @@ export async function uploadFigure(input: UploadFigureInput): Promise<string> {
 }
 
 export interface UpdateFigureInput extends Provenance {
-  figure: Pick<Figure, "id" | "team_id" | "storage_path">;
+  figure: Pick<Figure, "id" | "team_id" | "storage_path" | "origin">;
   title: string;
   caption: string;
   category: string;
@@ -248,6 +252,12 @@ export async function updateFigure(input: UpdateFigureInput): Promise<void> {
   // remove the superseded old object on success.
   let freshObjectPath: string | null = null;
   if (newFile) {
+    // Enforced here, not just by hiding the button: a style card's image is a
+    // deterministic render of its spec — replacing it would break that contract
+    // (and could smuggle a real third-party image back onto the board).
+    if (figure.origin === "style_card") {
+      throw new Error("A style card's image is a render of its spec and can't be replaced.");
+    }
     if (!ACCEPTED_MIME.includes(newFile.type as (typeof ACCEPTED_MIME)[number])) {
       throw new Error("Unsupported format — use PNG, JPEG, WebP or GIF.");
     }

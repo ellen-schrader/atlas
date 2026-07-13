@@ -48,6 +48,7 @@ mcp = [
     "mcp>=1.2",
     "supabase>=2.9",
     "pillow>=10.0",
+    "matplotlib>=3.8",  # style-card renderer (atlas_mcp/render.py)
 ]
 
 [tool.uv]

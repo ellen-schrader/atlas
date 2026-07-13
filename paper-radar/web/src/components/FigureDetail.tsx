@@ -1,8 +1,9 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileText, ImagePlus, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
+import { CopyBlock } from "@/components/CopyBlock";
 import { FigureEngagement } from "@/components/Engagement";
 import { FigureFields } from "@/components/FigureFields";
 import type { PickedPaper } from "@/components/PaperPicker";
@@ -157,6 +158,32 @@ export function FigureDetail({
               </button>
             )}
 
+            {figure.origin === "style_card" && (
+              <div className="mt-4 rounded-control border border-accent/40 bg-accent-weak p-3">
+                <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-accent">
+                  Style card · recreated with synthetic data
+                </span>
+                <div className="mt-1.5 flex flex-col gap-0.5 text-xs text-fg/90">
+                  <span className="text-muted">
+                    This image is a synthetic render of a stored style spec — the original figure
+                    was never copied. Borrow the look; cite the inspiration.
+                  </span>
+                  {figure.attribution && <span>Style of {figure.attribution}</span>}
+                  {figure.source_url && (
+                    <a
+                      href={figure.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="truncate text-accent hover:underline"
+                    >
+                      {figure.source_url}
+                    </a>
+                  )}
+                </div>
+                {figure.spec != null && <SpecViewer spec={figure.spec} />}
+              </div>
+            )}
+
             {figure.origin === "third_party" && (
               <div className="mt-4 rounded-control border border-border bg-surface-2 p-3">
                 <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
@@ -252,7 +279,7 @@ function FigureEditForm({
   const [paper, setPaper] = useState<PickedPaper | null>(
     figure.papers ? { id: figure.papers.id, title: figure.papers.title ?? "Linked paper" } : null,
   );
-  const [origin, setOrigin] = useState<"own" | "third_party">(figure.origin);
+  const [origin, setOrigin] = useState<Figure["origin"]>(figure.origin);
   const [sourceUrl, setSourceUrl] = useState(figure.source_url ?? "");
   const [license, setLicense] = useState(figure.license ?? "");
   const [attribution, setAttribution] = useState(figure.attribution ?? "");
@@ -323,34 +350,42 @@ function FigureEditForm({
             <Loader2 className="animate-spin text-muted" size={16} />
           </div>
         )}
-        <div>
-          <input
-            ref={fileInput}
-            type="file"
-            accept={ACCEPTED_MIME.join(",")}
-            className="hidden"
-            onChange={(e) => {
-              pickReplacement(e.target.files?.[0]);
-              e.target.value = ""; // allow re-selecting the same file later
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInput.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-1.5 text-sm font-medium text-muted transition hover:border-accent hover:text-accent"
-          >
-            <ImagePlus size={14} /> {newFile ? "Change replacement" : "Replace image"}
-          </button>
-          {newFile && (
+        {figure.origin === "style_card" ? (
+          // A style card's image is a render of its spec — replacing it by hand
+          // would break the spec↔image contract.
+          <span className="text-xs text-muted">
+            Synthetic render of the stored spec — the image can't be replaced.
+          </span>
+        ) : (
+          <div>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ACCEPTED_MIME.join(",")}
+              className="hidden"
+              onChange={(e) => {
+                pickReplacement(e.target.files?.[0]);
+                e.target.value = ""; // allow re-selecting the same file later
+              }}
+            />
             <button
               type="button"
-              onClick={() => setNewFile(null)}
-              className="ml-2 text-xs text-muted hover:text-danger"
+              onClick={() => fileInput.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-1.5 text-sm font-medium text-muted transition hover:border-accent hover:text-accent"
             >
-              Keep original
+              <ImagePlus size={14} /> {newFile ? "Change replacement" : "Replace image"}
             </button>
-          )}
-        </div>
+            {newFile && (
+              <button
+                type="button"
+                onClick={() => setNewFile(null)}
+                className="ml-2 text-xs text-muted hover:text-danger"
+              >
+                Keep original
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <FigureFields
@@ -385,6 +420,20 @@ function FigureEditForm({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** The stored style-card spec, collapsed by default, with copy-to-clipboard —
+ *  the machine-readable half of a style card ("plot X in this style"). */
+function SpecViewer({ spec }: { spec: Record<string, unknown> }) {
+  const json = useMemo(() => JSON.stringify(spec, null, 2), [spec]);
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-xs font-semibold text-accent">
+        Spec JSON
+      </summary>
+      <CopyBlock value={json} label="Copy spec" className="mt-2 max-h-56 overflow-auto" />
+    </details>
   );
 }
 
