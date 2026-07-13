@@ -9,6 +9,7 @@ import {
   LogOut,
   Map as MapIcon,
   Menu,
+  Sparkles,
   Settings as SettingsIcon,
   Users,
   X,
@@ -43,6 +44,7 @@ const NAV = [
   { to: "/reading", label: "Reading list", icon: BookMarked, end: false },
   { to: "/board", label: "Your lab’s look", icon: Images, end: false },
   { to: "/map", label: "Map", icon: MapIcon, end: false },
+  { to: "/connect", label: "Connect Claude", icon: Sparkles, end: false },
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>

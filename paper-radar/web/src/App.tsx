@@ -12,6 +12,7 @@ import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
 import Papers from "@/routes/Papers";
 import ReadingList from "@/routes/ReadingList";
+import Connect from "@/routes/Connect";
 import Settings from "@/routes/Settings";
 
 function Center({ children }: { children: ReactNode }) {
@@ -63,6 +64,7 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />
+        <Route path="/connect" element={<Connect />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
