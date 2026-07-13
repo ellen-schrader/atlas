@@ -32,11 +32,22 @@ const EMPTY: PaperFields = {
   source: "manual",
 };
 
-/** "look up the URL" → "check and correct" → "added". Keeping the review step in
- *  its own state is what lets the bot-walled case reuse the *same* form instead of
- *  needing a separate manual mode: an empty autofill is just a preview with
- *  nothing in it. */
-type Step = "url" | "review" | "done";
+/** "look up the URL" → "check and correct" → "added", with "recover" in between when
+ *  the page won't resolve.
+ *
+ *  A bot wall stops us reading the publisher's *page* — it doesn't stop Crossref
+ *  reading the paper's *DOI*. So a failed lookup isn't "type it all in yourself",
+ *  it's "try the DOI"; typing it all in is only the last resort. */
+type Step = "url" | "recover" | "review" | "done";
+
+/** Accept a bare DOI, a `doi:` prefix, or a full doi.org URL — people paste all three. */
+function doiUrl(input: string): string | null {
+  const doi = input
+    .trim()
+    .replace(/^doi:\s*/i, "")
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
+  return /^10\.\d{4,9}\/\S+$/.test(doi) ? `https://doi.org/${doi}` : null;
+}
 
 export function AddPaperDialog({
   open,
@@ -53,6 +64,8 @@ export function AddPaperDialog({
   const qc = useQueryClient();
   const [step, setStep] = useState<Step>("url");
   const [url, setUrl] = useState("");
+  /** The DOI typed on the recover step, when the publisher's page wouldn't load. */
+  const [doi, setDoi] = useState("");
   const [fields, setFields] = useState<PaperFields>(EMPTY);
   const [authorsText, setAuthorsText] = useState("");
   const [note, setNote] = useState("");
@@ -69,6 +82,7 @@ export function AddPaperDialog({
   } | null>(null);
 
   const urlRef = useRef<HTMLInputElement>(null);
+  const doiRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
   // Reset on each open, so a second paper doesn't start inside the last one's state.
@@ -76,6 +90,7 @@ export function AddPaperDialog({
     if (!open) return;
     setStep("url");
     setUrl("");
+    setDoi("");
     setFields(EMPTY);
     setAuthorsText("");
     setNote("");
@@ -86,13 +101,32 @@ export function AddPaperDialog({
     setSaving(false);
   }, [open]);
 
-  // On reaching the review step, put the cursor in Title — it's the field that's
-  // empty exactly when the lookup failed and the user has to type it themselves.
   useEffect(() => {
+    if (step === "recover") doiRef.current?.focus();
+    // On reaching the review step with nothing filled in, the title is what the user
+    // has to type — so start them there.
     if (step === "review" && !fields.title) titleRef.current?.focus();
   }, [step, fields.title]);
 
   const autofilled = step === "review" && fields.source !== "manual" && Boolean(fields.title);
+
+  /** Fill the form from a resolver hit. `keepUrl` preserves the publisher page the
+   *  user actually pasted when the metadata came from its DOI instead — that link is
+   *  what their lab will click, and `_upsert_paper` still dedupes on the DOI. */
+  function applyResolved(resolved: Awaited<ReturnType<typeof resolvePaper>>) {
+    setFields({
+      title: resolved.title ?? "",
+      authors: resolved.authors ?? [],
+      venue: resolved.venue ?? "",
+      year: resolved.year,
+      doi: resolved.doi ?? "",
+      abstract: resolved.abstract ?? "",
+      keywords: resolved.keywords ?? [],
+      source: resolved.source,
+    });
+    setAuthorsText((resolved.authors ?? []).join("\n"));
+    setStep("review");
+  }
 
   async function lookUp(e: FormEvent) {
     e.preventDefault();
@@ -109,24 +143,17 @@ export function AddPaperDialog({
       const existing = await findInLab(teamId, resolved.url_norm);
       if (existing) {
         setDuplicate(existing);
-        setLooking(false);
         return;
       }
 
-      setFields({
-        title: resolved.title ?? "",
-        authors: resolved.authors ?? [],
-        venue: resolved.venue ?? "",
-        year: resolved.year,
-        doi: resolved.doi ?? "",
-        abstract: resolved.abstract ?? "",
-        keywords: resolved.keywords ?? [],
-        // No title means no resolver got through (a bot wall, or a page with no
-        // citation tags). Whatever they type from here is theirs, not Crossref's.
-        source: resolved.title ? resolved.source : "manual",
-      });
-      setAuthorsText((resolved.authors ?? []).join("\n"));
-      setStep("review");
+      // No title means nothing got through: a bot wall, or a page with no citation
+      // tags. Offer the DOI before making them type the whole record out.
+      if (!resolved.title) {
+        setDoi(resolved.doi ?? "");
+        setStep("recover");
+        return;
+      }
+      applyResolved(resolved);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -134,9 +161,41 @@ export function AddPaperDialog({
     }
   }
 
-  /** Skip the lookup entirely — for a URL you already know won't resolve. */
+  /** The recovery the bot wall leaves open: publishers block the page, not Crossref. */
+  async function lookUpDoi(e: FormEvent) {
+    e.preventDefault();
+    const target = doiUrl(doi);
+    if (!target) {
+      setError("That doesn’t look like a DOI. It starts with “10.” — for example 10.1016/j.cell.2023.01.001");
+      return;
+    }
+    setLooking(true);
+    setError(null);
+    try {
+      const resolved = await resolvePaper(target);
+      if (!resolved.title) {
+        setError("That DOI didn’t resolve either. You can still add the paper by hand below.");
+        return;
+      }
+      // The lab may already hold this paper under its doi.org link rather than the
+      // publisher URL that was pasted, so re-check before offering to add it again.
+      const existing = await findInLab(teamId, resolved.url_norm);
+      if (existing) {
+        setDuplicate(existing);
+        setStep("url");
+        return;
+      }
+      applyResolved(resolved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLooking(false);
+    }
+  }
+
+  /** Last resort: type the record out. Keeps whatever URL and DOI we already have. */
   function enterByHand() {
-    setFields({ ...EMPTY, source: "manual" });
+    setFields({ ...EMPTY, doi: doiUrl(doi) ? doi.trim() : "", source: "manual" });
     setAuthorsText("");
     setError(null);
     setStep("review");
@@ -190,14 +249,18 @@ export function AddPaperDialog({
       <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pr-14">
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
-            {step !== "done"
-              ? "Add a paper"
-              : added?.already
-                ? "Already in your lab"
-                : "Added to your lab"}
+            {step === "recover"
+              ? "Try the DOI instead"
+              : step !== "done"
+                ? "Add a paper"
+                : added?.already
+                  ? "Already in your lab"
+                  : "Added to your lab"}
           </h2>
           <p className="mt-1 text-sm text-muted">
             {step === "url" && "Paste a link — we’ll fill in the details for you."}
+            {step === "recover" &&
+              "That publisher blocks automated lookups, but its DOI won’t be blocked."}
             {step === "review" &&
               (autofilled
                 ? "Check what we found, and fix anything that’s off."
@@ -248,6 +311,60 @@ export function AddPaperDialog({
           </form>
         )}
 
+        {step === "recover" && (
+          <form onSubmit={lookUpDoi} className="flex flex-col gap-4">
+            <Banner tone="warn" icon={<AlertTriangle size={15} />}>
+              We couldn’t read <span className="break-all font-medium">{url.trim()}</span>. Cell,
+              ScienceDirect and Wiley block automated lookups of their article pages — but the
+              paper’s DOI resolves through Crossref, which they don’t block.
+            </Banner>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="paper-doi">DOI</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="paper-doi"
+                  ref={doiRef}
+                  value={doi}
+                  onChange={(e) => setDoi(e.target.value)}
+                  placeholder="10.1016/j.cell.2023.01.001"
+                  disabled={looking}
+                />
+                <Button type="submit" disabled={looking || !doi.trim()} className="shrink-0">
+                  {looking ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+                  {looking ? "Looking…" : "Look up"}
+                </Button>
+              </div>
+              <p className="text-xs text-faint">
+                On the article page it’s usually printed under the title, or in the “Cite this
+                article” panel. It starts with <span className="font-mono">10.</span>
+              </p>
+            </div>
+
+            {error && <ErrorNotice message={error} />}
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("url");
+                  setError(null);
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-fg"
+              >
+                <ArrowLeft size={13} /> Use a different link
+              </button>
+              <button
+                type="button"
+                onClick={enterByHand}
+                className="text-xs font-medium text-muted underline underline-offset-2 hover:text-fg"
+              >
+                No DOI? Enter the details by hand
+              </button>
+            </div>
+          </form>
+        )}
+
         {step === "review" && (
           <form id="add-paper-form" onSubmit={save} className="flex flex-col gap-4">
             {autofilled ? (
@@ -260,8 +377,9 @@ export function AddPaperDialog({
               </Banner>
             ) : (
               <Banner tone="warn" icon={<AlertTriangle size={15} />}>
-                We couldn’t read that page — many publishers block automated lookups. Add what you
-                know below; the abstract and tags can be filled in later.
+                You’re adding this one by hand. A link and a title are all it needs — the abstract
+                is what Atlas reads to place the paper on the map, so it’s worth pasting if you
+                have it.
               </Banner>
             )}
 
