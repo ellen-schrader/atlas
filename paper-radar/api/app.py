@@ -752,32 +752,43 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     return _build_overview(uc, team_id, rows)
 
 
+# Only for *displaying* the effective floor when a map hasn't overridden it; the
+# actual filtering default lives in the map_members / map_member_stats SQL. Keep the
+# two in sync (both 0.35) or the shown threshold won't match what's filtered.
+_DEFAULT_MIN_SIMILARITY = 0.35
+
+
 class MapOverviewResponse(OverviewResponse):
     map_id: str
     name: str
     seed: str
     visibility: str
     new_this_week: int  # members posted in the last 7 days
+    min_similarity: float  # the map's relevance floor
+    below_threshold: int  # embedded papers that fall just under the floor
 
 
 @app.get("/maps/{map_id}/overview", response_model=MapOverviewResponse)
 def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOverviewResponse:
     """The scoped map: a t-SNE + sub-themes over just the map's member papers.
 
-    Membership comes from the `map_members` RPC (seed similarity + pins − excludes);
-    RLS on `maps` means a caller who can't see the map gets a 404.
+    Membership comes from the `map_members` RPC (seed similarity ≥ floor, + pins,
+    − excludes); RLS on `maps` means a caller who can't see the map gets a 404.
     """
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("id, team_id, name, seed, visibility").eq("id", map_id).limit(1)
-        .execute().data or []
+        uc.table("maps").select("id, team_id, name, seed, visibility, config").eq("id", map_id)
+        .limit(1).execute().data or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     m = rows[0]
+    min_sim = float((m.get("config") or {}).get("min_similarity", _DEFAULT_MIN_SIMILARITY))
+    stat = uc.rpc("map_member_stats", {"p_map": map_id}).execute().data or []
+    below = (stat[0].get("below", 0) if stat else 0) or 0
 
     members = (
         uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
@@ -791,6 +802,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         return MapOverviewResponse(
             **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
             visibility=m["visibility"], new_this_week=0,
+            min_similarity=min_sim, below_threshold=below,
         )
 
     post_rows = (
@@ -804,6 +816,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     return MapOverviewResponse(
         **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
         visibility=m["visibility"], new_this_week=new_this_week,
+        min_similarity=min_sim, below_threshold=below,
     )
 
 

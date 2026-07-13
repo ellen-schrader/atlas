@@ -9,6 +9,7 @@ labs and enforces that only a map's creator edits or deletes it.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -103,6 +104,74 @@ def create_map(req: MapCreate, token: str = Depends(require_token)) -> MapOut:
             status_code=403, detail="You can only create maps in labs you belong to."
         )
     return _out(rows[0])
+
+
+class MapPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    seed: str | None = Field(default=None, max_length=400)
+    visibility: str | None = None
+    min_similarity: float | None = None
+    pin: str | None = None  # paper_id to add to pinned (forces it into the map)
+    unpin: str | None = None
+    exclude: str | None = None  # paper_id to add to excluded (drops it from the map)
+    uninclude: str | None = None
+
+
+@router.patch("/{map_id}", response_model=MapOut)
+def update_map(map_id: str, req: MapPatch, token: str = Depends(require_token)) -> MapOut:
+    """Edit a map — rename, re-seed, change visibility, tune the match threshold, or
+    pin/exclude a paper. Creator-only (enforced by RLS: a non-creator's update hits
+    zero rows). Config is read-modify-written, which is safe because a map has a
+    single editor (its creator), so there is no concurrent writer to race."""
+    _require_user(token)
+    uc = user_client(token)
+    rows = uc.table("maps").select("config").eq("id", map_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+
+    updates: dict = {}
+    if req.name is not None:
+        if not req.name.strip():
+            raise HTTPException(status_code=400, detail="name must not be empty")
+        updates["name"] = req.name.strip()
+    if req.visibility is not None:
+        if req.visibility not in ("lab", "private"):
+            raise HTTPException(status_code=400, detail="visibility must be 'lab' or 'private'")
+        updates["visibility"] = req.visibility
+    if req.seed is not None:
+        seed = req.seed.strip()
+        if not seed:
+            raise HTTPException(status_code=400, detail="seed must not be empty")
+        try:
+            updates["seed_embedding"] = embeddings.embed_query(seed)
+        except embeddings.EmbeddingError as exc:
+            raise HTTPException(status_code=503, detail=f"Embeddings unavailable: {exc}") from exc
+        updates["seed"] = seed
+
+    config = dict(rows[0].get("config") or {})
+    pinned = set(config.get("pinned") or [])
+    excluded = set(config.get("excluded") or [])
+    if req.min_similarity is not None:
+        config["min_similarity"] = max(-1.0, min(1.0, req.min_similarity))
+    if req.pin:
+        pinned.add(req.pin)
+        excluded.discard(req.pin)  # pinning a paper un-excludes it
+    if req.unpin:
+        pinned.discard(req.unpin)
+    if req.exclude:
+        excluded.add(req.exclude)
+        pinned.discard(req.exclude)  # excluding a paper un-pins it
+    if req.uninclude:
+        excluded.discard(req.uninclude)
+    config["pinned"] = sorted(pinned)
+    config["excluded"] = sorted(excluded)
+    updates["config"] = config
+    updates["updated_at"] = datetime.now(UTC).isoformat()
+
+    updated = uc.table("maps").update(updates).eq("id", map_id).execute().data or []
+    if not updated:
+        raise HTTPException(status_code=403, detail="Only the map's creator can edit it.")
+    return _out(updated[0])
 
 
 @router.get("", response_model=list[MapOut])
