@@ -8,6 +8,7 @@ import { PaperCard } from "@/components/PaperCard";
 import { PaperListRow } from "@/components/PaperListRow";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { isTransientApiError } from "@/lib/api";
 import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
@@ -202,11 +203,17 @@ export default function Dashboard() {
             <div className="flex flex-col items-start gap-2 rounded-card border border-dashed border-border bg-surface-2 p-5">
               <span className="inline-flex items-center gap-2 text-sm font-medium">
                 <Sparkles size={15} className="text-accent" />
-                {recs.isError ? "Recommendations are unavailable right now." : "No new papers to recommend yet."}
+                {recs.isError
+                  ? isTransientApiError(recs.error)
+                    ? "Waking the paper service…"
+                    : "Recommendations are unavailable right now."
+                  : "No new papers to recommend yet."}
               </span>
               <p className="text-xs text-muted">
                 {recs.isError
-                  ? "The recommendation service isn’t reachable — try again shortly."
+                  ? isTransientApiError(recs.error)
+                    ? "It sleeps when nobody’s around — recommendations will appear here shortly."
+                    : "The recommendation service isn’t reachable — try again shortly."
                   : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
               </p>
               {!recs.isError && (
