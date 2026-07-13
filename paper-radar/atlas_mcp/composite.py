@@ -133,7 +133,6 @@ class _Domain:
             nid += 1
 
         self._height = height
-        self._members = members  # only the root survives
         return merges, members[nid - 1]
 
     def ordered(self, arr):
@@ -295,12 +294,19 @@ def _p_bar(fig, ax, panel, dom, palettes, rng, base_size):
 
 def _p_annotation_track(fig, ax, panel, dom, palettes, rng, base_size):
     """The categorical colour strip beside a heatmap — one cell per row."""
-    colours = _palette_of(panel, palettes, list(card_spec.DEFAULT_PALETTE))
-    groups = rng.integers(0, max(2, min(len(colours), 5)), dom.n)
-    strip = dom.ordered(groups).reshape(-1, 1)
     from matplotlib.colors import ListedColormap
 
-    ax.imshow(strip, aspect="auto", cmap=ListedColormap(colours), interpolation="nearest")
+    colours = _palette_of(panel, palettes, list(card_spec.DEFAULT_PALETTE))
+    k = max(2, min(len(colours), 5))
+    groups = rng.integers(0, k, dom.n)
+    strip = dom.ordered(groups).reshape(-1, 1)
+    # PIN the scale to the palette, don't let imshow normalise to whatever ids happen
+    # to be sampled: otherwise a strip that draws only groups {1,2} paints group 1
+    # with colours[0], and the same group takes a different colour each render.
+    ax.imshow(
+        strip, aspect="auto", cmap=ListedColormap(colours[:k]),
+        vmin=0, vmax=k - 1, interpolation="nearest",
+    )
     ax.set_xticks([])
     ax.grid(False)
 

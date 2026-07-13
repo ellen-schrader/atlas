@@ -140,6 +140,33 @@ class SpecError(ValueError):
     """A spec that doesn't validate; the message says how to fix it."""
 
 
+# What each chart form can actually express. These are RENDERER limits, so they must
+# be enforced wherever a chart is described — v1's single chart and v2's panels alike.
+# They were written inline in the v1 branch only, and v2 promptly diverged: a bar with
+# a log axis is refused as v1 and was accepted as v2.
+LOG_AXIS_KINDS = ("line", "scatter")  # everything else sits on a zero baseline
+
+
+def check_chart_rules(kind: str, axes: dict, palette: list[str], series: list[dict],
+                      where: str = "spec") -> None:
+    """The cross-field rules a chart of this kind must satisfy. Raises SpecError."""
+    if kind not in LOG_AXIS_KINDS and "log" in (axes["x_scale"], axes["y_scale"]):
+        # Bars/bins/boxes sit on a zero baseline (and bar groups on ordinal positions
+        # including 0) — a log axis masks or garbles them.
+        raise SpecError(
+            f"{where}: log axes are only supported for {' and '.join(LOG_AXIS_KINDS)} charts."
+        )
+    # A heatmap draws no series: its palette is a continuous colour RAMP, so
+    # "one colour per series" does not apply to it.
+    if kind != "heatmap" and series and len(palette) < len(series):
+        # The renderer cycles the palette, so a short one reuses colours — two series
+        # drawn in identical ink, on a card whose CVD verdict checked only the palette.
+        raise SpecError(
+            f"{where}: palette has {len(palette)} colour(s) for {len(series)} series — "
+            "give every series its own colour (extend the palette or reduce the series)."
+        )
+
+
 _NAME_RE = re.compile(r"[a-z0-9_]{1,24}", re.I)
 
 
@@ -455,6 +482,13 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
                 f"{where}.rows must name a domain — one of: {', '.join(domains) or '(none)'}."
             )
         panel["rows"] = rows
+        if strict and kind == "dendrogram" and domains[rows]["order"] != "clustered":
+            raise SpecError(
+                f"{where}: a dendrogram explains a CLUSTERED row order — domain "
+                f"'{rows}' is ordered '{domains[rows]['order']}', so the tree's branches "
+                "would cross and bracket rows that aren't adjacent. Set "
+                f"domains.{rows}.order = \"clustered\", or drop the dendrogram panel."
+            )
     elif kind in _DOMAIN_ONLY_KINDS:
         # These kinds ARE a shared row axis — there is nothing to draw without one,
         # and the v1 chart table has no entry for them. Refuse in a way that says so
@@ -536,6 +570,23 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
         n_hint = _integer(hints_d, f"{where}.data_hints", "n_series", 1, MAX_SERIES, 1)
         panel["series"] = _series(d.get("series"), kind, n_hint, strict)
         panel["legend"] = _legend(d.get("legend"), strict)
+
+    if strict:
+        colours = panel.get("palette")
+        if isinstance(colours, str):
+            colours = palettes[colours]
+        elif not isinstance(colours, list):
+            colours = list(DEFAULT_PALETTE)
+        if panel.get("rows"):
+            # A row-bound panel draws one mark per ROW from the shared domain — it has
+            # no `series`, and a log axis here is the canonical count plot (strictly
+            # positive abundances, baseline clipped), so the v1 rules don't apply.
+            pass
+        else:
+            # A free panel is a v1 chart in a grid cell, drawn by the v1 drawers — so
+            # it must satisfy exactly the v1 rules, or v2 becomes a way to ask for the
+            # broken renders v1 refuses.
+            check_chart_rules(kind, panel["axes"], colours, panel.get("series") or [], where)
 
     hints_d = _section(d.get("data_hints"), f"{where}.data_hints")
     if strict:
@@ -665,14 +716,6 @@ def validate_spec(raw: object, *, strict: bool = True) -> dict:
 
     chart = _chart(raw.get("chart"))
     axes = _axes(raw.get("axes"))
-    if (
-        strict
-        and chart["type"] not in ("line", "scatter")
-        and "log" in (axes["x_scale"], axes["y_scale"])
-    ):
-        # Bars/bins/boxes sit on a zero baseline (and bar groups on ordinal
-        # positions including 0) — a log axis masks or garbles them.
-        raise SpecError("log axes are only supported for line and scatter charts.")
     palette = _palette(raw.get("palette"), strict)
 
     hints_d = _section(raw.get("data_hints"), "data_hints")
@@ -681,23 +724,18 @@ def validate_spec(raw: object, *, strict: bool = True) -> dict:
     hd = SECTION_DEFAULTS["data_hints"]
     n_hint = _integer(hints_d, "data_hints", "n_series", 1, MAX_SERIES, hd["n_series"])
     series = _series(raw.get("series"), chart["type"], n_hint, strict)
-    # A heatmap draws no series: its palette is a continuous colour RAMP (the
-    # stops of a colormap), so "one colour per series" does not apply — demanding
-    # it would make the single-hue sequential ramp the renderer supports
-    # impossible to ask for.
-    if strict and chart["type"] != "heatmap" and len(palette) < len(series):
-        # The renderer cycles the palette, so a short one would reuse colours —
-        # and the CVD verdict (checked on the palette alone) would overstate.
-        if raw.get("palette") is None:
+    if strict:
+        if (
+            raw.get("palette") is None
+            and chart["type"] != "heatmap"
+            and len(palette) < len(series)
+        ):
             raise SpecError(
                 f"{len(series)} series needs {len(series)} colours, but the CVD-safe default "
                 f"palette has only {len(DEFAULT_PALETTE)} — supply a palette with one colour "
                 "per series."
             )
-        raise SpecError(
-            f"palette has {len(palette)} colour(s) for {len(series)} series — give every "
-            "series its own colour (extend the palette or reduce the series)."
-        )
+        check_chart_rules(chart["type"], axes, palette, series)
     data_hints = {
         # series entries are authoritative; a diverging n_series hint is folded in.
         "n_series": len(series),

@@ -202,6 +202,69 @@ def test_the_tree_and_the_row_order_are_the_same_claim():
         members[dom.n + k] = block
 
 
+def test_a_dendrogram_needs_a_clustered_order():
+    """A tree only explains a CLUSTERED order. On an abundance-sorted one its leaves
+    sit at positions the linkage never chose, so branches cross and the tree brackets
+    rows that aren't adjacent — a picture that contradicts the rows beside it."""
+    def spec(order):
+        return {
+            "spec_version": 2,
+            "domains": {"p": {"n_categories": 8, "order": order}},
+            "layout": {"rows": 1, "cols": 1},
+            "panels": [{"kind": "dendrogram", "position": [0, 0], "rows": "p"}],
+        }
+
+    for order in ("by_value", "fixed"):
+        with pytest.raises(card_spec.SpecError, match="clustered"):
+            card_spec.validate_spec(spec(order))
+    assert card_spec.validate_spec(spec("clustered"))["panels"][0]["kind"] == "dendrogram"
+
+
+def test_v2_panels_obey_the_v1_chart_rules():
+    """A free panel is a v1 chart in a grid cell, drawn by the v1 drawers — so v2 must
+    not become a way to ask for the broken renders v1 refuses. These rules used to live
+    only in the v1 branch, and v2 quietly accepted both."""
+    # log axes on a zero-baseline chart
+    with pytest.raises(card_spec.SpecError, match="log axes"):
+        card_spec.validate_spec(
+            {
+                "spec_version": 2,
+                "layout": {"rows": 1, "cols": 1},
+                "panels": [{"kind": "bar", "position": [0, 0], "axes": {"y_scale": "log"}}],
+            }
+        )
+    # fewer colours than series → two series drawn in identical ink, on a card whose
+    # CVD verdict checked only the palette
+    with pytest.raises(card_spec.SpecError, match="palette"):
+        card_spec.validate_spec(
+            {
+                "spec_version": 2,
+                "layout": {"rows": 1, "cols": 1},
+                "panels": [
+                    {
+                        "kind": "line", "position": [0, 0],
+                        "palette": ["#0f8f8b"], "series": [{}, {}, {}],
+                    }
+                ],
+            }
+        )
+    # …but a ROW-bound bar on a log axis is the canonical count plot and must still pass
+    norm = card_spec.validate_spec(
+        {
+            "spec_version": 2,
+            "domains": {"p": {"n_categories": 8}},
+            "layout": {"rows": 1, "cols": 1},
+            "panels": [
+                {
+                    "kind": "bar", "position": [0, 0], "rows": "p",
+                    "orientation": "horizontal", "axes": {"x_scale": "log"},
+                }
+            ],
+        }
+    )
+    assert norm["panels"][0]["axes"]["x_scale"] == "log"
+
+
 def test_order_rules_actually_order():
     by_value = _domain(order="by_value")
     vals = by_value.ordered(by_value.abundance)
@@ -301,7 +364,9 @@ def test_every_panel_kind_renders(kind):
         panel["rows"] = "phenotype"
     spec = {
         "spec_version": 2,
-        "domains": {"phenotype": {"n_categories": 8, "order": "by_value"}},
+        # clustered: a dendrogram is only legal on a clustered order (see
+        # test_a_dendrogram_needs_a_clustered_order)
+        "domains": {"phenotype": {"n_categories": 8, "order": "clustered"}},
         "layout": {"rows": 1, "cols": 1},
         "panels": [panel],
     }
