@@ -1,21 +1,25 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Ban,
+  Check,
   Loader2,
   MessageSquare,
   Pin,
   RefreshCw,
   Search,
+  Settings2,
   Smile,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { usePaperModal } from "@/components/PaperModal";
 import {
+  deleteMap,
   fetchMapOverview,
   fetchMapPapers,
   fetchMapSummary,
@@ -25,8 +29,9 @@ import {
   updateMap,
 } from "@/lib/api";
 import { usePalette } from "@/lib/palette";
-import type { MapPaper, MapSummary } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
+import type { MapOverviewData, MapPaper, MapSummary } from "@/lib/types";
+import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 import { Scatter } from "@/routes/Map";
 
@@ -41,6 +46,8 @@ const paperLab = (p: MapPaper) => (p.authors.length ? p.authors[p.authors.length
 export default function MapDashboard() {
   const { mapId } = useParams<{ mapId: string }>();
   const { team, userId } = useAppContext();
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
   const [sort, setSort] = useState<Sort>("importance");
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -78,21 +85,52 @@ export default function MapDashboard() {
       qc.invalidateQueries({ queryKey: ["map-papers", mapId] });
     },
   });
-  const titleOf = (id: string) =>
-    papers.data?.papers.find((p) => p.paper_id === id)?.title ?? "source";
+  // Quick read toggle from a row: mark read, or clear back to unread. (Clearing
+  // also drops a reading-list "to_read" on that paper — an accepted simplification.)
+  const setRead = useMutation({
+    mutationFn: async ({ paperId, read }: { paperId: string; read: boolean }) => {
+      const base = supabase.from("paper_status");
+      if (read) {
+        await base.upsert(
+          { user_id: userId, team_id: team.id, paper_id: paperId, status: "read" },
+          { onConflict: "user_id,team_id,paper_id" },
+        );
+      } else {
+        await base.delete().eq("user_id", userId).eq("team_id", team.id).eq("paper_id", paperId);
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["map-papers", mapId] }),
+  });
+  // A cited paper can drop out of the map after curation; resolve to undefined so
+  // the summary can hide a now-stale source chip rather than showing "source".
+  const titleOf = (id: string): string | undefined =>
+    papers.data?.papers.find((p) => p.paper_id === id)?.title ?? undefined;
 
   const data = overview.data;
   const canEdit = !!data && data.created_by === userId;
+  const pinnedIds = useMemo(
+    () => new Set((papers.data?.papers ?? []).filter((p) => p.pinned).map((p) => p.paper_id)),
+    [papers.data],
+  );
+  // The overview points carry each paper's sub-theme, so a sub-theme click can
+  // filter the list too (no extra fetch) — the cross-filter symmetry.
+  const clusterByPid = useMemo(
+    () => new Map((data?.points ?? []).map((p) => [p.paper_id, p.cluster])),
+    [data],
+  );
   const shown = useMemo(() => {
     const all = papers.data?.papers ?? [];
     const q = search.trim().toLowerCase();
-    return all.filter(
+    const filtered = all.filter(
       (p) =>
         (!unreadOnly || p.read_status !== "read") &&
         (!labFilter || paperLab(p) === labFilter) &&
+        (activeCluster == null || clusterByPid.get(p.paper_id) === activeCluster) &&
         (!q || (p.title ?? "").toLowerCase().includes(q)),
     );
-  }, [papers.data, unreadOnly, labFilter, search]);
+    // A pin is a must-have, so float pinned papers to the top of whatever sort.
+    return [...filtered].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  }, [papers.data, unreadOnly, labFilter, activeCluster, clusterByPid, search]);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-8">
@@ -111,9 +149,23 @@ export default function MapDashboard() {
         <>
           <header>
             <p className="text-xs font-semibold uppercase tracking-wide text-accent">Topic map</p>
-            <h1 className="font-serif text-display font-semibold tracking-tight text-fg">
-              {data.name}
-            </h1>
+            <div className="flex items-start gap-2">
+              <h1 className="font-serif text-display font-semibold tracking-tight text-fg">
+                {data.name}
+              </h1>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  title="Edit map"
+                  className="mt-2 shrink-0 rounded-control border border-border px-2 py-1 text-xs font-medium text-muted transition hover:border-accent hover:text-accent"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <Settings2 size={13} /> Edit
+                  </span>
+                </button>
+              )}
+            </div>
             <p className="mt-1 text-sm text-muted">
               papers near <span className="font-serif italic text-fg">{data.seed}</span>
             </p>
@@ -121,7 +173,10 @@ export default function MapDashboard() {
               <Chip>
                 {data.total} paper{data.total === 1 ? "" : "s"}
               </Chip>
-              {data.new_this_week > 0 && <Chip accent>+{data.new_this_week} this week</Chip>}
+              {/* Suppress when it equals the total — an all-new map isn't "news". */}
+              {data.new_this_week > 0 && data.new_this_week < data.total && (
+                <Chip accent>+{data.new_this_week} this week</Chip>
+              )}
               <Chip>{data.visibility === "lab" ? `Shared with ${team.name}` : "Only you"}</Chip>
             </div>
             {data.below_threshold > 0 && (
@@ -144,61 +199,104 @@ export default function MapDashboard() {
             )}
           </header>
 
+          {editing && data && (
+            <MapEditPanel
+              data={data}
+              onClose={() => setEditing(false)}
+              onSave={(patch) => {
+                curate.mutate(patch);
+                setEditing(false);
+              }}
+              onDelete={() => {
+                if (window.confirm(`Delete the map “${data.name}”?`)) {
+                  deleteMap(data.map_id).then(() => navigate("/maps"));
+                }
+              }}
+              saving={curate.isPending}
+            />
+          )}
+
           {data.total === 0 ? (
             <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
               No papers match this topic yet. As the lab posts more, they’ll appear here.
             </div>
           ) : (
-            // Brief + map as one band: the scatter is the hero (left on desktop),
-            // the summary sits beside it — and leads on mobile, where "what's new?"
-            // matters more than the spatial view.
-            <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-              <div className="lg:order-2">
-                <WhatsNew
-                  summary={summary.data}
-                  loading={summary.isLoading}
-                  generating={regen.isPending}
-                  onGenerate={() => regen.mutate()}
-                  titleOf={titleOf}
-                />
-              </div>
-              <div className="lg:order-1">
-                {data.points.length >= 2 ? (
-                  <section className="h-full rounded-card border border-border bg-surface p-5">
-                    <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
-                      The map
-                    </h2>
-                    <p className="mb-3 text-xs text-faint">
-                      {data.embedded} papers · {data.clusters.length} sub-theme
-                      {data.clusters.length === 1 ? "" : "s"} · t-SNE of embeddings
-                    </p>
-                    <Scatter
-                      points={data.points}
-                      clusters={data.clusters}
-                      colorBy="cluster"
-                      sizeBy="engagement"
-                      showHulls
-                      sims={null}
-                      labFilter={null}
-                      tagFilter={null}
-                      activeCluster={activeCluster}
-                      setActiveCluster={setActiveCluster}
-                      barHover={null}
+            <>
+              {/* Top band: the map (hero, left) beside a continuous rail — the
+                  summary, sub-themes and labs — so the right column isn't starved. */}
+              <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+                <div className="lg:order-1">
+                  {data.points.length >= 2 ? (
+                    <section className="h-full rounded-card border border-border bg-surface p-5">
+                      <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
+                        The map
+                      </h2>
+                      <p className="mb-3 text-xs text-faint">
+                        {data.embedded} papers · {data.clusters.length} sub-theme
+                        {data.clusters.length === 1 ? "" : "s"} · hover a point to preview, click to
+                        open
+                      </p>
+                      <Scatter
+                        points={data.points}
+                        clusters={data.clusters}
+                        colorBy="cluster"
+                        sizeBy="engagement"
+                        showHulls
+                        sims={null}
+                        labFilter={null}
+                        tagFilter={null}
+                        activeCluster={activeCluster}
+                        setActiveCluster={setActiveCluster}
+                        barHover={null}
+                        pinnedIds={pinnedIds}
+                      />
+                    </section>
+                  ) : (
+                    <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
+                      Only a paper or two here so far — too few to map. Broaden the seed, or add more
+                      papers to the lab.
+                    </div>
+                  )}
+                </div>
+                <aside className="flex flex-col gap-4 lg:order-2">
+                  <WhatsNew
+                    summary={summary.data}
+                    loading={summary.isLoading}
+                    generating={regen.isPending}
+                    onGenerate={() => regen.mutate()}
+                    titleOf={titleOf}
+                  />
+                  <RankPanel title="Sub-themes">
+                    <RankBars
+                      items={data.clusters.map((c) => ({ label: c.label, count: c.size, tone: c.id }))}
+                      activeLabel={
+                        activeCluster == null
+                          ? null
+                          : (data.clusters.find((c) => c.id === activeCluster)?.label ?? null)
+                      }
+                      onPick={(_, tone) =>
+                        setActiveCluster((cur) => (cur === (tone ?? null) ? null : (tone ?? null)))
+                      }
+                      empty="Too few papers to cluster."
                     />
-                  </section>
-                ) : (
-                  <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
-                    Only a paper or two here so far — too few to map. Broaden the seed, or add more
-                    papers to the lab.
-                  </div>
-                )}
+                  </RankPanel>
+                  {(papers.data?.labs.length ?? 0) > 0 && (
+                    <RankPanel title="Labs driving this topic">
+                      <RankBars
+                        items={(papers.data?.labs ?? []).map((l) => ({
+                          label: l.lab,
+                          count: l.count,
+                        }))}
+                        activeLabel={labFilter}
+                        onPick={(label) => setLabFilter((cur) => (cur === label ? null : label))}
+                        empty=""
+                      />
+                    </RankPanel>
+                  )}
+                </aside>
               </div>
-            </div>
-          )}
 
-          {data.total > 0 && (
-            <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-              {/* important papers */}
+              {/* Important papers — full width below the band: the reading queue. */}
               <section className="rounded-card border border-border bg-surface p-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h2 className="font-serif text-lg font-semibold tracking-tight">
@@ -247,6 +345,18 @@ export default function MapDashboard() {
                       </button>
                     </span>
                   )}
+                  {activeCluster != null && (
+                    <span className="inline-flex items-center gap-1 rounded-chip border border-border bg-surface-2 px-2 py-1 text-xs">
+                      {data.clusters.find((c) => c.id === activeCluster)?.label ?? "Sub-theme"}
+                      <button
+                        type="button"
+                        aria-label="Clear sub-theme filter"
+                        onClick={() => setActiveCluster(null)}
+                      >
+                        <X size={11} className="text-muted hover:text-danger" />
+                      </button>
+                    </span>
+                  )}
                   {/* key for the read-state dot, so it isn't colour/shape alone */}
                   <span className="ml-auto flex items-center gap-2.5 self-center text-[0.7rem] text-faint">
                     <ReadKey cls="border-accent" label="unread" />
@@ -269,6 +379,7 @@ export default function MapDashboard() {
                           canEdit={canEdit}
                           busy={curate.isPending}
                           onCurate={(patch) => curate.mutate(patch)}
+                          onToggleRead={(read) => setRead.mutate({ paperId: p.paper_id, read })}
                         />
                       ))}
                     </ul>
@@ -283,40 +394,8 @@ export default function MapDashboard() {
                   </p>
                 )}
               </section>
-
-              {/* rail: labs + sub-themes */}
-              <aside className="flex flex-col gap-4">
-                {(papers.data?.labs.length ?? 0) > 0 && (
-                  <RankPanel title="Labs driving this topic">
-                    <RankBars
-                      items={(papers.data?.labs ?? []).map((l) => ({
-                        label: l.lab,
-                        count: l.count,
-                      }))}
-                      activeLabel={labFilter}
-                      onPick={(label) => setLabFilter((cur) => (cur === label ? null : label))}
-                      empty=""
-                    />
-                  </RankPanel>
-                )}
-                <RankPanel title="Sub-themes">
-                  <RankBars
-                    items={data.clusters.map((c) => ({ label: c.label, count: c.size, tone: c.id }))}
-                    activeLabel={null}
-                    onPick={(_, tone) =>
-                      setActiveCluster((cur) => (cur === (tone ?? null) ? null : (tone ?? null)))
-                    }
-                    empty="Too few papers to cluster."
-                  />
-                </RankPanel>
-              </aside>
-            </div>
+            </>
           )}
-
-          <p className="text-xs text-faint">
-            Coming next (M4): an AI summary of recent developments in this map, grounded in and
-            citing the lab’s papers.
-          </p>
         </>
       )}
     </div>
@@ -324,6 +403,124 @@ export default function MapDashboard() {
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function MapEditPanel({
+  data,
+  onClose,
+  onSave,
+  onDelete,
+  saving,
+}: {
+  data: MapOverviewData;
+  onClose: () => void;
+  onSave: (patch: MapPatch) => void;
+  onDelete: () => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState(data.name);
+  const [seed, setSeed] = useState(data.seed);
+  const [visibility, setVisibility] = useState<"lab" | "private">(
+    data.visibility === "private" ? "private" : "lab",
+  );
+  const [minSim, setMinSim] = useState(data.min_similarity);
+  const save = () => {
+    const patch: MapPatch = {};
+    if (name.trim() && name.trim() !== data.name) patch.name = name.trim();
+    if (seed.trim() && seed.trim() !== data.seed) patch.seed = seed.trim();
+    if (visibility !== data.visibility) patch.visibility = visibility;
+    if (minSim !== data.min_similarity) patch.min_similarity = minSim;
+    onSave(patch);
+  };
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-serif text-lg font-semibold tracking-tight">Edit map</h2>
+          <button type="button" onClick={onClose} aria-label="Close">
+            <X size={16} className="text-muted hover:text-fg" />
+          </button>
+        </div>
+
+        <label className="block text-xs font-medium text-muted">Name</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mb-3 mt-1 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+        />
+        <label className="block text-xs font-medium text-muted">
+          What it’s about (re-seeds membership)
+        </label>
+        <input
+          value={seed}
+          onChange={(e) => setSeed(e.target.value)}
+          className="mb-3 mt-1 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+        />
+        <label className="block text-xs font-medium text-muted">
+          Match threshold — a paper joins at ≥ {Math.round(minSim * 100)}% similarity
+        </label>
+        <input
+          type="range"
+          min={-1}
+          max={1}
+          step={0.05}
+          value={minSim}
+          onChange={(e) => setMinSim(Number(e.target.value))}
+          className="mb-3 mt-1 w-full accent-accent"
+        />
+        <div className="mb-4 flex gap-2">
+          {(["lab", "private"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setVisibility(v)}
+              className={cn(
+                "rounded-control border px-3 py-1.5 text-xs font-medium transition",
+                visibility === v
+                  ? "border-accent bg-accent-weak text-accent"
+                  : "border-border text-muted hover:text-fg",
+              )}
+            >
+              {v === "lab" ? "Shared with lab" : "Only me"}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:underline"
+          >
+            <Trash2 size={13} /> Delete map
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-control border border-border px-3 py-1.5 text-sm text-muted hover:text-fg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="rounded-control bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ReadKey({ cls, label }: { cls: string; label: string }) {
   return (
@@ -345,10 +542,14 @@ function WhatsNew({
   loading: boolean;
   generating: boolean;
   onGenerate: () => void;
-  titleOf: (id: string) => string;
+  titleOf: (id: string) => string | undefined;
 }) {
   const { openPaper } = usePaperModal();
   const has = Boolean(summary?.text);
+  // Only cited papers still in the map (curation/threshold can drop one out).
+  const sources = (summary?.cited_ids ?? [])
+    .map((id) => ({ id, title: titleOf(id) }))
+    .filter((s): s is { id: string; title: string } => Boolean(s.title));
   return (
     <section className="rounded-card border border-border bg-surface p-5">
       <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -377,17 +578,17 @@ function WhatsNew({
       ) : has && summary ? (
         <>
           <p className="text-sm leading-relaxed text-fg">{summary.text}</p>
-          {summary.cited_ids.length > 0 && (
+          {sources.length > 0 && (
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
               <span className="text-faint">Sources:</span>
-              {summary.cited_ids.map((id) => (
+              {sources.map((s) => (
                 <button
-                  key={id}
+                  key={s.id}
                   type="button"
-                  onClick={() => openPaper(id)}
+                  onClick={() => openPaper(s.id)}
                   className="rounded-chip border border-border bg-surface-2 px-2 py-0.5 text-accent transition hover:border-accent"
                 >
-                  {truncate(titleOf(id), 40)}
+                  {truncate(s.title, 40)}
                 </button>
               ))}
             </div>
@@ -397,7 +598,7 @@ function WhatsNew({
             {summary.ai
               ? " · grounded in them, nothing invented"
               : " · add an Anthropic key for an AI synthesis"}
-            .
+            {summary.generated_at ? ` · ${formatRelative(summary.generated_at)}` : ""}.
           </p>
         </>
       ) : (
@@ -426,14 +627,17 @@ function PaperRow({
   canEdit,
   busy,
   onCurate,
+  onToggleRead,
 }: {
   p: MapPaper;
   canEdit: boolean;
   busy: boolean;
   onCurate: (patch: MapPatch) => void;
+  onToggleRead: (read: boolean) => void;
 }) {
   const { openPaper } = usePaperModal();
   const meta = [p.authors.slice(0, 3).join(", "), p.venue, p.year].filter(Boolean).join(" · ");
+  // Hide a ~0% match: it reads as "irrelevant" and adds noise on every row.
   const rel = p.similarity == null ? null : Math.round(Math.max(0, p.similarity) * 100);
   const dot =
     p.read_status === "read"
@@ -460,10 +664,21 @@ function PaperRow({
         </div>
         <div className="truncate text-xs text-muted">
           {meta}
-          {rel != null && <span className="text-accent"> · {rel}% match</span>}
+          {rel != null && rel > 0 && <span className="text-accent"> · {rel}% match</span>}
         </div>
       </button>
       <div className="flex shrink-0 items-center gap-2 pt-0.5 text-xs text-faint">
+        <button
+          type="button"
+          title={p.read_status === "read" ? "Mark unread" : "Mark read"}
+          onClick={() => onToggleRead(p.read_status !== "read")}
+          className={cn(
+            "opacity-0 transition hover:text-accent group-hover:opacity-100",
+            p.read_status === "read" && "text-accent opacity-100",
+          )}
+        >
+          <Check size={13} />
+        </button>
         {canEdit && (
           <span className="flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100">
             <button
