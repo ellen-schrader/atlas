@@ -1,16 +1,25 @@
-"""Atlas MCP server — read-only tools over the lab paper database + mood board.
+"""Atlas MCP server — tools over the lab paper database + mood board.
+
+Mostly read; ``post_paper`` writes (previews unless confirmed).
 
 Run over stdio (the transport Claude Code / Claude for Life Sciences use):
 
     uv run --directory paper-radar --extra mcp python -m atlas_mcp
+
+Access is lab-wide and owner-controlled: `lab.resolve_team` refuses a lab that
+hasn't opted in, and every call is logged to `mcp_tool_calls` where the whole lab
+can see it. See supabase/migrations/20260713090000_mcp_access.sql.
 
 All logging goes to stderr; stdout carries JSON-RPC only.
 """
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import sys
+from collections.abc import Callable
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from pydantic import BaseModel
@@ -28,6 +37,59 @@ mcp = FastMCP("atlas")
 
 class _ConfirmShare(BaseModel):
     confirm: bool = True
+
+
+def _succeeded(result: object) -> bool:
+    """Whether a tool call actually worked.
+
+    Every tool catches `LabError` and *returns* ``f"Error: {exc}"`` rather than
+    raising, so an exception check alone would record a refused call as a success —
+    including the one the lab most wants to see: someone using Claude on a lab whose
+    access is switched off.
+    """
+    return not (isinstance(result, str) and result.startswith("Error:"))
+
+
+def audited(fn: Callable) -> Callable:
+    """Log every tool call to `mcp_tool_calls`, so the lab can see what Claude did.
+
+    The lab is read from the contextvar `resolve_team` sets — no extra round-trip, and
+    a call that never resolved a lab logs nothing, because there is no lab to log it
+    against. A *refused* call does log: `resolve_team` attributes before it gates.
+
+    Wraps sync and async tools alike; `post_paper` is the only async one today.
+    """
+
+    def _record(ok: bool) -> None:
+        lab.log_tool_call(lab.current_team(), fn.__name__, ok)
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def awrapper(*args, **kwargs):
+            lab.clear_team()
+            ok = False
+            try:
+                result = await fn(*args, **kwargs)
+                ok = _succeeded(result)
+                return result
+            finally:
+                _record(ok)
+
+        return awrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        lab.clear_team()
+        ok = False
+        try:
+            result = fn(*args, **kwargs)
+            ok = _succeeded(result)
+            return result
+        finally:
+            _record(ok)
+
+    return wrapper
 
 
 def _clamp(limit: int) -> int:
@@ -80,6 +142,7 @@ def _papers_result(hits: list[dict], empty: str) -> str:
 
 
 @mcp.tool()
+@audited
 def list_labs() -> str:
     """List the labs (teams) you belong to in Atlas, with their ids and join codes."""
     try:
@@ -94,6 +157,7 @@ def list_labs() -> str:
 
 
 @mcp.tool()
+@audited
 def search_lab_papers(
     query: str, mode: str = "keyword", limit: int = 10, team_id: str | None = None
 ) -> str:
@@ -117,6 +181,7 @@ def search_lab_papers(
 
 
 @mcp.tool()
+@audited
 def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
     """List the most recently posted papers in your lab.
 
@@ -133,6 +198,7 @@ def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
 
 
 @mcp.tool()
+@audited
 def get_paper(paper_id: str, team_id: str | None = None) -> str:
     """Get full details for one paper posted in your lab, including its abstract.
 
@@ -195,6 +261,7 @@ def _format_figure(f: dict) -> str:
 
 
 @mcp.tool()
+@audited
 def list_moodboard(
     category: str | None = None,
     tag: str | None = None,
@@ -233,6 +300,7 @@ def list_moodboard(
 
 
 @mcp.tool()
+@audited
 def moodboard_categories(team_id: str | None = None) -> str:
     """List the categories used on the lab's mood board, with counts."""
     try:
@@ -248,6 +316,7 @@ def moodboard_categories(team_id: str | None = None) -> str:
 
 
 @mcp.tool()
+@audited
 def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
     """Fetch a mood-board figure's image so you can see it, plus its details.
 
@@ -269,6 +338,7 @@ def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
 
 
 @mcp.tool()
+@audited
 def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -> str:
     """Extract a mood-board figure's dominant colours as hex, for matching a palette.
 
@@ -289,6 +359,7 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
 
 
 @mcp.tool()
+@audited
 def get_moodboard_style(
     category: str | None = None, limit: int = 8, team_id: str | None = None
 ) -> str:
@@ -329,6 +400,7 @@ def get_moodboard_style(
 
 
 @mcp.tool()
+@audited
 async def post_paper(
     url: str,
     note: str | None = None,

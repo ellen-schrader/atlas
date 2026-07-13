@@ -2,7 +2,9 @@ import { type ReactNode, useState } from "react";
 import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
 
 import { CopyBlock } from "@/components/CopyBlock";
-import { cn } from "@/lib/utils";
+import { useMcpAccess, useMcpToolCalls, useSetMcpAccess } from "@/hooks/useMcpAccess";
+import { useMyRole } from "@/hooks/useMyRole";
+import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 /**
@@ -212,6 +214,9 @@ ATLAS_TEAM_ID=${team.id}`;
         </div>
       </Step>
 
+      {/* the switch — lab-wide, owner-only */}
+      <AccessPanel />
+
       {/* what it can actually touch */}
       <section className="rounded-card border border-border bg-surface p-5">
         <h2 className="mb-3 font-serif text-lg font-semibold tracking-tight">
@@ -219,9 +224,11 @@ ATLAS_TEAM_ID=${team.id}`;
         </h2>
         <ul className="flex flex-col gap-2">
           <Perm kind="allow">
-            Read papers your lab has posted — titles, abstracts, tags, venues, DOIs
+            Read papers your lab has posted — titles, abstracts, authors, venues, DOIs, tags
           </Perm>
-          <Perm kind="allow">Read comments and reactions — the signal your lab’s taste is built from</Perm>
+          <Perm kind="allow">
+            Read the note attached to a post, and who posted it
+          </Perm>
           <Perm kind="allow">
             Read the mood board and derive your palette + a matplotlib style sheet
           </Perm>
@@ -230,23 +237,25 @@ ATLAS_TEAM_ID=${team.id}`;
             @-mentions a teammate. This <b className="text-fg">writes to the shared lab</b> — it
             previews by default and only writes when you confirm.
           </Perm>
-          <Perm kind="deny">Anything in another lab — papers, comments, figures</Perm>
+          <Perm kind="deny">
+            Read your lab’s <b>comments or reactions</b> — the discussion stays between people
+          </Perm>
+          <Perm kind="deny">Anything in another lab</Perm>
           <Perm kind="deny">Delete or edit existing papers, comments, or reactions</Perm>
         </ul>
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
           <ShieldAlert size={16} className="mt-0.5 shrink-0 text-danger" />
           <p className="text-xs leading-relaxed text-muted">
-            <b className="text-fg">This is not only your decision.</b> Connecting exposes your
-            colleagues’ comments, reactions, and reading history — not just your own — and lets
-            Claude post into the shared lab. Tell your lab before you connect.{" "}
-            <span className="text-faint">
-              (Owner-controlled access, a per-member opt-out, and a tool-call log the whole lab can
-              see are coming next.)
-            </span>
+            <b className="text-fg">This is not one member’s decision.</b> Claude reads the lab’s
+            shared corpus and can post into it, so access is a <b className="text-fg">lab-wide
+            setting an owner controls</b> — and every call it makes is logged below, where the whole
+            lab can see it.
           </p>
         </div>
       </section>
+
+      <ActivityLog />
 
       <details className="rounded-card border border-border bg-surface p-4">
         <summary className="cursor-pointer text-sm font-semibold text-fg">It didn’t work</summary>
@@ -265,6 +274,117 @@ ATLAS_TEAM_ID=${team.id}`;
         </dl>
       </details>
     </div>
+  );
+}
+
+/** The lab-wide switch. Any member sees its state; only an owner can move it. */
+function AccessPanel() {
+  const { team, userId } = useAppContext();
+  const { data: role } = useMyRole(team.id, userId);
+  const { data: enabled, isLoading } = useMcpAccess(team.id);
+  const setAccess = useSetMcpAccess(team.id);
+  const isOwner = role === "owner";
+
+  if (isLoading) return null;
+
+  return (
+    <section
+      className={cn(
+        "rounded-card border p-5",
+        enabled ? "border-accent/40 bg-accent-weak" : "border-border bg-surface",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+            {enabled ? (
+              <>
+                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-accent" />
+                Claude access is on
+              </>
+            ) : (
+              <>
+                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-faint" />
+                Claude access is off
+              </>
+            )}
+          </h2>
+          <p className="mt-1 max-w-[58ch] text-sm text-muted">
+            {enabled
+              ? `Claude can read ${team.name}'s papers and post into it. Every call is logged below.`
+              : `The steps above won't work until this is on — Atlas refuses every tool call for ${team.name} while it's off.`}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          disabled={!isOwner || setAccess.isPending}
+          onClick={() => setAccess.mutate(!enabled)}
+          title={isOwner ? undefined : "Only a lab owner can change this"}
+          className={cn(
+            "shrink-0 rounded-control px-3.5 py-2 text-sm font-semibold transition",
+            !isOwner && "cursor-not-allowed opacity-50",
+            enabled
+              ? "border border-border-strong bg-surface text-fg hover:border-danger hover:text-danger"
+              : "bg-accent text-accent-fg hover:brightness-110",
+          )}
+        >
+          {setAccess.isPending ? "…" : enabled ? "Turn off" : "Turn on for the lab"}
+        </button>
+      </div>
+
+      {!isOwner && (
+        <p className="mt-3 text-xs text-faint">
+          Only an owner of {team.name} can change this. Ask one to turn it on.
+        </p>
+      )}
+      {setAccess.isError && (
+        <p className="mt-3 text-xs text-danger">
+          Couldn’t change access — {(setAccess.error as Error).message}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** What Claude actually did. Visible to the whole lab — a log only the connector can read is not a check. */
+function ActivityLog() {
+  const { team } = useAppContext();
+  const { data: calls, isLoading } = useMcpToolCalls(team.id);
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <h2 className="font-serif text-lg font-semibold tracking-tight">Recent Claude activity</h2>
+      <p className="mb-3 mt-1 text-sm text-muted">
+        Every tool call Claude makes against {team.name}, visible to everyone in the lab. Blocked
+        attempts show up here too.
+      </p>
+
+      {isLoading ? (
+        <p className="text-sm text-faint">Loading…</p>
+      ) : !calls?.length ? (
+        <p className="rounded-control border border-dashed border-border px-3 py-6 text-center text-sm text-faint">
+          Claude hasn’t used {team.name} yet.
+        </p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border">
+          {calls.map((c) => (
+            <li key={c.id} className="flex items-center gap-3 py-2 text-sm">
+              {c.ok ? (
+                <Check size={14} className="shrink-0 text-accent" />
+              ) : (
+                <X size={14} className="shrink-0 text-danger" />
+              )}
+              <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg">{c.tool}</code>
+              {!c.ok && <span className="shrink-0 text-xs text-danger">blocked</span>}
+              <span className="shrink-0 font-mono text-xs text-faint">
+                {formatRelative(c.called_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

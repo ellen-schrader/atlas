@@ -18,6 +18,7 @@ import ipaddress
 import logging
 import socket
 import time
+from contextvars import ContextVar
 from functools import lru_cache, wraps
 from urllib.parse import urlsplit
 
@@ -35,6 +36,11 @@ PAPER_COLUMNS = (
     "id, url, doi, title, authors, abstract, venue, year, keywords, tags, code_url, data_url"
 )
 POST_COLUMNS = "id, team_id, paper_id, posted_at, note, posted_by_label, tags"
+
+
+# The lab the in-flight tool call is acting on. Set by resolve_team so the audit
+# decorator can attribute a call without re-resolving the team.
+_current_team: ContextVar[dict | None] = ContextVar("atlas_current_team", default=None)
 
 
 class LabError(RuntimeError):
@@ -127,6 +133,49 @@ def with_refresh(fn):
     return wrapper
 
 
+def require_access(team: dict) -> None:
+    """Refuse to act on a lab that hasn't switched Claude access on.
+
+    Enforced here, in the one place every tool resolves its lab through, rather than
+    bolted onto each of the ten tools — a tool added later is gated by construction.
+
+    Connecting is not a personal decision: the server reads the lab's shared corpus
+    and, since ``post_paper``, writes into it. So an *owner* opts the lab in, from
+    the Connect screen in the web app.
+    """
+    client, _ = _session()
+    try:
+        rows = (
+            client.table("mcp_access").select("enabled").eq("team_id", team["id"]).execute().data
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(f"Could not check Claude access for {team['name']}: {exc}") from exc
+
+    if not (rows and rows[0].get("enabled")):
+        raise LabError(
+            f"Claude access is off for {team['name']}. An owner can turn it on in Atlas → "
+            f"Connect Claude. (This is a lab-wide setting: the server can read the lab's "
+            f"papers and post into it, so it isn't one member's call.)"
+        )
+
+
+def log_tool_call(team: dict | None, tool: str, ok: bool) -> None:
+    """Record a tool call so the lab can see what Claude looked at.
+
+    Best-effort and never raises: an audit write must not be able to fail a tool the
+    user legitimately invoked. A missing row is a gap in the log, not a broken lab.
+    """
+    if not team:
+        return
+    try:
+        client, uid = _session()
+        client.table("mcp_tool_calls").insert(
+            {"team_id": team["id"], "user_id": uid, "tool": tool, "ok": ok}
+        ).execute()
+    except Exception:  # noqa: BLE001 — logging is not worth failing a call over
+        pass
+
+
 def web_url() -> str:
     return get_atlas_settings().atlas_web_url.rstrip("/")
 
@@ -154,7 +203,43 @@ def list_teams() -> list[dict]:
 
 
 def resolve_team(team_id: str | None) -> dict:
-    """Pick the lab to act on: explicit id → ATLAS_TEAM_ID → the only one."""
+    """Pick the lab to act on: explicit id → ATLAS_TEAM_ID → the only one.
+
+    Also the access gate: every tool that touches a lab resolves it through here, so
+    a lab that hasn't opted in is refused once, centrally. ``list_labs`` deliberately
+    does not go through this — you need it to find the team_id you're being asked for,
+    and it exposes nothing but the names of labs you are already a member of.
+    """
+    team = _pick_team(team_id)
+    # Attribute the call *before* the gate, so a REFUSED attempt is logged too. An
+    # audit trail whose only blind spot is "someone tried to use Claude on this lab
+    # while access was off" would be missing the one event it most exists to show.
+    _current_team.set(team)
+    require_access(team)
+    return team
+
+
+def current_team() -> dict | None:
+    """The lab the in-flight tool call resolved, if any.
+
+    Lets the audit decorator name the lab without resolving it a second time (which
+    would double every tool's round-trips just to write a log row).
+    """
+    return _current_team.get()
+
+
+def clear_team() -> None:
+    """Forget the resolved lab. Called at the start of every tool.
+
+    Without this, a tool that resolves no lab (``list_labs``) or fails before
+    resolving one would inherit whatever the *previous* call left behind, and the
+    audit log would attribute it to the wrong lab. An audit trail that misattributes
+    is worse than none.
+    """
+    _current_team.set(None)
+
+
+def _pick_team(team_id: str | None) -> dict:
     teams = list_teams()
     if not teams:
         raise LabError("You don't belong to any lab.")
