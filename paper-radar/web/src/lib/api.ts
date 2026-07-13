@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase";
 import type {
   MapDoc,
   MapOverviewData,
+  MapPapersData,
   OverviewData,
   Recommendation,
   SemanticHit,
@@ -147,6 +148,13 @@ export function deleteMap(mapId: string): Promise<{ deleted: boolean }> {
 /** A map's scoped overview: t-SNE + sub-themes over just its member papers. */
 export function fetchMapOverview(mapId: string): Promise<MapOverviewData> {
   return authedRequest<MapOverviewData>(`/maps/${encodeURIComponent(mapId)}/overview`);
+}
+
+/** A map's member papers, ranked, with the caller's read-state + relevance, and
+ *  the labs driving the topic. sort: "importance" | "recent" | "discussed". */
+export function fetchMapPapers(mapId: string, sort: string): Promise<MapPapersData> {
+  const p = encodeURIComponent(mapId);
+  return authedRequest<MapPapersData>(`/maps/${p}/papers?sort=${encodeURIComponent(sort)}`);
 }
 
 /** Cosine similarity of every embedded paper in the lab to a query (for the

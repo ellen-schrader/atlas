@@ -605,6 +605,115 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     )
 
 
+class MapPaper(BaseModel):
+    post_id: str
+    paper_id: str
+    title: str | None = None
+    authors: list[str] = []
+    venue: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    similarity: float | None = None  # relevance to the map's seed
+    reactions: int = 0
+    comments: int = 0
+    read_status: str | None = None  # 'to_read'|'reading'|'read'|None, for the caller
+    posted_at: str | None = None
+
+
+class MapPapersResponse(BaseModel):
+    total: int
+    papers: list[MapPaper]
+    labs: list[dict]  # [{lab, count}] over the member set
+
+
+@app.get("/maps/{map_id}/papers", response_model=MapPapersResponse)
+def map_papers(
+    map_id: str, sort: str = "importance", token: str = Depends(require_token)
+) -> MapPapersResponse:
+    """The map's member papers, ranked, with the caller's read-state and relevance,
+    plus the labs driving the topic. The client filters (unread / search / lab) and
+    the sub-themes come from /maps/{id}/overview, so this endpoint stays cheap."""
+    uid = get_user_id(token)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = uc.table("maps").select("team_id").eq("id", map_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    team_id = rows[0]["team_id"]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    if not members:
+        return MapPapersResponse(total=0, papers=[], labs=[])
+    sim_by_pid = {x["paper_id"]: x["similarity"] for x in members}
+    paper_ids = list(sim_by_pid)
+
+    meta = {
+        p["id"]: p
+        for p in (
+            uc.table("papers").select("id, title, authors, venue, year, doi")
+            .in_("id", paper_ids).execute().data or []
+        )
+    }
+    posts = {
+        p["paper_id"]: p
+        for p in (
+            uc.table("paper_posts").select("id, paper_id, posted_at")
+            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+        )
+    }
+    eng = _engagement_counts(uc, team_id, paper_ids)
+    read = {
+        r["paper_id"]: r["status"]
+        for r in (
+            uc.table("paper_status").select("paper_id, status")
+            .eq("team_id", team_id).eq("user_id", uid).in_("paper_id", paper_ids)
+            .execute().data or []
+        )
+    }
+
+    now = datetime.now(UTC)
+    max_eng = max([eng.get(pid, (0, 0))[0] + eng.get(pid, (0, 0))[1] for pid in paper_ids] + [1])
+    scored: list[tuple[float, MapPaper]] = []
+    for pid in paper_ids:
+        p = meta.get(pid)
+        if not p:
+            continue
+        post = posts.get(pid, {})
+        r_, c_ = eng.get(pid, (0, 0))
+        sim = sim_by_pid.get(pid) or 0.0
+        recency = _recency_decay(_parse_ts(post.get("posted_at")), now)
+        importance = sim + 0.15 * ((r_ + c_) / max_eng) + 0.08 * recency
+        scored.append(
+            (
+                importance,
+                MapPaper(
+                    post_id=post.get("id", ""), paper_id=pid, title=p.get("title"),
+                    authors=p.get("authors") or [], venue=p.get("venue"), year=p.get("year"),
+                    doi=p.get("doi"), similarity=sim, reactions=r_, comments=c_,
+                    read_status=read.get(pid), posted_at=post.get("posted_at"),
+                ),
+            )
+        )
+
+    if sort == "recent":
+        scored.sort(key=lambda t: (t[1].posted_at or ""), reverse=True)
+    elif sort == "discussed":
+        scored.sort(key=lambda t: (t[1].reactions + t[1].comments), reverse=True)
+    else:  # importance (default)
+        scored.sort(key=lambda t: t[0], reverse=True)
+    papers = [t[1] for t in scored]
+
+    lab_counts: Counter = Counter()
+    for mp in papers:
+        lab = _last_author_lab(mp.authors)
+        if lab:
+            lab_counts[lab] += 1
+    labs = [{"lab": lab, "count": n} for lab, n in lab_counts.most_common(8)]
+    return MapPapersResponse(total=len(papers), papers=papers, labs=labs)
+
+
 # --- profile embedding + recommendations -----------------------------------
 
 

@@ -157,3 +157,25 @@ export interface MapOverviewData extends OverviewData {
   visibility: string;
   new_this_week: number;
 }
+
+/** One member paper in a map's ranked list, with the caller's read-state. */
+export interface MapPaper {
+  post_id: string;
+  paper_id: string;
+  title: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  similarity: number | null; // relevance to the seed
+  reactions: number;
+  comments: number;
+  read_status: "to_read" | "reading" | "read" | null;
+  posted_at: string | null;
+}
+
+export interface MapPapersData {
+  total: number;
+  papers: MapPaper[];
+  labs: { lab: string; count: number }[];
+}
