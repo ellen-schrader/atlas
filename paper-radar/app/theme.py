@@ -100,10 +100,10 @@ def _root_block(pal: dict[str, str]) -> str:
 # Palette-independent rules -- everything references the --pr-* custom properties,
 # so the same stylesheet renders either theme just by swapping the :root block.
 _STATIC_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
+/* No webfont @import: pulling Inter from fonts.googleapis.com leaks every
+   visitor's IP to Google. Fall back to the system font stack instead. */
 html, body, [class*="css"], [data-testid="stAppViewContainer"] {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
 }
 
 /* Repaint the base Streamlit surfaces so both themes are fully controlled. */

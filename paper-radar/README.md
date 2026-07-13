@@ -12,6 +12,15 @@ Papers arrive as PDFs exported from the lab's Teams channel. paper-radar:
 4. **Ranks** — a "taste model" scores papers by how interesting they are to the lab. *(stub — you implement)*
 5. **Serves** — a Streamlit app (behind email/password sign-in) to search, filter, browse, comment on, and react to papers.
 
+## Privacy & third-party data
+
+Paper **metadata and abstracts** are sent to third parties for processing: Voyage
+AI (embeddings) and Anthropic / Claude (summaries, tags, cluster names, map
+digests), plus public metadata APIs (arXiv, Crossref, PubMed, Europe PMC) when
+resolving a paper. Don't paste confidential or unpublished text you don't want
+leaving your infrastructure. User identities and email addresses are **not** sent
+to these services.
+
 ## Accounts & teams
 
 The app requires signing in. Each user belongs to a **team**; signing up with a
