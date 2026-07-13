@@ -27,6 +27,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
@@ -246,8 +247,19 @@ def _enrich_and_store(paper_id: str, title: str | None, abstract: str | None) ->
         log.warning("enriching paper %s failed (backfill will retry): %s", paper_id, exc)
 
 
-def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: str | None):
-    """Insert the paper_post as the user (RLS enforces membership). Returns (id, already)."""
+def _create_post(
+    token: str,
+    team_id: str,
+    paper_id: str,
+    user_id: str,
+    note: str | None,
+    source: str = "web",
+):
+    """Insert the paper_post as the user (RLS enforces membership). Returns (id, already).
+
+    `source` records how the paper got here ("web" | "bibtex" | "teams_pdf"), so a
+    400-paper import can be told apart from 400 people posting.
+    """
     uc = user_client(token)
 
     existing = (
@@ -265,7 +277,7 @@ def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: st
         "paper_id": paper_id,
         "team_id": team_id,
         "posted_by": user_id,
-        "source": "web",
+        "source": source,
         "note": note,
     }
     try:
@@ -837,3 +849,229 @@ def recommendations(
     )
     sims = {m["post_id"]: m["similarity"] for m in matches}
     return _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)
+
+
+# --- BibTeX import ---------------------------------------------------------
+#
+# Two steps on purpose. `/import/bibtex/preflight` parses and classifies but writes
+# NOTHING, so a researcher sees exactly what a 438-entry file will do to their lab
+# before it does it. `/import/bibtex` then commits.
+#
+# Note on dates: an imported post's `posted_at` stays "when your lab shared this"
+# (i.e. now). The paper's publication date goes to `papers.published_at`. Writing the
+# publication date into `posted_at` would make "Posted by Ellen · 11 years ago" appear
+# under a paper Ellen imported this morning, and — since BibTeX usually carries only a
+# year — would pile the whole corpus onto Jan 1 and sort arbitrarily inside each year.
+# Sorting by publication date is a *sort option*, not a lie in the data.
+
+
+class BibEntryPreview(BaseModel):
+    key: str
+    title: str | None
+    authors: list[str]
+    venue: str | None
+    year: int | None
+    published_at: str | None
+    doi: str | None
+    url: str | None
+    status: str  # "new" | "duplicate" | "no_doi" | "rejected"
+    reason: str | None = None
+
+
+class PreflightRequest(BaseModel):
+    team_id: str
+    bibtex: str
+
+
+class PreflightResponse(BaseModel):
+    entries: list[BibEntryPreview]
+    new: int
+    duplicates: int
+    no_doi: int
+    rejected: int
+    #: What the Import button will actually add — new + no_doi. Kept explicit because
+    #: "no DOI" is a *warning*, not a refusal: those papers import, matched on URL.
+    importable: int
+
+
+class ImportRequest(BaseModel):
+    team_id: str
+    bibtex: str
+
+
+class ImportResponse(BaseModel):
+    imported: int
+    skipped: int
+    failed: int
+
+
+def _preview(e: bib.BibEntry, status: str, reason: str | None = None) -> BibEntryPreview:
+    return BibEntryPreview(
+        key=e.key,
+        title=e.title,
+        authors=e.authors,
+        venue=e.venue,
+        year=e.year,
+        published_at=e.published_at.isoformat() if e.published_at else None,
+        doi=e.doi,
+        url=e.url,
+        status=status,
+        reason=reason,
+    )
+
+
+def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview]:
+    """Label each entry against what's already in the lab. Read-only.
+
+    Dedupes exactly the way `_upsert_paper` does — by url_norm AND by DOI — because a
+    pre-flight that promises "3 new" while the commit merges one of them into an
+    existing paper is worse than no pre-flight at all. It also dedupes *within* the
+    file: a library that lists the same DOI twice must not be counted twice.
+    """
+    svc = service_client()
+
+    norms = {e.identifier: _normalize_key(e.identifier) for e in entries if e.identifier}
+    dois = [e.doi for e in entries if e.doi]
+
+    by_norm: dict[str, str] = {}
+    by_doi: dict[str, str] = {}
+    if norms:
+        rows = (
+            svc.table("papers").select("id, url_norm, doi")
+            .in_("url_norm", list(norms.values())).execute().data or []
+        )
+        by_norm = {r["url_norm"]: r["id"] for r in rows}
+    if dois:
+        rows = (
+            svc.table("papers").select("id, doi").in_("doi", dois).execute().data or []
+        )
+        by_doi = {r["doi"]: r["id"] for r in rows if r.get("doi")}
+
+    known_ids = set(by_norm.values()) | set(by_doi.values())
+    posted: set[str] = set()
+    if known_ids:
+        rows = (
+            svc.table("paper_posts").select("paper_id")
+            .eq("team_id", team_id).in_("paper_id", list(known_ids)).execute().data or []
+        )
+        posted = {r["paper_id"] for r in rows}
+
+    out: list[BibEntryPreview] = []
+    seen: set[str] = set()   # within-file dedupe key (doi, else normalised url)
+
+    for e in entries:
+        ident = e.identifier
+        if not ident:
+            out.append(_preview(e, "rejected", "No DOI or URL"))
+            continue
+
+        key = e.doi or norms[ident]
+        if key in seen:
+            out.append(_preview(e, "duplicate", "Listed twice in this file"))
+            continue
+        seen.add(key)
+
+        paper_id = by_norm.get(norms[ident]) or (by_doi.get(e.doi) if e.doi else None)
+        if paper_id and paper_id in posted:
+            out.append(_preview(e, "duplicate", "Already in this lab"))
+        elif not e.doi:
+            out.append(_preview(e, "no_doi", "No DOI — will be matched on its URL"))
+        else:
+            out.append(_preview(e, "new"))
+    return out
+
+
+@app.post("/import/bibtex/preflight", response_model=PreflightResponse)
+def bibtex_preflight(
+    req: PreflightRequest, token: str = Depends(require_token)
+) -> PreflightResponse:
+    """What *would* happen. Writes nothing."""
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    parsed = bib.parse_bibtex(req.bibtex)
+    previews = _classify(parsed.entries, req.team_id)
+    for key, reason in parsed.rejected:
+        previews.append(
+            BibEntryPreview(
+                key=key, title=None, authors=[], venue=None, year=None, published_at=None,
+                doi=None, url=None, status="rejected", reason=reason,
+            )
+        )
+
+    counts = Counter(p.status for p in previews)
+    return PreflightResponse(
+        entries=previews,
+        new=counts["new"],
+        duplicates=counts["duplicate"],
+        no_doi=counts["no_doi"],
+        rejected=counts["rejected"],
+        importable=counts["new"] + counts["no_doi"],
+    )
+
+
+@app.post("/import/bibtex", response_model=ImportResponse)
+def bibtex_import(
+    req: ImportRequest, background: BackgroundTasks, token: str = Depends(require_token)
+) -> ImportResponse:
+    """Commit the import. Papers already in the lab are skipped, not duplicated."""
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    parsed = bib.parse_bibtex(req.bibtex)
+    svc = service_client()
+    imported = skipped = failed = 0
+    seen: set[str] = set()  # same within-file dedupe the pre-flight reported
+
+    for e in parsed.entries:
+        ident = e.identifier
+        if not ident:
+            failed += 1
+            continue
+        try:
+            url = _clean_url(ident)
+            url_norm = _normalize_key(url)
+
+            key = e.doi or url_norm
+            if key in seen:
+                skipped += 1
+                continue
+            seen.add(key)
+
+            # BibTeX metadata is already structured, so we trust it and skip the
+            # network entirely — a 400-entry import must not become 400 HTTP fetches.
+            # Anything thin (no abstract) is picked up by the existing backfill.
+            meta = PaperMetadata(
+                url=url,
+                title=e.title,
+                authors=e.authors,
+                venue=e.venue,
+                year=e.year,
+                doi=e.doi,
+                abstract=e.abstract,
+                keywords=e.keywords,
+                source="bibtex",
+            )
+            paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
+
+            if e.published_at:
+                svc.table("papers").update(
+                    {"published_at": e.published_at.isoformat()}
+                ).eq("id", paper_id).is_("published_at", "null").execute()
+
+            _post_id, already = _create_post(
+                token, req.team_id, paper_id, user_id, None, source="bibtex"
+            )
+            if already:
+                skipped += 1
+                continue
+            imported += 1
+
+            if needs_embedding and get_api_settings().voyage_api_key:
+                background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
+        except Exception as exc:  # noqa: BLE001 — one bad entry must not fail the import
+            log.warning("bibtex import: %s failed: %s", e.key, exc)
+            failed += 1
+
+    return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))

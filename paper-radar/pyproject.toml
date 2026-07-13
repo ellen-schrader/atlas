@@ -31,6 +31,7 @@ dev = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "supabase>=2.9",
+    "bibtexparser>=1.4",
 ]
 # The Streamlit-era prototype (app/, embed/embed.py, `paper-radar serve`).
 # Not installed in the API container image.
@@ -43,6 +44,7 @@ api = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "supabase>=2.9",
+    "bibtexparser>=1.4",   # .bib import (ingest/bibtex.py)
 ]
 # Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
 # docs/CLAUDE_INTEGRATION_PLAN.md). Run: uv run --extra mcp python -m atlas_mcp
