@@ -2,6 +2,8 @@ node_modules
 dist
 dist-ssr
 *.local
-.env
-.env.local
 .DS_Store
+.vercel
+# All env files are local secrets except the committed template.
+.env*
+!.env.example

@@ -8,15 +8,32 @@ plenty for a single lab's paper collection.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import faiss
 import numpy as np
+
+if TYPE_CHECKING:
+    import faiss
+
+
+def _require_faiss():
+    """Import faiss lazily: only the local-index CLI path needs it, so the API
+    image (and dev test runs) work without the ``legacy`` extra installed."""
+    try:
+        import faiss
+    except ImportError as exc:
+        raise ImportError(
+            "faiss is not installed; the local index pipeline needs the legacy "
+            "extra: uv sync --extra dev --extra legacy"
+        ) from exc
+    return faiss
 
 
 def build_index(embeddings: np.ndarray) -> faiss.Index:
     """Build a flat inner-product FAISS index from ``(n, dim)`` embeddings."""
     if embeddings.ndim != 2 or embeddings.shape[0] == 0:
         raise ValueError("embeddings must be a non-empty (n, dim) array")
+    faiss = _require_faiss()
     vecs = np.ascontiguousarray(embeddings, dtype=np.float32)
     index = faiss.IndexFlatIP(vecs.shape[1])
     index.add(vecs)
@@ -25,6 +42,7 @@ def build_index(embeddings: np.ndarray) -> faiss.Index:
 
 def save_index(index: faiss.Index, path: str | Path) -> None:
     """Persist a FAISS index to disk."""
+    faiss = _require_faiss()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(path))
@@ -32,6 +50,7 @@ def save_index(index: faiss.Index, path: str | Path) -> None:
 
 def load_index(path: str | Path) -> faiss.Index:
     """Load a FAISS index from disk."""
+    faiss = _require_faiss()
     return faiss.read_index(str(Path(path)))
 
 
