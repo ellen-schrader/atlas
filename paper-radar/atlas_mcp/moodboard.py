@@ -118,60 +118,126 @@ def to_preview(raw: bytes, max_side: int = 768) -> tuple[bytes, str]:
         raise LabError(f"Could not read the image: {exc}") from exc
 
 
-def palette(raw: bytes, n: int = 6) -> list[str]:
-    """Dominant colours as hex, most-common first (deterministic)."""
+# A scientific figure is mostly white background + black/gray structural ink
+# (axes, ticks, gridlines, text); the colours that define the lab's LOOK are the
+# data series — often hairline lines or small markers, i.e. very few pixels. So a
+# frequency-ranked palette returns white/black/gray and the real colours never
+# surface. We instead keep only *chromatic* pixels (the data ink) and pick each
+# cluster's most-saturated member, so thin coloured lines resolve to true hues.
+# Thresholds are on PIL's 0–255 HSV channels.
+_S_MIN = 90  # ~saturation 0.35 — excludes anti-aliased/washed edge pixels
+_V_LO = 38  # ~value 0.15 — excludes near-black ink
+_V_HI = 247  # ~value 0.97 — excludes near-white background
+_HUE_SEP = 16  # min hue separation between returned colours (~0.06 of the wheel)
+_MIN_CHROMATIC = 40  # a figure with fewer chromatic pixels is treated as monochrome
+
+
+def _chromatic(raw: bytes, max_side: int = 300) -> tuple[list, list, list]:
+    """The (rgb, saturation, hue) of a figure's data-ink pixels — background, ink,
+    and gridlines removed. Returns three parallel lists; empty when the figure has
+    essentially no colour."""
     from PIL import Image
 
     try:
-        with Image.open(io.BytesIO(raw)) as im:
-            im = im.convert("RGB")
-            im.thumbnail((200, 200))  # palette is stable at low res and much faster
-            quant = im.quantize(colors=n, method=Image.Quantize.MEDIANCUT)
-            pal = quant.getpalette() or []
-            by_count = sorted(quant.getcolors() or [], reverse=True)  # [(count, index), ...]
-            return [
-                f"#{pal[i * 3]:02x}{pal[i * 3 + 1]:02x}{pal[i * 3 + 2]:02x}"
-                for _, i in by_count[:n]
-            ]
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
     except Exception as exc:  # noqa: BLE001
         raise LabError(f"Could not read the image: {exc}") from exc
+    im.thumbnail((max_side, max_side))
+    rgb = list(im.getdata())
+    h, s, v = (list(ch.getdata()) for ch in im.convert("HSV").split())
+    kr: list = []
+    ks: list = []
+    kh: list = []
+    for i, sat in enumerate(s):
+        if sat >= _S_MIN and _V_LO <= v[i] <= _V_HI:
+            kr.append(rgb[i])
+            ks.append(sat)
+            kh.append(h[i])
+    return kr, ks, kh
+
+
+def _cluster(kr: list, ks: list, kh: list, n: int) -> list[str]:
+    """Quantize chromatic pixels, pick each cluster's most-saturated colour, keep
+    the n most-frequent with distinct hues. Empty in → empty out (monochrome)."""
+    if not kr:
+        return []
+    from PIL import Image
+
+    ncol = min(max(4, n * 4), 64)
+    try:
+        strip = Image.new("RGB", (len(kr), 1))
+        strip.putdata(kr)
+        quant = strip.quantize(colors=ncol, method=Image.Quantize.MEDIANCUT)
+        idxs = list(quant.getdata())
+    except Exception as exc:  # noqa: BLE001 — keep failures as clean LabErrors
+        raise LabError(f"Could not derive a palette: {exc}") from exc
+
+    # per cluster: [count, best_saturation, best_rgb, best_hue]
+    agg: dict[int, list] = {}
+    for pos, ci in enumerate(idxs):
+        rec = agg.get(ci)
+        if rec is None:
+            agg[ci] = [1, ks[pos], kr[pos], kh[pos]]
+        else:
+            rec[0] += 1
+            if ks[pos] > rec[1]:
+                rec[1], rec[2], rec[3] = ks[pos], kr[pos], kh[pos]
+
+    out: list[str] = []
+    hues: list[int] = []
+    for _count, _sat, rgb, hue in sorted(agg.values(), key=lambda r: -r[0]):
+        if all(min(abs(hue - hh), 255 - abs(hue - hh)) > _HUE_SEP for hh in hues):
+            out.append("#%02x%02x%02x" % rgb)
+            hues.append(hue)
+        if len(out) >= n:
+            break
+    return out
+
+
+def palette(raw: bytes, n: int = 6) -> list[str]:
+    """The figure's data-series colours as hex (most-used, distinct hues first).
+    Empty for a genuinely monochrome figure."""
+    kr, ks, kh = _chromatic(raw)
+    return _cluster(kr, ks, kh, n)
 
 
 def aggregate_palette(raws: list[bytes], n: int = 6) -> list[str]:
-    """A palette across several figures: montage their thumbnails, then quantize."""
-    from PIL import Image
-
-    try:
-        thumbs = []
-        for raw in raws:
-            im = Image.open(io.BytesIO(raw)).convert("RGB")
-            im.thumbnail((120, 120))
-            thumbs.append(im)
-        if not thumbs:
-            return []
-        height = max(t.height for t in thumbs)
-        canvas = Image.new("RGB", (sum(t.width for t in thumbs), height), (255, 255, 255))
-        x = 0
-        for t in thumbs:
-            canvas.paste(t, (x, 0))
-            x += t.width
-        buf = io.BytesIO()
-        canvas.save(buf, format="PNG")
-    except Exception as exc:  # noqa: BLE001
-        raise LabError(f"Could not build the palette: {exc}") from exc
-    return palette(buf.getvalue(), n=n)
+    """A palette across several figures. Pools each figure's chromatic pixels and
+    clusters once; near-monochrome figures are skipped so a grayscale micrograph
+    or a black-and-white plot can't wash out the lab's colours."""
+    kr: list = []
+    ks: list = []
+    kh: list = []
+    for raw in raws:
+        try:
+            fr, fs, fh = _chromatic(raw)
+        except LabError:
+            continue
+        if len(fr) < _MIN_CHROMATIC:
+            continue  # this figure is effectively monochrome — don't let it dilute
+        kr += fr
+        ks += fs
+        kh += fh
+    return _cluster(kr, ks, kh, n)
 
 
 def mplstyle(hexes: list[str], lab_name: str) -> str:
     """A matplotlib style sheet (``.mplstyle`` text) derived from a palette.
 
     The palette drives the data colour cycle (the part that reads as "the lab's
-    look"); axis/text ink stays a neutral dark for legibility.
-    """
-    cycle = [h.lstrip("#") for h in hexes] or ["1f77b4"]
+    look"); axis/text ink stays neutral. When the mood board is monochrome we ship
+    a CVD-safe scientific default cycle rather than an all-white one."""
+    fallback = not hexes
+    # Paul Tol 'bright' — a safe, colourful default when nothing could be derived.
+    cycle = [h.lstrip("#") for h in hexes] or [
+        "4477AA", "EE6677", "228833", "CCBB44", "66CCEE", "AA3377"
+    ]
     ink = "222222"
+    header = f"# Atlas mood-board style — {lab_name}"
+    if fallback:
+        header += "  (no distinct colours found on the mood board; using a default cycle)"
     lines = [
-        f"# Atlas mood-board style — {lab_name}",
+        header,
         "figure.facecolor: white",
         "axes.facecolor: white",
         f"axes.edgecolor: {ink}",
@@ -179,6 +245,13 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
         f"text.color: {ink}",
         f"xtick.color: {ink}",
         f"ytick.color: {ink}",
+        # Scientific line/marker defaults — thin lines, small markers, ticks out.
+        "axes.linewidth: 0.8",
+        "lines.linewidth: 1.4",
+        "lines.markersize: 5",
+        "patch.linewidth: 0.6",
+        "xtick.direction: out",
+        "ytick.direction: out",
         "axes.grid: True",
         "grid.color: DDDDDD",
         "grid.linewidth: 0.6",
@@ -187,6 +260,7 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
         "axes.titlesize: 13",
         "axes.titleweight: bold",
         "font.size: 11",
+        "figure.dpi: 150",
         "axes.prop_cycle: cycler('color', [" + ", ".join(f"'{c}'" for c in cycle) + "])",
     ]
     return "\n".join(lines)

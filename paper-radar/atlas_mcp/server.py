@@ -284,7 +284,8 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
     except lab.LabError as exc:
         return f"Error: {exc}"
     # The hex list is derived (safe); the figure title is user-authored, so frame it.
-    return _untrusted("figure", f"Palette for “{fig.get('title') or fig['id']}”: " + ", ".join(hexes))
+    body = ", ".join(hexes) if hexes else "(monochrome — no distinct data colours)"
+    return _untrusted("figure", f"Palette for “{fig.get('title') or fig['id']}”: " + body)
 
 
 @mcp.tool()
@@ -316,9 +317,12 @@ def get_moodboard_style(
         style = moodboard.mplstyle(hexes, team["name"])
     except lab.LabError as exc:
         return f"Error: {exc}"
+    palette_line = ", ".join(hexes) if hexes else (
+        "(no distinct colours found — using a CVD-safe default cycle)"
+    )
     return (
         f"Lab identity from {len(raws)} figure(s) on {team['name']}'s mood board.\n"
-        f"Palette: {', '.join(hexes)}\n\n"
+        f"Palette: {palette_line}\n\n"
         f"Save as `atlas.mplstyle`, then `plt.style.use('atlas.mplstyle')`:\n\n"
         f"```\n{style}\n```"
     )
