@@ -97,16 +97,16 @@ wire the three tiers together with env vars. No data migration is needed.
     --remote-only` — migrations land before the API, per MIGRATION_PLAN §12.
     If `db push` needs the database password in headless CI, add a
     `SUPABASE_DB_PASSWORD` repo secret and pass it to the link step.
-12. **Repo secrets — manual step**: `FLY_API_TOKEN`
-    (`fly tokens create deploy -a paper-radar-api`) and
-    `SUPABASE_ACCESS_TOKEN` must be set via `gh secret set`.
-13. **Web via Vercel git integration — manual step**: install the Vercel
-    GitHub App on the `ellen-schrader` account and connect the repo (project
-    Settings → Git). Project `rootDirectory` is already `paper-radar/web` and
-    preview+production env vars are set, so PR previews and production
-    deploys work as soon as it's connected. (Manual CLI deploys still work:
-    `vercel deploy --prod` from `paper-radar/web`; note the CLI ignores
-    `rootDirectory` for uploads from that directory.)
+12. ✓ **Repo secrets**: `FLY_API_TOKEN` and `SUPABASE_ACCESS_TOKEN` are set.
+    If the first CI `db push` fails to authenticate headless, also set
+    `SUPABASE_DB_PASSWORD` — the workflow already passes it through when
+    present.
+13. ✓ **Web via Vercel git integration**: GitHub App installed and the repo
+    connected (production branch `main`, `rootDirectory` `paper-radar/web`,
+    preview + production env vars set) — PR previews and production web
+    deploys are automatic. Manual CLI deploys still work:
+    `vercel deploy --prod` from `paper-radar/web` (the CLI ignores
+    `rootDirectory` for uploads from that directory).
 
 ### Phase 5 — later / as needed
 

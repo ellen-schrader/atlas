@@ -6,8 +6,10 @@ RUN pip install --no-cache-dir uv==0.5.24
 
 WORKDIR /app
 
-# Install deps first so source edits don't bust the layer cache.
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+# Install deps first so source edits don't bust the layer cache. UV_NO_CACHE
+# keeps ~200MB of wheel cache out of the image layers (layer caching already
+# skips unchanged installs, so the uv cache buys nothing here).
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --extra api --no-dev --no-install-project
 

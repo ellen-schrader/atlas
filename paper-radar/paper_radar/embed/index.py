@@ -31,9 +31,9 @@ def _require_faiss():
 
 def build_index(embeddings: np.ndarray) -> faiss.Index:
     """Build a flat inner-product FAISS index from ``(n, dim)`` embeddings."""
-    faiss = _require_faiss()
     if embeddings.ndim != 2 or embeddings.shape[0] == 0:
         raise ValueError("embeddings must be a non-empty (n, dim) array")
+    faiss = _require_faiss()
     vecs = np.ascontiguousarray(embeddings, dtype=np.float32)
     index = faiss.IndexFlatIP(vecs.shape[1])
     index.add(vecs)
@@ -50,7 +50,8 @@ def save_index(index: faiss.Index, path: str | Path) -> None:
 
 def load_index(path: str | Path) -> faiss.Index:
     """Load a FAISS index from disk."""
-    return _require_faiss().read_index(str(Path(path)))
+    faiss = _require_faiss()
+    return faiss.read_index(str(Path(path)))
 
 
 def search(
