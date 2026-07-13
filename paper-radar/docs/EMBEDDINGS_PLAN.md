@@ -85,13 +85,14 @@ service-role key; RLS makes `papers` writes service-role-only):
 
 - **`GET /map?team_id=...`** (FastAPI, JWT required): fetches the lab's
   embedded papers **as the user** (RLS-scoped), projects the embeddings to 2-D
-  with the existing `paper_radar.embed.index.compute_umap` (umap-learn is
-  already a dependency; fixed `random_state` for stable layouts), and returns
+  with `paper_radar.embed.index.compute_layout_2d` (sklearn t-SNE — was UMAP
+  until numba's JIT proved too slow for the shared-vCPU API machine; fixed
+  `random_state` for stable layouts), and returns
   `{points: [{paper_id, x, y, title, venue, year, tags}]}`.
 - Coordinates are cached **in-memory per team**, keyed by the set of
   `(paper_id, embedded_at)` pairs — any newly embedded paper invalidates the
-  cache. UMAP on a few hundred papers takes seconds (first call pays the
-  numba JIT), so cache hits matter; no DB table needed yet.
+  cache. t-SNE on a few hundred papers takes a couple of seconds (no JIT),
+  so cache hits still help; no DB table needed yet.
 - UI: new **`/map` route** ("Map" in the sidebar) rendering an SVG scatter —
   no chart library added. Hover shows title/venue/year; click opens the
   existing `PaperModal`. Points colored by publication year (quantized), with

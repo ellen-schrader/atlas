@@ -96,7 +96,7 @@ export interface SimilarPaper {
   similarity: number;
 }
 
-/** One paper on the GET /overview UMAP layout. */
+/** One paper on the GET /overview 2-D layout. */
 export interface OverviewPoint {
   paper_id: string;
   x: number;

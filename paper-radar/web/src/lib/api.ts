@@ -86,7 +86,7 @@ export async function semanticSearch(
   return data.results;
 }
 
-/** Insights overview: UMAP layout + named clusters + stats for the lab. */
+/** Insights overview: 2-D t-SNE layout + named clusters + stats for the lab. */
 export function fetchOverview(teamId: string): Promise<OverviewData> {
   return authedRequest<OverviewData>(`/overview?team_id=${encodeURIComponent(teamId)}`);
 }

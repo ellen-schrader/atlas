@@ -9,7 +9,7 @@ A thin FastAPI service in front of the existing ``paper_radar`` ingest logic.
     membership, and embed the paper in the background.
   * ``POST /search/semantic`` — embed a query and rank the lab's posts by
     cosine similarity (``match_papers`` RPC, caller's RLS).
-  * ``GET  /map``             — 2-D UMAP layout of the lab's embedded papers.
+  * ``GET  /overview``        — 2-D t-SNE layout + clusters of the lab's papers.
 
 Enrichment (summary/tags) still lands later in a worker.
 """
@@ -494,10 +494,10 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
 
 @app.get("/overview", response_model=OverviewResponse)
 def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
-    """Insights overview for a lab: UMAP + named clusters + stats (RLS-scoped).
+    """Insights overview for a lab: 2-D layout + named clusters + stats (RLS-scoped).
 
-    The UMAP + clustering + cluster names are cached per team by the embedded
-    set; engagement and stats are computed fresh so they stay live.
+    The layout (t-SNE) + clustering + cluster names are cached per team by the
+    embedded set; engagement and stats are computed fresh so they stay live.
     """
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
