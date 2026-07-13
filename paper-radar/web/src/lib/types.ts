@@ -10,6 +10,8 @@ export interface Team {
   id: string;
   name: string;
   slug: string;
+  /** High-entropy, revocable invite code — share this to let people join. */
+  join_code: string;
   created_by: string | null;
   created_at: string;
 }

@@ -122,7 +122,7 @@ export default function Dashboard() {
           </button>
           <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
             <span className="text-xs text-muted">Or invite your lab with this join code</span>
-            <InviteCode code={team.slug} />
+            <InviteCode code={team.join_code} />
           </div>
         </div>
       )}

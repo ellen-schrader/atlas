@@ -215,9 +215,11 @@ export function fetchMapSummary(mapId: string): Promise<MapSummary> {
   return authedRequest<MapSummary>(`/maps/${encodeURIComponent(mapId)}/summary`);
 }
 
-/** Generate (and cache) the map's summary — on demand, since it costs a model call. */
+/** Generate (and cache) the map's summary — on demand, since it costs a model call.
+ *  force=true so an explicit "Regenerate" re-runs the model instead of returning the
+ *  cached summary (the endpoint serves the cache to an un-forced POST). */
 export function generateMapSummary(mapId: string): Promise<MapSummary> {
-  return authedRequest<MapSummary>(`/maps/${encodeURIComponent(mapId)}/summary`, {
+  return authedRequest<MapSummary>(`/maps/${encodeURIComponent(mapId)}/summary?force=true`, {
     method: "POST",
   });
 }

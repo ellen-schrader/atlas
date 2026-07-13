@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 
 import { supabase } from "@/lib/supabase";
 import type { Figure } from "@/lib/types";
+import { safeHref } from "@/lib/utils";
 import {
   ACCEPTED_MIME,
   FIGURES_BUCKET,
@@ -158,7 +159,10 @@ function provenanceColumns(p: Provenance) {
   const licensed = p.origin === "third_party";
   return {
     origin: p.origin,
-    source_url: cited ? p.sourceUrl?.trim() || null : null,
+    // Only store http(s)/mailto source links, so a javascript:/data: URL can't
+    // be persisted and later rendered as an executable href (defence-in-depth
+    // alongside safeHref at render).
+    source_url: cited ? safeHref(p.sourceUrl) ?? null : null,
     license: licensed ? p.license?.trim() || null : null,
     attribution: cited ? p.attribution?.trim() || null : null,
   };

@@ -186,16 +186,16 @@ def _papers_result(hits: list[dict], empty: str) -> str:
 @mcp.tool()
 @audited
 def list_labs() -> str:
-    """List the labs (teams) you belong to in Atlas, with their ids and join codes."""
+    """List the labs (teams) you belong to in Atlas, with their ids."""
     try:
         teams = lab.list_teams()
     except lab.LabError as exc:
         return f"Error: {exc}"
     if not teams:
         return "You don't belong to any lab."
-    return _untrusted(
-        "labs", "\n".join(f"- {t['name']} — id {t['id']}, join code {t['slug']}" for t in teams)
-    )
+    # No join code here: it's an invite credential the model doesn't need to
+    # answer "which labs am I in", and it should never enter model context.
+    return _untrusted("labs", "\n".join(f"- {t['name']} — id {t['id']}" for t in teams))
 
 
 @mcp.tool()

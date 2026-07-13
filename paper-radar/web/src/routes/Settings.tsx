@@ -37,7 +37,7 @@ export default function Settings() {
 
       <ClaudePrivacyPanel teamId={team.id} teamName={team.name} userId={userId} />
 
-      <LabManagement teamId={team.id} teamName={team.name} teamSlug={team.slug} userId={userId} />
+      <LabManagement teamId={team.id} teamName={team.name} teamCode={team.join_code} userId={userId} />
     </div>
   );
 }

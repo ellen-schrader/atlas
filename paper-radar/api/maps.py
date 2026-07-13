@@ -72,6 +72,12 @@ def create_map(req: MapCreate, token: str = Depends(require_token)) -> MapOut:
     if req.visibility not in ("lab", "private"):
         raise HTTPException(status_code=400, detail="visibility must be 'lab' or 'private'")
 
+    # Bound the paid embedding call so a caller can't loop create_map to drain the
+    # shared Voyage quota. Membership itself is still enforced by the insert's RLS
+    # `with check` below. Lazy import avoids a circular import at module load.
+    from .app import _query_limiter
+
+    _query_limiter.check(user_id)
     try:
         seed_embedding = embeddings.embed_query(seed)
     except embeddings.EmbeddingError as exc:

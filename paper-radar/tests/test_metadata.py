@@ -90,6 +90,15 @@ def test_doi_trims_trailing_url_path():
     assert _doi("no doi here") is None
 
 
+def test_doi_from_meta_keeps_slashes_in_suffix():
+    # A bare DOI from a citation_doi meta tag (not a URL) may legitimately contain
+    # slashes in its suffix; from_url=False must not truncate it (which would merge
+    # two distinct DOIs onto the same key). The URL default still trims path segments.
+    doi = "10.1234/abc/def"
+    assert _doi(doi, from_url=False) == "10.1234/abc/def"
+    assert _doi(doi, from_url=True) == "10.1234/abc"
+
+
 def test_nature_url_to_doi():
     assert _nature_doi("https://www.nature.com/articles/s41586-023-06124-2") == (
         "10.1038/s41586-023-06124-2"

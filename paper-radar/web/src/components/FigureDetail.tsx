@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { deleteFigure, updateFigure, useFigureUrls } from "@/hooks/useFigures";
 import { ACCEPTED_MIME, MAX_FILE_BYTES, aspectRatio, categoryLabel } from "@/lib/figures";
 import type { Figure } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { formatDate, safeHref } from "@/lib/utils";
 
 /** Full detail for a figure: the image large, its category + caption, uploader,
  *  a linked-paper chip that swaps to the paper modal, and the shared
@@ -171,7 +171,7 @@ export function FigureDetail({
                   {figure.attribution && <span>Style of {figure.attribution}</span>}
                   {figure.source_url && (
                     <a
-                      href={figure.source_url}
+                      href={safeHref(figure.source_url)}
                       target="_blank"
                       rel="noreferrer"
                       className="truncate text-accent hover:underline"
@@ -193,7 +193,7 @@ export function FigureDetail({
                   {figure.attribution && <span>{figure.attribution}</span>}
                   {figure.source_url && (
                     <a
-                      href={figure.source_url}
+                      href={safeHref(figure.source_url)}
                       target="_blank"
                       rel="noreferrer"
                       className="truncate text-accent hover:underline"

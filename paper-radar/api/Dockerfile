@@ -1,5 +1,7 @@
 # Atlas API container (see docs/DEPLOYMENT_PLAN.md).
 # Build from the paper-radar directory: docker build -f api/Dockerfile .
+# Supply-chain: consider pinning the base by digest (FROM python:3.12-slim@sha256:…)
+# and bumping it via Dependabot so a moved tag can't change what ships.
 FROM python:3.12-slim AS base
 
 RUN pip install --no-cache-dir uv==0.5.24
@@ -18,6 +20,14 @@ COPY README.md ./
 COPY paper_radar ./paper_radar
 COPY api ./api
 RUN uv sync --frozen --extra api --no-dev
+
+# Drop root: an RCE (or a compromised dependency) in the app then runs as an
+# unprivileged user, unable to read the injected fly secrets as root or alter
+# the image at runtime. The app is stateless and the uv venv is world-readable,
+# so no chown is needed (a recursive chown would copy the whole venv into its own
+# layer, doubling the image size).
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
+USER app
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8080

@@ -26,7 +26,7 @@ export default function Onboarding() {
 
   async function onJoin(e: FormEvent) {
     e.preventDefault();
-    await run(async () => supabase.rpc("join_team_by_slug", { p_slug: slugify(code) }));
+    await run(async () => supabase.rpc("join_team_by_code", { p_code: code.trim() }));
   }
 
   async function run(action: () => Promise<{ error: unknown }>) {
@@ -82,7 +82,7 @@ export default function Onboarding() {
             />
             {name.trim() && (
               <p className="text-xs text-muted">
-                Join code: <span className="font-mono text-fg">{slugify(name)}</span>
+                You’ll get a private invite code to share once the lab is created.
               </p>
             )}
           </div>
@@ -99,7 +99,7 @@ export default function Onboarding() {
               id="lab-code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="tme-lab"
+              placeholder="Paste your lab’s invite code"
               className="font-mono"
               required
             />

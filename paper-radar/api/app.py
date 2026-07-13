@@ -247,6 +247,16 @@ class _PerUserRateLimiter:
 # far below what would make the endpoint useful as a scanner.
 _resolve_limiter = _PerUserRateLimiter(max_events=30, window_seconds=60.0)
 
+# Paid outbound work a caller can trigger repeatedly on a shared key: query
+# embeddings (Voyage) and the map summary (Anthropic, heavier). Generous but
+# bounded, so one account can't drain the quota/budget for every tenant.
+_query_limiter = _PerUserRateLimiter(max_events=40, window_seconds=60.0)
+_summary_limiter = _PerUserRateLimiter(max_events=10, window_seconds=60.0)
+
+# Upper bound on the (service-role) similarity scan, so /similarity can't be used
+# to force an unbounded cosine scan of a whole team corpus. Covers any real lab.
+_SIMILARITY_MAX_PAPERS = 10_000
+
 
 def _validated_fetch_url(raw: str) -> str:
     """Clean + SSRF-check a URL we're about to fetch, as a 400 on rejection.
@@ -260,6 +270,23 @@ def _validated_fetch_url(raw: str) -> str:
         return _clean_url(url_guard.validate_public_url(raw, resolve=False))
     except url_guard.BlockedUrl as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+_DANGEROUS_URL_SCHEMES = {"javascript", "data", "vbscript", "file", "blob"}
+
+
+def _reject_dangerous_url(raw: str) -> None:
+    """Block href-executable schemes before storing a URL the web client renders
+    as a link. http/https and scheme-less strings (bare DOIs, hand-typed links)
+    pass through so the by-hand post path still works; javascript:/data:/etc. do
+    not — defence-in-depth against stored XSS (the client also sanitises hrefs at
+    render time via safeHref)."""
+    if ":" not in raw:
+        return
+    head = raw.split(":", 1)[0]
+    scheme = "".join(c for c in head if c.isprintable() and not c.isspace()).lower()
+    if scheme in _DANGEROUS_URL_SCHEMES:
+        raise HTTPException(status_code=400, detail="Unsupported link scheme")
 
 
 # --- helpers ---------------------------------------------------------------
@@ -488,9 +515,10 @@ def create_post(
         # The web dialog resolved first and posts back what the user approved: we store
         # what they saw and never re-fetch (which would overwrite a hand-typed title
         # with the empty record a bot-walled publisher returns). No outbound request, so
-        # no SSRF check and no rate limit — and crucially no server-side URL validation,
-        # so a hand-entered link the resolver couldn't reach (a bare DOI, a bot-walled
-        # publisher page) still posts.
+        # no SSRF check and no rate limit. We still reject href-executable schemes
+        # (javascript:/data:/…) so a hand-entered link can't become stored XSS, while
+        # a bare DOI or a bot-walled publisher page (both scheme-less/http) still posts.
+        _reject_dangerous_url(req.url)
         url = _clean_url(req.url)
         meta = PaperMetadata(url=url, **req.fields.model_dump())
     else:
@@ -529,12 +557,14 @@ def semantic_search(
     The query is embedded here (the embedding key is server-side only); the
     ranking RPC runs as the caller, so RLS scopes results to their labs.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     query = req.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query must not be empty")
 
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         query_vector = embeddings.embed_query(query)
     except embeddings.EmbeddingError as exc:
@@ -588,7 +618,8 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
     see no posts in the team — then run the (uncapped) ranking with the service
     client, scoped to that same team_id. A non-member gets an empty result.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     query = req.query.strip()
     if not query:
@@ -601,6 +632,7 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
     if not visible:  # not a member (RLS returns nothing), or an empty lab
         return SimilarityResponse(similarities={})
 
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         query_vector = embeddings.embed_query(query)
     except embeddings.EmbeddingError as exc:
@@ -608,7 +640,10 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
 
     rows = (
         service_client()
-        .rpc("match_papers", {"p_team": req.team_id, "p_query": query_vector, "p_limit": 100000})
+        .rpc(
+            "match_papers",
+            {"p_team": req.team_id, "p_query": query_vector, "p_limit": _SIMILARITY_MAX_PAPERS},
+        )
         .execute()
         .data
         or []
@@ -621,37 +656,63 @@ def _last_author_lab(authors: list) -> str | None:
     return authors[-1] if authors else None
 
 
+# PostgREST caps a single response at max_rows (supabase/config.toml: 1000). Page
+# through so aggregates see every row instead of a silent first-1000 slice once a
+# lab grows past that. _IN_BATCH keeps a paper_id `in_` list within URL limits.
+_PAGE_SIZE = 1000
+_IN_BATCH = 300
+
+
+def _chunks(seq: list, n: int):
+    """Yield `seq` in lists of at most n."""
+    for i in range(0, len(seq), n):
+        yield seq[i : i + n]
+
+
+def _fetch_all(make_query) -> list[dict]:
+    """Collect every row of a PostgREST select, one page at a time. `make_query`
+    returns a fresh (unexecuted) query builder each call and must impose a stable
+    order so pages don't overlap or skip. Advances by the number of rows actually
+    returned (not by _PAGE_SIZE) so it stays correct even if the server's max-rows
+    is below _PAGE_SIZE, and stops only on an empty page."""
+    out: list[dict] = []
+    start = 0
+    while True:
+        page = make_query().range(start, start + _PAGE_SIZE - 1).execute().data or []
+        if not page:
+            return out
+        out.extend(page)
+        start += len(page)
+
+
 def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
     """(reactions, comments) per paper for the team, RLS-scoped. {} if no ids."""
     if not paper_ids:
         return {}
     counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
-    # Filter to the loaded papers (not the whole team) — fewer rows, and avoids
-    # a truncated count if a busy lab hits PostgREST's max-rows.
-    rx = (
-        uc.table("reactions")
-        .select("paper_id")
-        .eq("team_id", team_id)
-        .in_("paper_id", paper_ids)
-        .execute()
-        .data
-        or []
-    )
-    cm = (
-        uc.table("comments")
-        .select("paper_id")
-        .eq("team_id", team_id)
-        .in_("paper_id", paper_ids)
-        .execute()
-        .data
-        or []
-    )
-    for r in rx:
-        if r["paper_id"] in counts:
-            counts[r["paper_id"]][0] += 1
-    for c in cm:
-        if c["paper_id"] in counts:
-            counts[c["paper_id"]][1] += 1
+    # Count reactions/comments for exactly the shown papers — batched so a large id
+    # list stays within URL limits, and paged so a hot paper isn't capped at
+    # PostgREST max-rows. Scoping to paper_ids keeps a map (which shows a subset)
+    # from scanning the whole lab's engagement.
+    for batch in _chunks(paper_ids, _IN_BATCH):
+        for r in _fetch_all(
+            lambda b=batch: uc.table("reactions")
+            .select("paper_id")
+            .eq("team_id", team_id)
+            .in_("paper_id", b)
+            .order("id")
+        ):
+            if r["paper_id"] in counts:
+                counts[r["paper_id"]][0] += 1
+        for c in _fetch_all(
+            lambda b=batch: uc.table("comments")
+            .select("paper_id")
+            .eq("team_id", team_id)
+            .in_("paper_id", b)
+            .order("id")
+        ):
+            if c["paper_id"] in counts:
+                counts[c["paper_id"]][1] += 1
     return {k: (v[0], v[1]) for k, v in counts.items()}
 
 
@@ -746,8 +807,8 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
-    rows = (
-        uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).execute().data or []
+    rows = _fetch_all(
+        lambda: uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).order("id")
     )
     return _build_overview(uc, team_id, rows)
 
@@ -972,23 +1033,34 @@ def get_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSumm
 
 
 @app.post("/maps/{map_id}/summary", response_model=MapSummary)
-def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+def make_map_summary(
+    map_id: str, force: bool = False, token: str = Depends(require_token)
+) -> MapSummary:
     """Generate (and cache) a grounded, cited summary of the map's recent papers.
 
     On demand only — never on page load — so the model cost is paid when a member
     asks. Any member of a visible map may refresh this shared summary, so the cache
     write uses the service client after RLS has confirmed the caller can see the map.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("team_id, seed").eq("id", map_id).limit(1).execute().data or []
+        uc.table("maps").select("team_id, seed, ai_summary").eq("id", map_id).limit(1).execute().data
+        or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     team_id, seed = rows[0]["team_id"], rows[0]["seed"]
+
+    # Return the cached summary unless the caller explicitly forces a refresh —
+    # POST previously re-called the LLM (Anthropic) on every request.
+    cached = rows[0].get("ai_summary")
+    if cached and not force:
+        return MapSummary(**cached)
+    _summary_limiter.check(user_id)  # bound the paid LLM call
 
     members = (
         uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
@@ -1207,6 +1279,7 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
         return ProfileResponse(ok=True, embedded=False)
     if not get_api_settings().voyage_api_key:
         return ProfileResponse(ok=True, embedded=False)  # md saved; vector left as-is
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         # The profile describes what the user wants to read — embed it as a query
         # (papers are documents), the retrieval-tuned pairing for profile→paper.
