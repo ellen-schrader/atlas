@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AtSign, Bookmark, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { AtSign, BookMarked, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 
 import { InviteCode } from "@/components/InviteCode";
 import { PaperCard } from "@/components/PaperCard";
@@ -67,8 +67,10 @@ export default function Dashboard() {
   const active = posts.filter((p) => (counts?.[p.papers.id]?.comments ?? 0) > 0).slice(0, 2);
   const recent = posts.slice(0, 6);
 
-  // Mentions first; a paper that's both mentioned and on the reading list shows
-  // once (as the mention), so a single paper never occupies two slots.
+  // "Needs your attention" is interpersonal and time-sensitive only: unseen
+  // @mentions (a teammate is waiting on you). The reading-list backlog has its
+  // own page and the compact "Continue reading" nudge below, so it no longer
+  // floods this section — which had let a large reading list bury the mentions.
   const seen = new Set<string>();
   const attention: AttentionItem[] = [];
   for (const m of unseenMentions) {
@@ -88,21 +90,14 @@ export default function Dashboard() {
       onClear: () => void markSeen(m.paper_id),
     });
   }
-  for (const r of toRead ?? []) {
-    if (seen.has(r.paper_id)) continue;
-    seen.add(r.paper_id);
-    attention.push({
-      key: `r-${r.paper_id}`,
-      accent: false,
-      icon: <Bookmark size={15} />,
-      lead: "On your reading list",
-      title: r.papers?.title ?? "A paper",
-      sub: [r.papers?.venue, r.papers?.year].filter(Boolean).join(" · "),
-      onOpen: () => openPaper(r.paper_id),
-      onClear: () => void markPaperRead(r.paper_id),
-    });
-  }
   const attentionItems = attention.slice(0, 6);
+
+  // The single next paper to read: the oldest still-saved one (most at risk of
+  // going stale — the list is newest-first, so that's the tail), skipping any
+  // already surfaced above as a mention. The full backlog lives on /reading.
+  const readingQueue = (toRead ?? []).filter((r) => !seen.has(r.paper_id));
+  const nextUp = readingQueue[readingQueue.length - 1];
+  const readingCount = toRead?.length ?? 0;
 
   const empty = !search.isLoading && posts.length === 0;
 
@@ -147,6 +142,21 @@ export default function Dashboard() {
               <AttentionCard key={a.key} item={a} />
             ))}
           </div>
+        </Section>
+      )}
+
+      {nextUp && (
+        <Section
+          title="Continue reading"
+          action={{ label: "Reading list", onClick: () => navigate("/reading") }}
+        >
+          <ContinueReading
+            title={nextUp.papers?.title ?? "A paper"}
+            meta={[nextUp.papers?.venue, nextUp.papers?.year].filter(Boolean).join(" · ")}
+            total={readingCount}
+            onOpen={() => openPaper(nextUp.paper_id)}
+            onMarkRead={() => void markPaperRead(nextUp.paper_id)}
+          />
         </Section>
       )}
 
@@ -318,6 +328,46 @@ function AttentionCard({ item }: { item: AttentionItem }) {
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-fg"
       >
         <Check size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** A single, bounded nudge for the reading-list backlog: the next paper to read
+ *  plus how many are queued, deferring to the dedicated reading-list page rather
+ *  than dumping the whole list onto the dashboard. */
+function ContinueReading({
+  title,
+  meta,
+  total,
+  onOpen,
+  onMarkRead,
+}: {
+  title: string;
+  meta: string;
+  total: number;
+  onOpen: () => void;
+  onMarkRead: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3.5 rounded-card border border-border bg-surface p-4 shadow-sm transition hover:border-border-strong">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border bg-surface-2 text-muted">
+        <BookMarked size={17} />
+      </span>
+      <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+          Next up{total > 1 ? ` · ${total} on your list` : ""}
+        </span>
+        <span className="mt-1 block truncate text-sm font-semibold leading-snug">{title}</span>
+        {meta && <span className="mt-0.5 block truncate text-xs text-muted">{meta}</span>}
+      </button>
+      <button
+        onClick={onMarkRead}
+        title="Mark as read"
+        aria-label="Mark as read"
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-accent"
+      >
+        <Check size={15} />
       </button>
     </div>
   );
