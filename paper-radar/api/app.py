@@ -657,23 +657,32 @@ def _last_author_lab(authors: list) -> str | None:
 
 
 # PostgREST caps a single response at max_rows (supabase/config.toml: 1000). Page
-# through so team-wide aggregates see every row instead of a silent first-1000
-# slice once a lab grows past that.
+# through so aggregates see every row instead of a silent first-1000 slice once a
+# lab grows past that. _IN_BATCH keeps a paper_id `in_` list within URL limits.
 _PAGE_SIZE = 1000
+_IN_BATCH = 300
+
+
+def _chunks(seq: list, n: int):
+    """Yield `seq` in lists of at most n."""
+    for i in range(0, len(seq), n):
+        yield seq[i : i + n]
 
 
 def _fetch_all(make_query) -> list[dict]:
     """Collect every row of a PostgREST select, one page at a time. `make_query`
     returns a fresh (unexecuted) query builder each call and must impose a stable
-    order so pages don't overlap or skip."""
+    order so pages don't overlap or skip. Advances by the number of rows actually
+    returned (not by _PAGE_SIZE) so it stays correct even if the server's max-rows
+    is below _PAGE_SIZE, and stops only on an empty page."""
     out: list[dict] = []
     start = 0
     while True:
         page = make_query().range(start, start + _PAGE_SIZE - 1).execute().data or []
-        out.extend(page)
-        if len(page) < _PAGE_SIZE:
+        if not page:
             return out
-        start += _PAGE_SIZE
+        out.extend(page)
+        start += len(page)
 
 
 def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
@@ -681,21 +690,29 @@ def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tupl
     if not paper_ids:
         return {}
     counts: dict[str, list[int]] = {pid: [0, 0] for pid in paper_ids}
-    # Count every reaction/comment in the lab (paged, so a busy lab isn't capped at
-    # max-rows), tallying only the papers we're showing. Counting team-wide also
-    # avoids a huge paper_id `in_` list once the lab has more than a page of papers.
-    rx = _fetch_all(
-        lambda: uc.table("reactions").select("paper_id").eq("team_id", team_id).order("id")
-    )
-    cm = _fetch_all(
-        lambda: uc.table("comments").select("paper_id").eq("team_id", team_id).order("id")
-    )
-    for r in rx:
-        if r["paper_id"] in counts:
-            counts[r["paper_id"]][0] += 1
-    for c in cm:
-        if c["paper_id"] in counts:
-            counts[c["paper_id"]][1] += 1
+    # Count reactions/comments for exactly the shown papers — batched so a large id
+    # list stays within URL limits, and paged so a hot paper isn't capped at
+    # PostgREST max-rows. Scoping to paper_ids keeps a map (which shows a subset)
+    # from scanning the whole lab's engagement.
+    for batch in _chunks(paper_ids, _IN_BATCH):
+        for r in _fetch_all(
+            lambda b=batch: uc.table("reactions")
+            .select("paper_id")
+            .eq("team_id", team_id)
+            .in_("paper_id", b)
+            .order("id")
+        ):
+            if r["paper_id"] in counts:
+                counts[r["paper_id"]][0] += 1
+        for c in _fetch_all(
+            lambda b=batch: uc.table("comments")
+            .select("paper_id")
+            .eq("team_id", team_id)
+            .in_("paper_id", b)
+            .order("id")
+        ):
+            if c["paper_id"] in counts:
+                counts[c["paper_id"]][1] += 1
     return {k: (v[0], v[1]) for k, v in counts.items()}
 
 

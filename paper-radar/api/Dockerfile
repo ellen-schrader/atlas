@@ -23,9 +23,10 @@ RUN uv sync --frozen --extra api --no-dev
 
 # Drop root: an RCE (or a compromised dependency) in the app then runs as an
 # unprivileged user, unable to read the injected fly secrets as root or alter
-# the image at runtime. The app is stateless, so it needs no writable paths.
-RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
-    && chown -R app:app /app
+# the image at runtime. The app is stateless and the uv venv is world-readable,
+# so no chown is needed (a recursive chown would copy the whole venv into its own
+# layer, doubling the image size).
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
 USER app
 
 ENV PATH="/app/.venv/bin:$PATH"

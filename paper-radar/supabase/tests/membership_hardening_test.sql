@@ -4,7 +4,7 @@
 -- Run with `supabase test db`.
 
 begin;
-select plan(6);
+select plan(7);
 
 -- === seed (as the superuser test role, RLS bypassed) =======================
 
@@ -38,11 +38,12 @@ select throws_ok(
     '42501', NULL,
     'authenticated user cannot directly insert a team_members row (no cross-tenant owner-grab)');
 
--- 2. Joining with a guessed slug-like/wrong code is rejected.
+-- 2. Joining with a guessed slug-like/wrong code is rejected for the RIGHT reason
+--    (no such invite code — SQLSTATE P0002 = no_data_found), not any incidental error.
 select throws_ok(
     $$ select public.join_team_by_code('lab-bb') $$,
-    NULL, NULL,
-    'join_team_by_code rejects a wrong/guessed code');
+    'P0002', NULL,
+    'join_team_by_code rejects a wrong/guessed code (no_data_found)');
 
 -- 3. Joining with the correct high-entropy code succeeds...
 select lives_ok(
@@ -72,6 +73,14 @@ select throws_ok(
          and user_id = '00000000-0000-0000-0000-0000000000a1' $$,
     '42501', NULL,
     'authenticated user cannot DELETE a team_members row directly');
+
+-- 6. The real escalation path: Aa (now a member of Lab BB) cannot promote herself
+--    to owner via the owner-guarded RPC.
+select throws_ok(
+    $$ select public.set_member_role('b2222222-2222-2222-2222-222222222222',
+                                     '00000000-0000-0000-0000-0000000000a1', 'owner') $$,
+    '42501', NULL,
+    'a non-owner cannot self-promote via set_member_role');
 
 reset role;
 select * from finish();

@@ -9,22 +9,16 @@
 
 -- === figures: re-assert membership on UPDATE (mirror maps_update) ============
 -- Without this, a user can move their own figure into another lab by rewriting
--- team_id, and it then shows up on the victim lab's mood board.
+-- team_id, and it then shows up on the victim lab's mood board. (paper_status and
+-- mentions were intentionally NOT given the same treatment: their only "foreign
+-- team_id" risk is a non-exploitable self-inflicted data-integrity nit on the
+-- user's own row, and adding is_team_member to their WITH CHECK would break a
+-- legitimate self-update on a row for a lab the user has since left — e.g. the
+-- blind cross-lab "mark all mentions seen" would abort on a stale row.)
 drop policy if exists figures_update on public.figures;
 create policy figures_update on public.figures for update
     using (uploaded_by = auth.uid())
     with check (uploaded_by = auth.uid() and public.is_team_member(team_id));
-
--- === paper_status / mentions: forbid stamping a foreign team_id =============
-drop policy if exists paper_status_update on public.paper_status;
-create policy paper_status_update on public.paper_status for update
-    using (user_id = auth.uid())
-    with check (user_id = auth.uid() and public.is_team_member(team_id));
-
-drop policy if exists mentions_update on public.mentions;
-create policy mentions_update on public.mentions for update
-    using (mentioned_user = auth.uid())
-    with check (mentioned_user = auth.uid() and public.is_team_member(team_id));
 
 -- === close the membership oracle ============================================
 -- These are SECURITY DEFINER and are referenced by RLS policies, so keep them

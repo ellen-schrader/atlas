@@ -30,7 +30,9 @@ as $$
     -- 16 random bytes = 128 bits of entropy, hex-encoded.
     select encode(extensions.gen_random_bytes(16), 'hex');
 $$;
-revoke all on function public.gen_join_code() from public;
+-- NB: intentionally NOT revoked from public. It's a pure random generator (no
+-- data access), and it's the DEFAULT for teams.join_code, so any role that can
+-- insert a team (or a seed/backfill) must be able to evaluate it.
 
 alter table public.teams add column if not exists join_code text;
 

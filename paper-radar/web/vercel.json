@@ -14,7 +14,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://eegjxioiidymmiizflkh.supabase.co; font-src 'self'; connect-src 'self' https://eegjxioiidymmiizflkh.supabase.co wss://eegjxioiidymmiizflkh.supabase.co https://paper-radar-api.fly.dev; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://eegjxioiidymmiizflkh.supabase.co; font-src 'self'; connect-src 'self' https://eegjxioiidymmiizflkh.supabase.co wss://eegjxioiidymmiizflkh.supabase.co https://paper-radar-api.fly.dev https://api.openalex.org; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
         }
       ]
     }
