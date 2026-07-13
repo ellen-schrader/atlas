@@ -137,3 +137,65 @@ def test_resolve_dedup_key_strips_tracking_params():
     assert resp.status_code == 200
     norm = resp.json()["url_norm"]
     assert norm == "//nature.com/articles/s41586-024-01234-5"
+
+
+# --- BibTeX import ---------------------------------------------------------
+
+
+def test_bibtex_endpoints_require_a_bearer_token():
+    for path in ("/import/bibtex/preflight", "/import/bibtex"):
+        resp = client.post(path, json={"team_id": "x", "bibtex": "@article{a}"})
+        assert resp.status_code in (401, 403), path
+
+
+def test_bibtex_preflight_refuses_a_lab_you_are_not_in(monkeypatch):
+    """The pre-flight reads with the service role (it must, to see papers other members
+    posted), so RLS can't protect it. Without an explicit membership check, `team_id` is
+    attacker-controlled and a "duplicate" verdict tells you a lab you can't see holds
+    that DOI — an oracle over any lab's corpus."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "attacker")
+
+    class _NoMembership:
+        def table(self, _n):
+            return self
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": []})()  # not a member of anything
+
+    monkeypatch.setattr(app_mod, "user_client", lambda _t: _NoMembership())
+
+    for path in ("/import/bibtex/preflight", "/import/bibtex"):
+        resp = client.post(
+            path,
+            json={"team_id": "someone-elses-lab", "bibtex": "@article{a, doi={10.1/x}}"},
+            headers={"Authorization": "Bearer forged"},
+        )
+        assert resp.status_code == 403, f"{path} leaked: {resp.status_code}"
+        assert "not a member" in resp.json()["detail"].lower()
+
+
+def test_bibtex_payload_is_bounded():
+    """An unbounded `bibtex` string lets one request exhaust the process."""
+    resp = client.post(
+        "/import/bibtex/preflight",
+        json={"team_id": "x", "bibtex": "a" * (app_mod_max() + 1)},
+        headers={"Authorization": "Bearer whatever"},
+    )
+    assert resp.status_code == 422
+
+
+def app_mod_max() -> int:
+    from api.app import MAX_BIBTEX_BYTES
+
+    return MAX_BIBTEX_BYTES

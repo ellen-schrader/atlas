@@ -5,11 +5,22 @@ import type { PaperPost } from "@/lib/types";
 
 export const PAGE_SIZE = 30;
 
+/** How to order a lab's papers.
+ *  "shared"    — when the lab posted it (default; right for a lab that grows one at a time)
+ *  "published" — when the paper came out (right after importing a back-catalogue, where
+ *                every post shares the same posted_at and "recently shared" says nothing) */
+export type PaperSort = "shared" | "published";
+
 /** Server-side, paginated full-text search over a lab's papers (search_papers
  *  RPC). Embeds the joined paper so the result reuses the PaperPost shape. */
-export function usePaperSearch(teamId: string, q: string, tag: string | null) {
+export function usePaperSearch(
+  teamId: string,
+  q: string,
+  tag: string | null,
+  sort: PaperSort = "shared",
+) {
   return useInfiniteQuery({
-    queryKey: ["paper-search", teamId, q, tag],
+    queryKey: ["paper-search", teamId, q, tag, sort],
     initialPageParam: 0,
     queryFn: async ({ pageParam }): Promise<PaperPost[]> => {
       const { data, error } = await supabase
@@ -19,6 +30,7 @@ export function usePaperSearch(teamId: string, q: string, tag: string | null) {
           p_tag: tag,
           p_limit: PAGE_SIZE,
           p_offset: pageParam,
+          p_sort: sort,
         })
         .select(
           "id, posted_at, note, posted_by, posted_by_label, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",

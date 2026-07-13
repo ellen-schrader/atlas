@@ -22,9 +22,9 @@ wire the three tiers together with env vars. No data migration is needed.
 - **Web → Vercel** (or Cloudflare Pages — either works; both are free-tier
   fine for a lab). Static output, SPA rewrite to `index.html`.
 - **API → Fly.io** (or Railway/Render). A container host, per MIGRATION_PLAN
-  §12. The API is light — it never touches sentence-transformers/torch or
-  faiss (embeddings are Voyage API calls; the heavy deps are legacy
-  Streamlit-era code), and umap/sklearn load lazily only for `/map` — so a
+  §12. The API is light — it never touches sentence-transformers/torch,
+  faiss, or numba (embeddings are Voyage API calls; the heavy deps are legacy
+  Streamlit-era code, and the map layout is numba-free sklearn t-SNE) — so a
   small instance (512 MB–1 GB) should do.
 - **DB stays on Supabase** as-is.
 
@@ -39,9 +39,10 @@ wire the three tiers together with env vars. No data migration is needed.
    dependencies (~2–3 GB image, slow cold builds). Move those two to a
    `legacy` extra in `pyproject.toml` (faiss-cpu too — `embed/index.py` now
    imports it lazily, so only the local-index CLI path needs it).
-   umap/scikit-learn stay in the base — the API's `/map` endpoint uses them
-   (`api/overview.py` → `paper_radar.embed.index`). The Streamlit app keeps
-   working via `uv sync --extra dev --extra legacy`.
+   scikit-learn stays in the base — the API's `/overview` map uses it for
+   t-SNE + KMeans (`api/overview.py` → `paper_radar.embed.index`; UMAP and
+   its numba chain were dropped entirely). The Streamlit app keeps working
+   via `uv sync --extra dev --extra legacy`.
 3. ✓ **Add `api/Dockerfile`** — `python:3.12-slim`, install with `uv` from the
    lockfile (`uv sync --frozen --extra api --no-dev`), run
    `uvicorn api.app:app --host 0.0.0.0 --port 8080`. `/health` already exists
@@ -108,6 +109,18 @@ wire the three tiers together with env vars. No data migration is needed.
     deploys are automatic. Manual CLI deploys still work:
     `vercel deploy --prod` from `paper-radar/web` (the CLI ignores
     `rootDirectory` for uploads from that directory).
+
+### Known issue — Fly trial plan (needs a card)
+
+The Fly account is on the trial plan: **machines are force-stopped after 5
+minutes** ("Trial machine stopping. To run for longer than 5m0s, add a credit
+card" in the logs). Until a card is added at fly.io, the in-process layout
+cache never survives, and users hitting the ~35 s cold boot window see 502s
+(which Fly Doctor misreports as "app not listening on the expected port").
+The map itself works within each window since the layout moved from UMAP to
+numba-free t-SNE (`compute_layout_2d`) — UMAP's per-process JIT compile took
+longer on the shared vCPU than the trial let the machine live. The 5-minute
+kill and boot-window 502s only go away with a card.
 
 ### Phase 5 — later / as needed
 

@@ -1,7 +1,9 @@
 import { type ReactNode, useState } from "react";
-import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
+import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
+import { useMcpAccess } from "@/hooks/useMcpAccess";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
@@ -212,41 +214,28 @@ ATLAS_TEAM_ID=${team.id}`;
         </div>
       </Step>
 
+      {/* the switch — lab-wide, owner-only */}
+      <AccessPanel />
+
       {/* what it can actually touch */}
       <section className="rounded-card border border-border bg-surface p-5">
         <h2 className="mb-3 font-serif text-lg font-semibold tracking-tight">
           What Claude can do with {team.name}
         </h2>
-        <ul className="flex flex-col gap-2">
-          <Perm kind="allow">
-            Read papers your lab has posted — titles, abstracts, tags, venues, DOIs
-          </Perm>
-          <Perm kind="allow">Read comments and reactions — the signal your lab’s taste is built from</Perm>
-          <Perm kind="allow">
-            Read the mood board and derive your palette + a matplotlib style sheet
-          </Perm>
-          <Perm kind="write">
-            <b className="text-fg">Post a paper</b> into the lab, optionally with a comment that
-            @-mentions a teammate. This <b className="text-fg">writes to the shared lab</b> — it
-            previews by default and only writes when you confirm.
-          </Perm>
-          <Perm kind="deny">Anything in another lab — papers, comments, figures</Perm>
-          <Perm kind="deny">Delete or edit existing papers, comments, or reactions</Perm>
-        </ul>
+        <ClaudeScope teamName={team.name} />
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
           <ShieldAlert size={16} className="mt-0.5 shrink-0 text-danger" />
           <p className="text-xs leading-relaxed text-muted">
-            <b className="text-fg">This is not only your decision.</b> Connecting exposes your
-            colleagues’ comments, reactions, and reading history — not just your own — and lets
-            Claude post into the shared lab. Tell your lab before you connect.{" "}
-            <span className="text-faint">
-              (Owner-controlled access, a per-member opt-out, and a tool-call log the whole lab can
-              see are coming next.)
-            </span>
+            <b className="text-fg">This is not one member’s decision.</b> Claude reads the lab’s
+            shared corpus and can post into it, so access is a <b className="text-fg">lab-wide
+            setting an owner controls</b> — and every call it makes is logged below, where the whole
+            lab can see it.
           </p>
         </div>
       </section>
+
+      <ActivityLog />
 
       <details className="rounded-card border border-border bg-surface p-4">
         <summary className="cursor-pointer text-sm font-semibold text-fg">It didn’t work</summary>
@@ -265,6 +254,53 @@ ATLAS_TEAM_ID=${team.id}`;
         </dl>
       </details>
     </div>
+  );
+}
+
+/** The lab-wide switch, wrapped in Connect's section chrome. The control itself is
+ *  shared with Settings, so the two screens can't drift apart. */
+function AccessPanel() {
+  const { team, userId } = useAppContext();
+  const { data: enabled, isLoading } = useMcpAccess(team.id);
+
+  // Don't assert "off" before we know: without this the page tells a lab that HAS
+  // Claude enabled that their setup won't work, then flips.
+  if (isLoading) return null;
+
+  return (
+    <section
+      className={cn(
+        "rounded-card border p-5",
+        enabled ? "border-accent/40 bg-accent-weak" : "border-border bg-surface",
+      )}
+    >
+      <ClaudeAccessToggle
+        teamId={team.id}
+        teamName={team.name}
+        userId={userId}
+        headingLevel="h2"
+      />
+      {!enabled && (
+        <p className="mt-3 text-xs text-faint">
+          The steps above won’t work until this is on.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The tool-call log. Visible to the whole lab — a log only the connector can read is not a check. */
+function ActivityLog() {
+  const { team } = useAppContext();
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <h2 className="font-serif text-lg font-semibold tracking-tight">Recent Claude activity</h2>
+      <p className="mb-3 mt-1 text-sm text-muted">
+        Every tool call Claude makes against {team.name}, visible to everyone in the lab. Blocked
+        attempts show up here too.
+      </p>
+      <ClaudeActivity teamId={team.id} teamName={team.name} />
+    </section>
   );
 }
 
@@ -294,29 +330,6 @@ function Step({
         {children}
       </div>
     </section>
-  );
-}
-
-/**
- * One capability. A single `kind` rather than three booleans, so `ok + no` is not
- * representable and the icon, its colour, and the text colour all derive from one
- * source. `write` gets a genuine warning glyph — the one dangerous capability here
- * (Claude posting into the shared lab) must not rest on colour alone to be noticed.
- */
-function Perm({ kind, children }: { kind: "allow" | "write" | "deny"; children: ReactNode }) {
-  const icon = {
-    allow: <Check size={15} className="text-accent" />,
-    write: <AlertTriangle size={15} className="text-danger" />,
-    deny: <X size={15} className="text-faint" />,
-  }[kind];
-
-  return (
-    <li className="flex gap-2.5 text-sm">
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className={cn("leading-relaxed", kind === "deny" ? "text-faint" : "text-muted")}>
-        {children}
-      </span>
-    </li>
   );
 }
 

@@ -1,4 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles } from "lucide-react";
 
@@ -10,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
-import { usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
+import { type PaperSort, usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { useTeamTags } from "@/hooks/useTeamTags";
@@ -36,6 +37,7 @@ export default function Papers() {
   const [semanticQuery, setSemanticQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "table">("cards");
+  const [sort, setSort] = useState<PaperSort>("shared");
   const searchRef = useRef<HTMLInputElement>(null);
 
   // ⌘K / Ctrl-K focuses the search box.
@@ -51,7 +53,7 @@ export default function Papers() {
   }, []);
 
   // Keyword: live, server-side, paginated full-text search.
-  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", tag);
+  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", tag, sort);
   const { data: total } = usePaperCount(team.id, query, tag);
   const { data: tags } = useTeamTags(team.id);
 
@@ -132,6 +134,12 @@ export default function Papers() {
             Everything shared in {team.name} — search, filter, and open to discuss.
           </p>
         </div>
+        <Link
+          to="/import"
+          className="shrink-0 rounded-control border border-border-strong px-3 py-1.5 text-sm font-semibold text-fg transition hover:border-accent hover:text-accent"
+        >
+          Import a .bib
+        </Link>
       </div>
 
       <PostPaperBar teamId={team.id} />
@@ -166,6 +174,16 @@ export default function Papers() {
             ⌘K
           </kbd>
         </form>
+        {/* Sort matters most right after a bulk import, where every post shares the
+            same posted_at and "recently shared" degenerates into an arbitrary order. */}
+        <div className="inline-flex shrink-0 overflow-hidden rounded-control border border-border">
+          <ModeButton active={sort === "shared"} onClick={() => setSort("shared")}>
+            Recently shared
+          </ModeButton>
+          <ModeButton active={sort === "published"} onClick={() => setSort("published")}>
+            Recently published
+          </ModeButton>
+        </div>
         <div className="inline-flex overflow-hidden rounded-control border border-border">
           <ViewButton active={view === "cards"} onClick={() => setView("cards")} label="Card view">
             <LayoutGrid size={15} />

@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
@@ -9,7 +10,13 @@ import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 export default function Login() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  // The landing page's "Create your lab" CTA links to ?mode=signup. Without this it
+  // would promise sign-up and deliver the log-in form — a password the visitor
+  // doesn't have yet.
+  const [params] = useSearchParams();
+  const [mode, setMode] = useState<"login" | "signup">(
+    params.get("mode") === "signup" ? "signup" : "login",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

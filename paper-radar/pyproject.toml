@@ -11,17 +11,13 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
     "pymupdf>=1.24",
-    # umap/sklearn back the API's /map endpoint (embed/index.py); the deps only
-    # the local pipeline needs (sentence-transformers/torch, faiss, streamlit)
-    # live in `legacy`.
-    "umap-learn>=0.5.6",
+    # sklearn backs the API's /overview map (embed/index.py: t-SNE + KMeans —
+    # deliberately numba-free, see compute_layout_2d); the deps only the local
+    # pipeline needs (sentence-transformers/torch, faiss, streamlit) live in
+    # `legacy`.
     "scikit-learn>=1.4",
     "typer>=0.12",
     "numpy>=1.26,<3",
-    # Pin modern numba/llvmlite so the resolver doesn't backtrack to versions
-    # that predate Python 3.12 (umap-learn -> pynndescent -> numba -> llvmlite).
-    "numba>=0.60",
-    "llvmlite>=0.43",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +27,7 @@ dev = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "supabase>=2.9",
+    "bibtexparser>=1.4",
 ]
 # The Streamlit-era prototype (app/, embed/embed.py, `paper-radar serve`).
 # Not installed in the API container image.
@@ -43,6 +40,7 @@ api = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "supabase>=2.9",
+    "bibtexparser>=1.4",   # .bib import (ingest/bibtex.py)
 ]
 # Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
 # docs/CLAUDE_INTEGRATION_PLAN.md). Run: uv run --extra mcp python -m atlas_mcp
