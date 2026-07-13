@@ -372,8 +372,8 @@ function Capabilities({ teamName }: { teamName: string }) {
         What you can ask Claude to do
       </h2>
       <p className="mb-4 mt-1 max-w-[60ch] text-sm text-muted">
-        Once connected, ask in plain language — Claude picks the right tool and answers with real,
-        citable papers from {teamName}. A few things to try:
+        Once connected, ask in plain language — Claude picks the right tool and answers from
+        {" "}{teamName}’s own papers and figures, with citable deep links. A few things to try:
       </p>
       <div className="flex flex-col gap-5">
         {CAPABILITIES.map((section) => (
