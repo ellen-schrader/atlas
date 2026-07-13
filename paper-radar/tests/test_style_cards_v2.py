@@ -24,7 +24,6 @@ COMPOSITE = {
         "rows": 1,
         "cols": 4,
         "width_ratios": [0.5, 3, 1.4, 1.2],
-        "share_y": "phenotype",
     },
     "panels": [
         {"kind": "dendrogram", "position": [0, 0], "rows": "phenotype", "labels": {"rows": False}},
@@ -95,8 +94,14 @@ def test_version_is_inferred_from_panels():
          "panels": [{"kind": "line", "position": [0, 0]}, {"kind": "bar", "position": [0, 0]}]},
         # rows must name a declared domain
         {"spec_version": 2, "panels": [{"kind": "heatmap", "position": [0, 0], "rows": "ghost"}]},
-        # share_y must name a declared domain
+        # an unknown layout key is refused (share_y was removed: `rows` on a panel
+        # already declares the sharing, and a second field could only contradict it)
         {"spec_version": 2, "layout": {"share_y": "ghost"},
+         "panels": [{"kind": "line", "position": [0, 0]}]},
+        # domain / palette names are bounded like every other string in the spec
+        {"spec_version": 2, "domains": {"x" * 40: {"n_categories": 3}},
+         "panels": [{"kind": "line", "position": [0, 0]}]},
+        {"spec_version": 2, "palettes": {"a b!": ["#0f8f8b"]},
          "panels": [{"kind": "line", "position": [0, 0]}]},
         # labels must match n_categories — a mismatch would silently mislabel rows
         {"spec_version": 2, "domains": {"p": {"n_categories": 3, "labels": ["a", "b"]}},
@@ -296,6 +301,88 @@ def test_cvd_checks_each_named_palette_but_not_the_heatmap_ramp():
     assert "region" in verdict  # the categorical palette IS checked
     assert "expr" not in verdict  # the heatmap's ramp is not a categorical set
     assert isinstance(safe, bool)
+
+
+def test_cvd_checks_inline_palettes_too():
+    """The question isn't which palettes are DECLARED, it's which colours a reader
+    has to tell apart. An inline palette of near-identical blues on a categorical
+    panel must not be stamped safe just because it has no name."""
+    pytest.importorskip("mcp")
+    pytest.importorskip("supabase")
+    from atlas_mcp import server
+
+    norm = card_spec.validate_spec(
+        {
+            "spec_version": 2,
+            "domains": {"p": {"n_categories": 5}},
+            "layout": {"rows": 1, "cols": 1},
+            "panels": [
+                {
+                    "kind": "stacked_bar", "position": [0, 0], "rows": "p",
+                    "palette": ["#4477aa", "#4488bb", "#4499cc", "#44aadd"],
+                }
+            ],
+        }
+    )
+    safe, verdict = server._spec_cvd(norm)
+    assert safe is False, "four near-identical blues are not colourblind-safe"
+    assert "no categorical palette" not in verdict
+
+
+def test_cvd_still_checks_a_palette_used_as_both_ramp_and_categories():
+    pytest.importorskip("mcp")
+    pytest.importorskip("supabase")
+    from atlas_mcp import server
+
+    norm = card_spec.validate_spec(
+        {
+            "spec_version": 2,
+            "domains": {"p": {"n_categories": 5}},
+            "palettes": {"main": ["#111111", "#121212"]},
+            "layout": {"rows": 1, "cols": 2},
+            "panels": [
+                {"kind": "heatmap", "position": [0, 0], "rows": "p", "palette": "main"},
+                {"kind": "stacked_bar", "position": [0, 1], "rows": "p", "palette": "main"},
+            ],
+        }
+    )
+    safe, verdict = server._spec_cvd(norm)
+    assert "main" in verdict, "its categorical USE must still be checked"
+    assert safe is False
+
+
+def test_confirm_preview_surfaces_every_stored_string():
+    """Panel titles and colorbar labels are free text that lands in the stored spec
+    AND is drawn onto the shared board image — the same leak vector as row labels,
+    so the human approving the write has to see them."""
+    pytest.importorskip("mcp")
+    pytest.importorskip("supabase")
+    import asyncio
+
+    from atlas_mcp import lab as L
+    from atlas_mcp import server
+
+    spec = {
+        "spec_version": 2,
+        "domains": {"p": {"n_categories": 3, "labels": ["CD8 exhausted", "Treg", "B cell"]}},
+        "layout": {"rows": 1, "cols": 1},
+        "panels": [
+            {
+                "kind": "heatmap", "position": [0, 0], "rows": "p",
+                "title": "IFNG programme", "colorbar": {"show": True, "label": "z(IFNG)"},
+            }
+        ],
+    }
+    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    orig = L.resolve_team
+    L.resolve_team = lambda tid: {"id": "t", "name": "Lab A"}
+    try:
+        out = asyncio.run(fn(spec=spec, title="T", confirm=False, ctx=None))
+    finally:
+        L.resolve_team = orig
+    assert "CD8 exhausted" in out  # the row labels
+    assert "IFNG programme" in out  # the panel title
+    assert "z(IFNG)" in out  # the colorbar label
 
 
 def test_spec_summary_describes_a_composite():

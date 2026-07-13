@@ -111,13 +111,31 @@ def _letter(i: int) -> str:
     return chr(ord("A") + i % 26)
 
 
-def _thin_log_ticks(axis) -> None:
-    """A log axis in a narrow side panel renders its minor decade labels on top of
-    each other into an unreadable smear. Keep a few major ticks and drop the rest."""
-    from matplotlib.ticker import LogFormatterSciNotation, LogLocator, NullFormatter
+def _thin_log_ticks(axis, lo: float, hi: float) -> None:
+    """Readable ticks on a log axis in a narrow side panel.
 
-    axis.set_major_locator(LogLocator(base=10.0, numticks=4))
-    axis.set_major_formatter(LogFormatterSciNotation(base=10.0))
+    Two failure modes to avoid: whole decades smear their minor labels over each
+    other, and a range that spans LESS than one decade (abundance often does —
+    e.g. 0.15 to 0.24) contains no power of ten at all, so decade-only ticks leave
+    the axis completely unlabelled.
+    """
+    from matplotlib.ticker import (
+        LogFormatterSciNotation,
+        LogLocator,
+        NullFormatter,
+        ScalarFormatter,
+    )
+
+    decades = np.log10(max(hi, 1e-9)) - np.log10(max(lo, 1e-9))
+    if decades < 1.0:
+        # Inside one decade: label the 1-2-5 subdivisions, or the axis says nothing.
+        axis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=6))
+        fmt = ScalarFormatter()
+        fmt.set_scientific(False)
+        axis.set_major_formatter(fmt)
+    else:
+        axis.set_major_locator(LogLocator(base=10.0, numticks=4))
+        axis.set_major_formatter(LogFormatterSciNotation(base=10.0))
     axis.set_minor_locator(LogLocator(base=10.0, subs=(0.2, 0.4, 0.6, 0.8), numticks=12))
     axis.set_minor_formatter(NullFormatter())
 
@@ -155,7 +173,10 @@ def _colormap(panel: dict, colours: list[str]):
 
 
 def _p_heatmap(fig, ax, panel, dom, palettes, rng, base_size):
-    data = dom.ordered(dom.matrix)
+    # The domain builds ONE matrix sized to the widest heatmap on it; a panel that
+    # asked for fewer columns takes the first N, so its validated `columns` is what
+    # actually gets drawn.
+    data = dom.ordered(dom.matrix)[:, : panel.get("columns", dom.matrix.shape[1])]
     if panel["scale"]["kind"] == "diverging":
         lim = float(np.abs(data).max()) or 1.0
         mid = panel["scale"]["midpoint"]
@@ -176,22 +197,46 @@ def _p_heatmap(fig, ax, panel, dom, palettes, rng, base_size):
 
 def _p_stacked_bar(fig, ax, panel, dom, palettes, rng, base_size):
     comp = dom.ordered(dom.composition)
-    if panel["mode"] == "percent":
+    mode = panel["mode"]
+    if mode == "percent":
         comp = comp / comp.sum(axis=1, keepdims=True)
     colours = _palette_of(panel, palettes, list(card_spec.DEFAULT_PALETTE))
-    y = np.arange(dom.n)
+    y = np.arange(dom.n, dtype=float)
     horizontal = panel["orientation"] == "horizontal"
-    left = np.zeros(dom.n)
-    for k in range(comp.shape[1]):
-        c = colours[k % len(colours)]
-        label = f"Region {_letter(k)}"
-        if horizontal:
-            ax.barh(y, comp[:, k], left=left, height=0.82, color=c, label=label, linewidth=0)
-        else:
-            ax.bar(y, comp[:, k], bottom=left, width=0.82, color=c, label=label, linewidth=0)
-        left = left + comp[:, k]
+    k_n = comp.shape[1]
+
+    if mode == "grouped":
+        # Side by side, not stacked — that IS the mode. Drawing it stacked would
+        # make the card claim one composition idiom and show its opposite.
+        thick = 0.82 / k_n
+        for k in range(k_n):
+            off = (k - (k_n - 1) / 2) * thick
+            c = colours[k % len(colours)]
+            label = f"Region {_letter(k)}"
+            if horizontal:
+                ax.barh(y + off, comp[:, k], height=thick * 0.92, color=c, label=label,
+                        linewidth=0)
+            else:
+                ax.bar(y + off, comp[:, k], width=thick * 0.92, color=c, label=label,
+                       linewidth=0)
+        span = float(comp.max())
+    else:
+        base = np.zeros(dom.n)
+        for k in range(k_n):
+            c = colours[k % len(colours)]
+            label = f"Region {_letter(k)}"
+            if horizontal:
+                ax.barh(y, comp[:, k], left=base, height=0.82, color=c, label=label, linewidth=0)
+            else:
+                ax.bar(y, comp[:, k], bottom=base, width=0.82, color=c, label=label, linewidth=0)
+            base = base + comp[:, k]
+        span = float(base.max())
+
+    lim = 1.0 if mode == "percent" else span
     if horizontal:
-        ax.set_xlim(0, 1 if panel["mode"] == "percent" else float(left.max()))
+        ax.set_xlim(0, lim)
+    else:
+        ax.set_ylim(0, lim)
     ax.grid(False)
 
 
@@ -199,16 +244,17 @@ def _p_bar(fig, ax, panel, dom, palettes, rng, base_size):
     vals = dom.ordered(dom.abundance)
     colours = _palette_of(panel, palettes, ["#576466"])
     y = np.arange(dom.n)
+    lo, hi = float(vals.min()), float(vals.max())
     if panel["orientation"] == "horizontal":
         ax.barh(y, vals, height=0.82, color=colours[0], linewidth=0)
         if panel["axes"]["x_scale"] == "log":
             ax.set_xscale("log")
-            _thin_log_ticks(ax.xaxis)
+            _thin_log_ticks(ax.xaxis, lo, hi)
     else:
         ax.bar(y, vals, width=0.82, color=colours[0], linewidth=0)
         if panel["axes"]["y_scale"] == "log":
             ax.set_yscale("log")
-            _thin_log_ticks(ax.yaxis)
+            _thin_log_ticks(ax.yaxis, lo, hi)
 
 
 def _p_annotation_track(fig, ax, panel, dom, palettes, rng, base_size):
@@ -228,10 +274,11 @@ def _p_dendrogram(fig, ax, panel, dom, palettes, rng, base_size):
     THAT the rows are clustered (which is the style fact), not a real linkage."""
     n = dom.n
     ax.set_xlim(0, 1)
-    heights = np.linspace(0.15, 0.95, max(n // 2, 1))
+    levels = max(int(np.ceil(np.log2(n))), 1) if n > 1 else 1
+    heights = np.linspace(0.15, 0.95, levels)
     rows = np.arange(n, dtype=float)
     step = 0
-    while len(rows) > 1 and step < len(heights):
+    while len(rows) > 1 and step < len(heights):  # ceil(log2(n)) levels always suffice
         x = heights[step]
         nxt = []
         for i in range(0, len(rows) - 1, 2):
@@ -309,26 +356,44 @@ def draw(fig, spec: dict, rng) -> None:
         dom = domains.get(p.get("rows")) if p.get("rows") else None
         if dom is not None and p["kind"] in _ROW_DRAW:
             _ROW_DRAW[p["kind"]](fig, ax, p, dom, spec["palettes"], rng, base_size)
+            # WHICH axis carries the categories depends on the panel: a bar drawn
+            # `vertical` puts them on x and its VALUES on y. Pinning the category
+            # limits to y regardless would clamp the value axis to the row-index
+            # range and hang the row labels off the value scale.
+            cat_axis = "x" if p.get("orientation") == "vertical" else "y"
             # Every row panel spans the same rows in the same direction (top-down,
             # as imshow draws them). Deliberately NOT matplotlib's sharey: shared
             # axes share one tick locator, so a panel that hides its row ticks
             # would wipe the labels off the panel that shows them.
-            ax.set_ylim(dom.n - 0.5, -0.5)
+            if cat_axis == "y":
+                ax.set_ylim(dom.n - 0.5, -0.5)
+            else:
+                ax.set_xlim(-0.5, dom.n - 0.5)
+            cat, val = (ax.yaxis, ax.xaxis) if cat_axis == "y" else (ax.xaxis, ax.yaxis)
             # Row labels on ONE panel — this is what makes several plots read as
             # one figure rather than three stuck together.
             if p["labels"]["rows"]:
-                ax.set_yticks(np.arange(dom.n))
-                ax.set_yticklabels(dom.ordered_labels(), fontsize=base_size - 2)
+                cat.set_ticks(np.arange(dom.n))
+                cat.set_ticklabels(
+                    dom.ordered_labels(),
+                    fontsize=base_size - 2,
+                    **({"rotation": 90} if cat_axis == "x" else {}),
+                )
             else:
-                ax.set_yticks([])
+                cat.set_ticks([])
             if not p["labels"]["values"]:
-                ax.set_xticks([])
+                val.set_ticks([])
         else:
             # A free panel: a plain v1 chart inside the composite.
+            colours = _palette_of(p, spec["palettes"], list(card_spec.DEFAULT_PALETTE))
+            # v1's line/scatter/bar/histogram drawers colour from the axes prop_cycle,
+            # so the panel's palette has to BE that cycle — otherwise the palette it
+            # names is ignored and a category doesn't keep its colour across panels.
+            ax.set_prop_cycle(color=colours)
             panel_spec = {
                 "chart": {"type": p["kind"], "aspect": [1, 1]},
                 "axes": p["axes"],
-                "palette": _palette_of(p, spec["palettes"], list(card_spec.DEFAULT_PALETTE)),
+                "palette": colours,
                 "series": p.get("series") or [dict(card_spec.SERIES_DEFAULTS)],
                 "legend": p.get("legend") or {"mode": "none"},
                 "typography": spec["typography"],
@@ -346,6 +411,8 @@ def draw(fig, spec: dict, rng) -> None:
                 ax.spines[side].set_visible(False)
 
         h, lbl = ax.get_legend_handles_labels()
+        if spec["legend"]["mode"] == "panel" and h:
+            ax.legend(h, lbl, frameon=False, fontsize=base_size - 2, loc="best")
         for handle, name in zip(h, lbl, strict=False):
             handles.setdefault(name, (handle, name))
 

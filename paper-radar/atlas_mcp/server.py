@@ -759,26 +759,35 @@ def _spec_summary(norm: dict) -> str:
 
 
 def _spec_cvd(norm: dict) -> tuple[bool, str]:
-    """The CVD verdict for a whole spec. A composite carries SEVERAL palettes with
-    different jobs, so each named categorical one is checked in turn — the shared
-    ones are exactly the palettes whose colours have to stay distinct, because the
-    same category wears them in every panel."""
+    """The CVD verdict for a whole spec.
+
+    A composite carries several palettes with different jobs, so the question is
+    not "which palettes are declared" but **which colours a reader has to tell
+    apart**. Those are the palettes actually used by a CATEGORICAL panel — named
+    or inline. Checking only the named ones let an inline palette of four
+    near-identical blues be stamped "safe"; skipping any palette a heatmap touched
+    let a palette used as BOTH a ramp and a category set escape entirely.
+    """
     if not card_spec.is_composite(norm):
         return _cvd_verdict(norm["palette"], norm["chart"]["type"])
-    ramp_names = {
-        p["palette"]
-        for p in norm["panels"]
-        if p["kind"] == "heatmap" and isinstance(p.get("palette"), str)
-    }
+
+    checked: dict[str, list[str]] = {}
+    for p in norm["panels"]:
+        if p["kind"] == "heatmap":
+            continue  # this USE of the palette is a ramp; a pairwise check says nothing
+        pal = p.get("palette")
+        if isinstance(pal, str):
+            checked.setdefault(pal, norm["palettes"][pal])
+        elif isinstance(pal, list) and pal:
+            checked.setdefault(f"{p['kind']} @{p['position']}", pal)
+    if not checked:
+        return True, "no categorical palette to check"
+
     verdicts, all_safe = [], True
-    for name, colours in norm["palettes"].items():
-        if name in ramp_names:
-            continue  # a colour ramp, not a categorical set — see _cvd_verdict
-        safe, msg = _cvd_verdict(colours)
+    for name in sorted(checked):  # sorted: dict order is not stable across jsonb
+        safe, msg = _cvd_verdict(checked[name])
         all_safe = all_safe and safe
         verdicts.append(f"{name}: {msg}")
-    if not verdicts:
-        return True, "no categorical palette to check"
     return all_safe, "; ".join(verdicts)
 
 
@@ -857,7 +866,7 @@ def preview_plot_spec(spec: dict, team_id: str | None = None) -> list:
                       the set of phenotypes can itself be the finding.
             palettes: {<name>: ["#rrggbb", …]} — named, so a category keeps its
                       colour in every panel and in the legend.
-            layout: {rows, cols, width_ratios, height_ratios, gap, share_y: <domain>}
+            layout: {rows, cols, width_ratios, height_ratios, gap}
             panels: [{kind: line|scatter|bar|histogram|heatmap|box|stacked_bar|
                             annotation_track|dendrogram,
                       position: [row, col], rows: <domain>, palette: <name or list>,
@@ -964,12 +973,22 @@ async def add_plot_to_moodboard(
     if card_spec.is_composite(norm):
         for name, colours in norm["palettes"].items():
             detail.append(f"palette {name}: {', '.join(colours)}")
-        # Real category names are the leak vector for a composite: for an
-        # unpublished figure the SET of phenotypes can be the finding. Show any
-        # the model supplied, so the human approving the write sees them.
+        # Free text is the leak vector for a composite: for an unpublished figure
+        # the SET of phenotypes — or a panel title, or a colorbar label — can be the
+        # finding, and all of it is both stored and DRAWN onto the shared board
+        # image. Surface every such string, so the human approving the write sees
+        # exactly what would be persisted.
         for dname, cfg in norm["domains"].items():
             if cfg.get("labels"):
                 detail.append(f"{dname} labels: {', '.join(cfg['labels'])}")
+        text_bits = [p["title"] for p in norm["panels"] if p.get("title")]
+        text_bits += [
+            p["colorbar"]["label"]
+            for p in norm["panels"]
+            if p.get("colorbar", {}).get("label")
+        ]
+        if text_bits:
+            detail.append("panel text: " + " · ".join(text_bits))
     else:
         detail.append(f"palette: {', '.join(norm['palette'])}")
     if category.strip():

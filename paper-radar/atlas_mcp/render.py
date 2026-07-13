@@ -266,8 +266,12 @@ def _rc(spec: dict) -> dict:
     typo = spec["typography"]
     if card_spec.is_composite(spec):
         axes_s = SECTION_DEFAULTS_AXES
-        first = next(iter(spec.get("palettes", {}).values()), None)
-        palette = first or list(card_spec.DEFAULT_PALETTE)
+        # A FIXED fallback cycle, never "the first named palette": dict order is not
+        # stable across a jsonb round-trip (Postgres sorts object keys), so picking a
+        # palette by position would repaint the figure after a save/reload. Each panel
+        # sets its own cycle from its own palette (composite.draw), so this is only
+        # the ground state for a panel that names none.
+        palette = list(card_spec.DEFAULT_PALETTE)
     else:
         axes_s = spec["axes"]
         palette = spec["palette"]

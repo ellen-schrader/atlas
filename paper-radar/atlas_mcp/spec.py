@@ -42,6 +42,9 @@ PANEL_KINDS = (
     "dendrogram",        # the clustering tree that explains a row order
 )
 ROW_KINDS = ("heatmap", "stacked_bar", "bar", "annotation_track", "dendrogram")
+# Kinds that exist ONLY as a row-axis panel — they have no single-panel v1 form, so
+# a spec that omits `rows` for them is not renderable at all, not merely unaligned.
+_DOMAIN_ONLY_KINDS = ("stacked_bar", "annotation_track", "dendrogram")
 ORDERS = ("fixed", "by_value", "clustered")
 BAR_MODES = ("grouped", "stacked", "percent")
 ORIENTATIONS = ("vertical", "horizontal")
@@ -135,6 +138,21 @@ _TOP_KEYS = (
 
 class SpecError(ValueError):
     """A spec that doesn't validate; the message says how to fix it."""
+
+
+_NAME_RE = re.compile(r"[a-z0-9_]{1,24}", re.I)
+
+
+def _name(raw: object, where: str) -> str:
+    """A domain / palette key. Bounded and charset-checked like every other string
+    in the spec: an unbounded key would be a channel for smuggling arbitrary text
+    into the stored card, the human's confirm prompt, and the model's context."""
+    if not isinstance(raw, str) or not _NAME_RE.fullmatch(raw):
+        raise SpecError(
+            f"{where}: names must be 1-24 characters of letters, digits or underscores "
+            f"(got {str(raw)[:32]!r})."
+        )
+    return raw
 
 
 def _section(value: object, where: str) -> dict:
@@ -323,6 +341,7 @@ def _domains(raw: object, strict: bool) -> dict:
         raise SpecError("domains: at most 2 shared axes.")
     out = {}
     for name, body in d.items():
+        _name(name, "domains")
         where = f"domains.{name}"
         b = _section(body, where)
         if strict:
@@ -359,17 +378,20 @@ def _palettes(raw: object, strict: bool) -> dict:
     d = _section(raw, "palettes")
     if len(d) > MAX_PALETTES:
         raise SpecError(f"palettes: at most {MAX_PALETTES} named palettes.")
-    return {name: _palette(body, strict) for name, body in d.items()}
+    return {_name(name, "palettes"): _palette(body, strict) for name, body in d.items()}
 
 
-def _layout(raw: object, n_panels: int, domains: dict, strict: bool) -> dict:
+def _layout(raw: object, n_panels: int, domains: dict, strict: bool) -> dict:  # noqa: ARG001
     d = _section(raw, "layout")
     if strict:
-        _reject_unknown(
-            d, "layout", ("rows", "cols", "width_ratios", "height_ratios", "gap", "share_y")
-        )
-    rows = _integer(d, "layout", "rows", 1, MAX_GRID, 1)
-    cols = _integer(d, "layout", "cols", 1, MAX_GRID, max(1, n_panels))
+        _reject_unknown(d, "layout", ("rows", "cols", "width_ratios", "height_ratios", "gap"))
+    # Default to a grid that actually FITS the panels: n_panels can exceed MAX_GRID
+    # (6 panels, 4 columns), and defaulting cols to n_panels would bounds-reject a
+    # legal spec while blaming a `layout` key the caller never wrote.
+    default_cols = max(1, min(n_panels, MAX_GRID))
+    default_rows = max(1, -(-n_panels // default_cols))  # ceil
+    rows = _integer(d, "layout", "rows", 1, MAX_GRID, default_rows)
+    cols = _integer(d, "layout", "cols", 1, MAX_GRID, default_cols)
     if rows * cols < n_panels:
         raise SpecError(f"layout {rows}x{cols} has no room for {n_panels} panels.")
 
@@ -386,19 +408,15 @@ def _layout(raw: object, n_panels: int, domains: dict, strict: bool) -> dict:
             out.append(float(x))
         return out
 
-    share = d.get("share_y")
-    if share is not None:
-        if not isinstance(share, str) or share not in domains:
-            raise SpecError(
-                f"layout.share_y must name a domain — one of: {', '.join(domains) or '(none)'}."
-            )
+    # No `share_y`: a panel's `rows: <domain>` already declares that it shares the
+    # axis, and the renderer aligns every panel bound to the same domain. A second
+    # field saying the same thing could only ever contradict the first.
     return {
         "rows": rows,
         "cols": cols,
         "width_ratios": _ratios("width_ratios", cols),
         "height_ratios": _ratios("height_ratios", rows),
         "gap": _number(d, "layout", "gap", 0.0, 0.5, 0.06),
-        **({"share_y": share} if share else {}),
     }
 
 
@@ -437,6 +455,15 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
                 f"{where}.rows must name a domain — one of: {', '.join(domains) or '(none)'}."
             )
         panel["rows"] = rows
+    elif kind in _DOMAIN_ONLY_KINDS:
+        # These kinds ARE a shared row axis — there is nothing to draw without one,
+        # and the v1 chart table has no entry for them. Refuse in a way that says so
+        # (enforced on the read path too: otherwise a PATCHed spec KeyErrors forever).
+        raise SpecError(
+            f"{where}.rows: a {kind} panel has no meaning without a shared row axis — "
+            f"declare a domain and bind to it"
+            + (f" (one of: {', '.join(domains)})." if domains else " under `domains`.")
+        )
     elif strict and kind in ROW_KINDS and domains:
         raise SpecError(
             f"{where}.rows: a {kind} panel in a composite must bind to a domain "

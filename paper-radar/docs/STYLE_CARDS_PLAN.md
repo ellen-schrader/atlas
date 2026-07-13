@@ -105,9 +105,11 @@ What v2 has to add, in rough order of how load-bearing it is:
    v2 needs `palettes: {region: [...], lineage: [...]}` with panels referencing
    a palette **by name**, so the same category is the same colour everywhere
    (and in the legend).
-3. **A layout block**: `layout: {rows, cols, width_ratios, height_ratios, gap,
-   share_y: "$phenotype"}` → a matplotlib GridSpec. Width ratios are a genuine
-   style fact of these figures (a wide heatmap, a narrow bar strip).
+3. **A layout block**: `layout: {rows, cols, width_ratios, height_ratios, gap}`
+   → a matplotlib GridSpec. Width ratios are a genuine style fact of these
+   figures (a wide heatmap, a narrow bar strip). Panels declare the shared axis
+   through their own `rows: <domain>`; a separate `share_y` would say the same
+   thing twice and could only ever contradict it.
 4. **`panels: [...]`** — each entry a v1-shaped chart spec plus `kind`, grid
    `position`/`span`, and per-panel `ticks`/`labels` visibility. "Row labels on
    the leftmost panel only, ticks hidden elsewhere" is exactly the kind of thing
@@ -150,8 +152,7 @@ What v2 has to add, in rough order of how load-bearing it is:
   "spec_version": 2,
   "domains": { "phenotype": { "n_categories": 12, "order": "clustered" } },
   "palettes": { "region": ["#0f8f8b", "#b4791a", "#6a5cd8", "#c23c86"] },
-  "layout":  { "rows": 1, "cols": 3, "width_ratios": [3, 1, 1], "gap": 0.04,
-               "share_y": "$phenotype" },
+  "layout":  { "rows": 1, "cols": 3, "width_ratios": [3, 1, 1], "gap": 0.04 },
   "panels": [
     { "kind": "heatmap", "rows": "$phenotype", "position": [0, 0],
       "scale": { "kind": "diverging", "midpoint": 0 },
