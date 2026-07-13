@@ -752,32 +752,52 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     return _build_overview(uc, team_id, rows)
 
 
+# Only for *displaying* the effective floor when a map hasn't overridden it; the
+# actual filtering default lives in the map_members / map_member_stats SQL. Keep the
+# two in sync (both 0.35) or the shown threshold won't match what's filtered.
+_DEFAULT_MIN_SIMILARITY = 0.35
+
+
 class MapOverviewResponse(OverviewResponse):
     map_id: str
     name: str
     seed: str
     visibility: str
+    created_by: str  # so the client can gate edit controls to the creator
     new_this_week: int  # members posted in the last 7 days
+    min_similarity: float  # the map's relevance floor
+    below_threshold: int  # embedded papers that fall just under the floor
+    excluded_count: int  # papers the owner has dismissed from the map
 
 
 @app.get("/maps/{map_id}/overview", response_model=MapOverviewResponse)
 def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOverviewResponse:
     """The scoped map: a t-SNE + sub-themes over just the map's member papers.
 
-    Membership comes from the `map_members` RPC (seed similarity + pins − excludes);
-    RLS on `maps` means a caller who can't see the map gets a 404.
+    Membership comes from the `map_members` RPC (seed similarity ≥ floor, + pins,
+    − excludes); RLS on `maps` means a caller who can't see the map gets a 404.
     """
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("id, team_id, name, seed, visibility").eq("id", map_id).limit(1)
-        .execute().data or []
+        uc.table("maps")
+        .select("id, team_id, name, seed, visibility, config, created_by")
+        .eq("id", map_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     m = rows[0]
+    cfg = m.get("config") or {}
+    min_sim = float(cfg.get("min_similarity", _DEFAULT_MIN_SIMILARITY))
+    excluded_count = len(cfg.get("excluded") or [])
+    stat = uc.rpc("map_member_stats", {"p_map": map_id}).execute().data or []
+    below = (stat[0].get("below", 0) if stat else 0) or 0
 
     members = (
         uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
@@ -790,7 +810,8 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         )
         return MapOverviewResponse(
             **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-            visibility=m["visibility"], new_this_week=0,
+            visibility=m["visibility"], created_by=m["created_by"], new_this_week=0,
+            min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
         )
 
     post_rows = (
@@ -803,7 +824,8 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
     return MapOverviewResponse(
         **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-        visibility=m["visibility"], new_this_week=new_this_week,
+        visibility=m["visibility"], created_by=m["created_by"], new_this_week=new_this_week,
+        min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
     )
 
 
@@ -820,6 +842,7 @@ class MapPaper(BaseModel):
     comments: int = 0
     read_status: str | None = None  # 'to_read'|'reading'|'read'|None, for the caller
     posted_at: str | None = None
+    pinned: bool = False
 
 
 class MapPapersResponse(BaseModel):
@@ -852,6 +875,7 @@ def map_papers(
     if not members:
         return MapPapersResponse(total=0, papers=[], labs=[])
     sim_by_pid = {x["paper_id"]: x["similarity"] for x in members}
+    pinned_by_pid = {x["paper_id"]: x.get("pinned", False) for x in members}
     paper_ids = list(sim_by_pid)
 
     meta = {
@@ -898,6 +922,7 @@ def map_papers(
                     authors=p.get("authors") or [], venue=p.get("venue"), year=p.get("year"),
                     doi=p.get("doi"), similarity=sim, reactions=r_, comments=c_,
                     read_status=read.get(pid), posted_at=post.get("posted_at"),
+                    pinned=bool(pinned_by_pid.get(pid, False)),
                 ),
             )
         )

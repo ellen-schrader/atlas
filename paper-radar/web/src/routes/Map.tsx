@@ -435,6 +435,7 @@ export function Scatter({
   activeCluster,
   setActiveCluster,
   barHover,
+  pinnedIds,
 }: {
   points: OverviewPoint[];
   clusters: Cluster[];
@@ -446,6 +447,8 @@ export function Scatter({
   tagFilter: string | null;
   activeCluster: number | null;
   setActiveCluster: (c: number | null) => void;
+  /** Papers pinned into a map — drawn with a ring so curation is visible spatially. */
+  pinnedIds?: Set<string>;
   barHover: BarHover;
 }) {
   const { openPaper } = usePaperModal();
@@ -610,33 +613,47 @@ export function Scatter({
         >
           {showHulls &&
             hulls.map(({ cid, hull }) => (
+              // Outline-forward (barely-there fill) so overlapping themes read as
+              // distinct regions rather than muddying into one another.
               <polygon
                 key={cid}
                 points={hull.map((pt) => `${pt.x},${pt.y}`).join(" ")}
                 fill={cat[cid % cat.length]}
-                fillOpacity={0.05}
+                fillOpacity={0.03}
                 stroke={cat[cid % cat.length]}
-                strokeOpacity={0.18}
-                strokeWidth={1}
+                strokeOpacity={0.35}
+                strokeWidth={1.25}
               />
             ))}
           {scaled.map((p) => (
-            <path
-              key={p.paper_id}
-              d={markPath(
-                markOf(p),
-                p.px,
-                p.py,
-                hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p),
+            <g key={p.paper_id}>
+              {pinnedIds?.has(p.paper_id) && (
+                <circle
+                  cx={p.px}
+                  cy={p.py}
+                  r={radiusOf(p) + 3}
+                  fill="none"
+                  stroke={colorOf(p)}
+                  strokeOpacity={0.9}
+                  strokeWidth={1.25}
+                />
               )}
-              fill={colorOf(p)}
-              fillOpacity={alphaOf(p)}
-              stroke="var(--surface)"
-              strokeWidth={1.25}
-              className="cursor-pointer"
-              onMouseEnter={() => setHover(p)}
-              onClick={() => openPaper(p.paper_id)}
-            />
+              <path
+                d={markPath(
+                  markOf(p),
+                  p.px,
+                  p.py,
+                  hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p),
+                )}
+                fill={colorOf(p)}
+                fillOpacity={alphaOf(p)}
+                stroke="var(--surface)"
+                strokeWidth={1.25}
+                className="cursor-pointer"
+                onMouseEnter={() => setHover(p)}
+                onClick={() => openPaper(p.paper_id)}
+              />
+            </g>
           ))}
         </svg>
 

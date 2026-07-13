@@ -140,7 +140,8 @@ export interface OverviewData {
   embedded: number; // posts with an embedded paper (points returned)
 }
 
-/** A saved topic map (its definition + metadata; not its members). */
+/** A saved topic map (its definition + metadata; not its members). The list
+ *  endpoint also fills paper_count + owner_name for the library cards. */
 export interface MapDoc {
   id: string;
   team_id: string;
@@ -150,6 +151,8 @@ export interface MapDoc {
   visibility: "lab" | "private";
   created_at: string;
   updated_at: string;
+  paper_count?: number;
+  owner_name?: string | null;
 }
 
 /** The scoped overview for one map: an OverviewData over just its members, plus
@@ -159,7 +162,11 @@ export interface MapOverviewData extends OverviewData {
   name: string;
   seed: string;
   visibility: string;
+  created_by: string; // gate edit controls to the map's creator
   new_this_week: number;
+  min_similarity: number; // the map's relevance floor
+  below_threshold: number; // embedded papers just under the floor
+  excluded_count: number; // papers the owner has dismissed
 }
 
 /** One member paper in a map's ranked list, with the caller's read-state. */
@@ -176,6 +183,7 @@ export interface MapPaper {
   comments: number;
   read_status: "to_read" | "reading" | "read" | null;
   posted_at: string | null;
+  pinned: boolean;
 }
 
 export interface MapPapersData {

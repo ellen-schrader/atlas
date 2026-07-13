@@ -229,3 +229,89 @@ def test_summary_never_cites_outside_the_evidence(monkeypatch):
     assert out["ai"] is True
     assert out["cited_ids"] == ["a", "b"]  # GHOST filtered out
     assert out["text"] == "Recent work."  # stripped
+
+
+# --- PATCH /maps/{id} (edit: rename, threshold, pin/exclude) ----------------
+
+
+class _PatchClient:
+    """Returns the current config on select and records the update payload, so the
+    read-modify-write of `config` (pin/exclude/min_similarity) can be asserted."""
+
+    def __init__(self, config, update_ret=None):
+        self.config = config
+        self.update_payload = None
+        self._mode = None
+        self.update_ret = update_ret if update_ret is not None else [_row()]
+
+    def table(self, _n):
+        return self
+
+    def select(self, *a, **k):
+        self._mode = "select"
+        return self
+
+    def update(self, payload):
+        self._mode = "update"
+        self.update_payload = payload
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        return _Resp([{"config": self.config}] if self._mode == "select" else self.update_ret)
+
+
+def _row():
+    return {
+        "id": "m", "team_id": "t", "created_by": "u", "name": "N", "seed": "s",
+        "visibility": "lab", "created_at": "x", "updated_at": "y",
+    }
+
+
+def _patch(monkeypatch, client_obj):
+    monkeypatch.setattr(maps, "get_user_id", lambda _t: "u")
+    monkeypatch.setattr(maps, "user_client", lambda _t: client_obj)
+
+
+def test_patch_pin_adds_and_unexcludes(monkeypatch):
+    cl = _PatchClient({"pinned": [], "excluded": ["px"]})
+    _patch(monkeypatch, cl)
+    r = client.patch("/maps/m", headers=AUTH, json={"pin": "px"})
+    assert r.status_code == 200, r.text
+    assert cl.update_payload["config"]["pinned"] == ["px"]
+    assert cl.update_payload["config"]["excluded"] == []  # pinning un-excludes
+
+
+def test_patch_exclude_adds_and_unpins(monkeypatch):
+    cl = _PatchClient({"pinned": ["px"], "excluded": []})
+    _patch(monkeypatch, cl)
+    r = client.patch("/maps/m", headers=AUTH, json={"exclude": "px"})
+    assert r.status_code == 200
+    assert cl.update_payload["config"]["excluded"] == ["px"]
+    assert cl.update_payload["config"]["pinned"] == []  # excluding un-pins
+
+
+def test_patch_min_similarity_is_clamped(monkeypatch):
+    cl = _PatchClient({})
+    _patch(monkeypatch, cl)
+    client.patch("/maps/m", headers=AUTH, json={"min_similarity": 5.0})
+    assert cl.update_payload["config"]["min_similarity"] == 1.0  # clamped to [-1, 1]
+
+
+def test_patch_rejects_bad_visibility(monkeypatch):
+    _patch(monkeypatch, _PatchClient({}))
+    r = client.patch("/maps/m", headers=AUTH, json={"visibility": "world"})
+    assert r.status_code == 400
+
+
+def test_patch_non_creator_is_403(monkeypatch):
+    # RLS lets a member read the config but the update matches zero rows.
+    cl = _PatchClient({}, update_ret=[])
+    _patch(monkeypatch, cl)
+    r = client.patch("/maps/m", headers=AUTH, json={"pin": "px"})
+    assert r.status_code == 403

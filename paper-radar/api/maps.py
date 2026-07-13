@@ -9,6 +9,7 @@ labs and enforces that only a map's creator edits or deletes it.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -42,6 +43,11 @@ class MapOut(BaseModel):
     visibility: str
     created_at: str
     updated_at: str
+
+
+class MapListItem(MapOut):
+    paper_count: int = 0  # members in scope (past the relevance floor + pins − excludes)
+    owner_name: str | None = None
 
 
 def _out(row: dict) -> MapOut:
@@ -105,21 +111,106 @@ def create_map(req: MapCreate, token: str = Depends(require_token)) -> MapOut:
     return _out(rows[0])
 
 
-@router.get("", response_model=list[MapOut])
-def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapOut]:
-    """The caller's visible maps in a lab (RLS hides other members' private maps)."""
+class MapPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    seed: str | None = Field(default=None, max_length=400)
+    visibility: str | None = None
+    min_similarity: float | None = None
+    pin: str | None = None  # paper_id to add to pinned (forces it into the map)
+    unpin: str | None = None
+    exclude: str | None = None  # paper_id to add to excluded (drops it from the map)
+    uninclude: str | None = None
+    clear_excluded: bool = False  # restore all dismissed papers
+
+
+@router.patch("/{map_id}", response_model=MapOut)
+def update_map(map_id: str, req: MapPatch, token: str = Depends(require_token)) -> MapOut:
+    """Edit a map — rename, re-seed, change visibility, tune the match threshold, or
+    pin/exclude a paper. Creator-only (enforced by RLS: a non-creator's update hits
+    zero rows). Config is read-modify-written, which is safe because a map has a
+    single editor (its creator), so there is no concurrent writer to race."""
     _require_user(token)
+    uc = user_client(token)
+    rows = uc.table("maps").select("config").eq("id", map_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+
+    updates: dict = {}
+    if req.name is not None:
+        if not req.name.strip():
+            raise HTTPException(status_code=400, detail="name must not be empty")
+        updates["name"] = req.name.strip()
+    if req.visibility is not None:
+        if req.visibility not in ("lab", "private"):
+            raise HTTPException(status_code=400, detail="visibility must be 'lab' or 'private'")
+        updates["visibility"] = req.visibility
+    if req.seed is not None:
+        seed = req.seed.strip()
+        if not seed:
+            raise HTTPException(status_code=400, detail="seed must not be empty")
+        try:
+            updates["seed_embedding"] = embeddings.embed_query(seed)
+        except embeddings.EmbeddingError as exc:
+            raise HTTPException(status_code=503, detail=f"Embeddings unavailable: {exc}") from exc
+        updates["seed"] = seed
+
+    config = dict(rows[0].get("config") or {})
+    pinned = set(config.get("pinned") or [])
+    excluded = set(config.get("excluded") or [])
+    if req.min_similarity is not None:
+        config["min_similarity"] = max(-1.0, min(1.0, req.min_similarity))
+    if req.pin:
+        pinned.add(req.pin)
+        excluded.discard(req.pin)  # pinning a paper un-excludes it
+    if req.unpin:
+        pinned.discard(req.unpin)
+    if req.exclude:
+        excluded.add(req.exclude)
+        pinned.discard(req.exclude)  # excluding a paper un-pins it
+    if req.uninclude:
+        excluded.discard(req.uninclude)
+    if req.clear_excluded:
+        excluded.clear()
+    config["pinned"] = sorted(pinned)
+    config["excluded"] = sorted(excluded)
+    updates["config"] = config
+    updates["updated_at"] = datetime.now(UTC).isoformat()
+
+    updated = uc.table("maps").update(updates).eq("id", map_id).execute().data or []
+    if not updated:
+        raise HTTPException(status_code=403, detail="Only the map's creator can edit it.")
+    return _out(updated[0])
+
+
+@router.get("", response_model=list[MapListItem])
+def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapListItem]:
+    """The caller's visible maps in a lab (RLS hides other members' private maps),
+    each with its in-scope paper count and owner name for the library cards."""
+    _require_user(token)
+    uc = user_client(token)
     rows = (
-        user_client(token)
-        .table("maps")
-        .select(_COLUMNS)
-        .eq("team_id", team_id)
-        .order("updated_at", desc=True)
-        .execute()
-        .data
-        or []
+        uc.table("maps").select(_COLUMNS).eq("team_id", team_id)
+        .order("updated_at", desc=True).execute().data or []
     )
-    return [_out(r) for r in rows]
+    if not rows:
+        return []
+    owners = list({r["created_by"] for r in rows})
+    profiles = (
+        uc.table("profiles").select("id, display_name").in_("id", owners).execute().data or []
+    )
+    name_of = {p["id"]: p.get("display_name") for p in profiles}
+    out: list[MapListItem] = []
+    for r in rows:
+        stat = uc.rpc("map_member_stats", {"p_map": r["id"]}).execute().data or []
+        count = (stat[0].get("in_scope", 0) if stat else 0) or 0
+        out.append(
+            MapListItem(
+                **{k: r[k] for k in MapOut.model_fields},
+                paper_count=count,
+                owner_name=name_of.get(r["created_by"]),
+            )
+        )
+    return out
 
 
 @router.get("/{map_id}", response_model=MapOut)
