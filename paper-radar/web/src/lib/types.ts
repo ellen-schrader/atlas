@@ -155,7 +155,10 @@ export interface MapOverviewData extends OverviewData {
   name: string;
   seed: string;
   visibility: string;
+  created_by: string; // gate edit controls to the map's creator
   new_this_week: number;
+  min_similarity: number; // the map's relevance floor
+  below_threshold: number; // embedded papers just under the floor
 }
 
 /** One member paper in a map's ranked list, with the caller's read-state. */
@@ -172,6 +175,7 @@ export interface MapPaper {
   comments: number;
   read_status: "to_read" | "reading" | "read" | null;
   posted_at: string | null;
+  pinned: boolean;
 }
 
 export interface MapPapersData {

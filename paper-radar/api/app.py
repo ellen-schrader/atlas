@@ -763,6 +763,7 @@ class MapOverviewResponse(OverviewResponse):
     name: str
     seed: str
     visibility: str
+    created_by: str  # so the client can gate edit controls to the creator
     new_this_week: int  # members posted in the last 7 days
     min_similarity: float  # the map's relevance floor
     below_threshold: int  # embedded papers that fall just under the floor
@@ -780,8 +781,13 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("id, team_id, name, seed, visibility, config").eq("id", map_id)
-        .limit(1).execute().data or []
+        uc.table("maps")
+        .select("id, team_id, name, seed, visibility, config, created_by")
+        .eq("id", map_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
@@ -801,7 +807,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         )
         return MapOverviewResponse(
             **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-            visibility=m["visibility"], new_this_week=0,
+            visibility=m["visibility"], created_by=m["created_by"], new_this_week=0,
             min_similarity=min_sim, below_threshold=below,
         )
 
@@ -815,7 +821,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
     return MapOverviewResponse(
         **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-        visibility=m["visibility"], new_this_week=new_this_week,
+        visibility=m["visibility"], created_by=m["created_by"], new_this_week=new_this_week,
         min_similarity=min_sim, below_threshold=below,
     )
 
@@ -833,6 +839,7 @@ class MapPaper(BaseModel):
     comments: int = 0
     read_status: str | None = None  # 'to_read'|'reading'|'read'|None, for the caller
     posted_at: str | None = None
+    pinned: bool = False
 
 
 class MapPapersResponse(BaseModel):
@@ -865,6 +872,7 @@ def map_papers(
     if not members:
         return MapPapersResponse(total=0, papers=[], labs=[])
     sim_by_pid = {x["paper_id"]: x["similarity"] for x in members}
+    pinned_by_pid = {x["paper_id"]: x.get("pinned", False) for x in members}
     paper_ids = list(sim_by_pid)
 
     meta = {
@@ -911,6 +919,7 @@ def map_papers(
                     authors=p.get("authors") or [], venue=p.get("venue"), year=p.get("year"),
                     doi=p.get("doi"), similarity=sim, reactions=r_, comments=c_,
                     read_status=read.get(pid), posted_at=post.get("posted_at"),
+                    pinned=bool(pinned_by_pid.get(pid, False)),
                 ),
             )
         )

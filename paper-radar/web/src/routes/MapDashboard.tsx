@@ -1,7 +1,18 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, MessageSquare, RefreshCw, Search, Smile, Sparkles, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Ban,
+  Loader2,
+  MessageSquare,
+  Pin,
+  RefreshCw,
+  Search,
+  Smile,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
 import {
@@ -10,6 +21,8 @@ import {
   fetchMapSummary,
   generateMapSummary,
   isTransientApiError,
+  type MapPatch,
+  updateMap,
 } from "@/lib/api";
 import { usePalette } from "@/lib/palette";
 import type { MapPaper, MapSummary } from "@/lib/types";
@@ -27,7 +40,7 @@ const paperLab = (p: MapPaper) => (p.authors.length ? p.authors[p.authors.length
  */
 export default function MapDashboard() {
   const { mapId } = useParams<{ mapId: string }>();
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
   const [sort, setSort] = useState<Sort>("importance");
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -56,10 +69,20 @@ export default function MapDashboard() {
     mutationFn: () => generateMapSummary(mapId!),
     onSuccess: (s) => qc.setQueryData(["map-summary", mapId], s),
   });
+  // One curation action → refresh the scatter + list (the summary stays cached
+  // until the user regenerates it).
+  const curate = useMutation({
+    mutationFn: (patch: MapPatch) => updateMap(mapId!, patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["map-overview", mapId] });
+      qc.invalidateQueries({ queryKey: ["map-papers", mapId] });
+    },
+  });
   const titleOf = (id: string) =>
     papers.data?.papers.find((p) => p.paper_id === id)?.title ?? "source";
 
   const data = overview.data;
+  const canEdit = !!data && data.created_by === userId;
   const shown = useMemo(() => {
     const all = papers.data?.papers ?? [];
     const q = search.trim().toLowerCase();
@@ -101,6 +124,24 @@ export default function MapDashboard() {
               {data.new_this_week > 0 && <Chip accent>+{data.new_this_week} this week</Chip>}
               <Chip>{data.visibility === "lab" ? `Shared with ${team.name}` : "Only you"}</Chip>
             </div>
+            {data.below_threshold > 0 && (
+              <p className="mt-2 text-xs text-faint">
+                {data.below_threshold} more paper{data.below_threshold === 1 ? " is" : "s are"} loosely
+                related to this topic.
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={curate.isPending}
+                    onClick={() =>
+                      curate.mutate({ min_similarity: Math.max(-1, data.min_similarity - 0.1) })
+                    }
+                    className="ml-1.5 font-medium text-accent hover:underline disabled:opacity-50"
+                  >
+                    Broaden the match →
+                  </button>
+                )}
+              </p>
+            )}
           </header>
 
           {data.total === 0 ? (
@@ -222,7 +263,13 @@ export default function MapDashboard() {
                         scroll rather than letting the list run off the page. */}
                     <ul className="-mr-1 flex max-h-[22rem] flex-col overflow-y-auto pr-1">
                       {shown.map((p) => (
-                        <PaperRow key={p.paper_id} p={p} />
+                        <PaperRow
+                          key={p.paper_id}
+                          p={p}
+                          canEdit={canEdit}
+                          busy={curate.isPending}
+                          onCurate={(patch) => curate.mutate(patch)}
+                        />
                       ))}
                     </ul>
                     <p className="mt-2 text-xs text-faint">
@@ -374,7 +421,17 @@ function WhatsNew({
   );
 }
 
-function PaperRow({ p }: { p: MapPaper }) {
+function PaperRow({
+  p,
+  canEdit,
+  busy,
+  onCurate,
+}: {
+  p: MapPaper;
+  canEdit: boolean;
+  busy: boolean;
+  onCurate: (patch: MapPatch) => void;
+}) {
   const { openPaper } = usePaperModal();
   const meta = [p.authors.slice(0, 3).join(", "), p.venue, p.year].filter(Boolean).join(" · ");
   const rel = p.similarity == null ? null : Math.round(Math.max(0, p.similarity) * 100);
@@ -385,7 +442,7 @@ function PaperRow({ p }: { p: MapPaper }) {
         ? "bg-accent border-accent"
         : "bg-transparent border-accent"; // to_read / null = unread
   return (
-    <li className="flex gap-3 border-t border-border py-2.5 first:border-t-0">
+    <li className="group flex gap-3 border-t border-border py-2.5 first:border-t-0">
       <span
         className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full border", dot)}
         title={p.read_status ?? "unread"}
@@ -395,13 +452,40 @@ function PaperRow({ p }: { p: MapPaper }) {
         onClick={() => openPaper(p.paper_id)}
         className="min-w-0 flex-1 text-left"
       >
-        <div className="truncate text-sm font-semibold text-fg">{p.title ?? "(untitled)"}</div>
+        <div className="flex items-center gap-1.5">
+          {p.pinned && (
+            <Pin size={11} className="-rotate-45 shrink-0 text-accent" aria-label="pinned" />
+          )}
+          <span className="truncate text-sm font-semibold text-fg">{p.title ?? "(untitled)"}</span>
+        </div>
         <div className="truncate text-xs text-muted">
           {meta}
           {rel != null && <span className="text-accent"> · {rel}% match</span>}
         </div>
       </button>
       <div className="flex shrink-0 items-center gap-2 pt-0.5 text-xs text-faint">
+        {canEdit && (
+          <span className="flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100">
+            <button
+              type="button"
+              disabled={busy}
+              title={p.pinned ? "Unpin" : "Pin to this map"}
+              onClick={() => onCurate(p.pinned ? { unpin: p.paper_id } : { pin: p.paper_id })}
+              className={cn("hover:text-accent disabled:opacity-40", p.pinned && "text-accent")}
+            >
+              <Pin size={13} className="-rotate-45" />
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              title="Not relevant — remove from this map"
+              onClick={() => onCurate({ exclude: p.paper_id })}
+              className="hover:text-danger disabled:opacity-40"
+            >
+              <Ban size={13} />
+            </button>
+          </span>
+        )}
         <span className="inline-flex items-center gap-0.5">
           <MessageSquare size={12} /> {p.comments}
         </span>

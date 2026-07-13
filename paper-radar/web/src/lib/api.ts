@@ -178,6 +178,25 @@ export function deleteMap(mapId: string): Promise<{ deleted: boolean }> {
   return authedRequest(`/maps/${encodeURIComponent(mapId)}`, { method: "DELETE" });
 }
 
+/** One curation/edit action on a map (creator only): rename, re-seed, change
+ *  visibility, tune the match threshold, or pin/exclude a paper. */
+export interface MapPatch {
+  name?: string;
+  seed?: string;
+  visibility?: "lab" | "private";
+  min_similarity?: number;
+  pin?: string;
+  unpin?: string;
+  exclude?: string;
+  uninclude?: string;
+}
+export function updateMap(mapId: string, patch: MapPatch): Promise<MapDoc> {
+  return authedRequest<MapDoc>(`/maps/${encodeURIComponent(mapId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
 /** A map's scoped overview: t-SNE + sub-themes over just its member papers. */
 export function fetchMapOverview(mapId: string): Promise<MapOverviewData> {
   return authedRequest<MapOverviewData>(`/maps/${encodeURIComponent(mapId)}/overview`);
