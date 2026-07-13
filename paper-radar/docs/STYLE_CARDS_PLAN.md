@@ -35,10 +35,23 @@ https://claude.ai/code/artifact/a42e0cc4-b28a-448f-8422-69c53b09756a
     `spec_seed` for stable previews. Stdlib-only on purpose.
   - `atlas_mcp/render.py`: matplotlib/Agg, deterministic — preview and stored
     card both seed from `spec_seed(spec)` (the server's `cvd` stamp is excluded
-    from the hash), so the board shows exactly the approved preview and the
-    stored row reproduces it byte-identically. Bounded by the schema (≤8
-    series, ≤500 points, log axes only for line/scatter, palette ≥ series),
-    300 dpi.
+    from the hash), so **the board shows exactly the approved preview**. That
+    determinism is scoped to one version of the renderer + matplotlib; it is not
+    a claim that a year-old card re-renders bit-for-bit after either changes
+    (layout and glyph rasterisation move). The stored PNG stays the card's
+    image. Renders are serialised behind a lock (pyplot's rcParams are
+    process-global, and FastMCP runs sync tools on a thread pool) and start from
+    matplotlib's defaults, so a developer's own `matplotlibrc` can't change what
+    a lab's board looks like. Bounded by the schema (≤8 series, ≤500 points,
+    ≤40 sq in, log axes only for line/scatter, one colour per series), 300 dpi.
+  - The read path is lenient but never *unchecked*: `spec.for_render` fills
+    defaults for fields a stored card predates, while still enforcing every type
+    and bound — `figures_update` RLS lets a row's owner PATCH `spec`, so a
+    hostile stored spec must not be able to allocate the process to death.
+  - The badge is enforced in the DATABASE, not in React: a trigger freezes a
+    style card's `spec`, `storage_path` and `origin`, so nobody can repoint a
+    card's image at an uploaded copy of the very figure the badge says was never
+    copied (RLS alone would have allowed exactly that via one PostgREST PATCH).
   - Spec v1 vocabulary: six chart types; per-series `line_width` / `dash` /
     `marker` / `drawstyle` (`step` is what makes a Kaplan–Meier curve or a CDF
     read as itself — a smooth line through the same points does not, and the

@@ -1,11 +1,18 @@
 """Render a style-card spec to a PNG with synthetic data.
 
-Deterministic by construction: the same (spec, seed) yields the same bytes.
+Deterministic for a GIVEN renderer: the same (spec, seed) yields the same bytes.
 Both the preview tool and the stored card seed from ``spec.spec_seed``, so the
-board image is exactly the render the user approved, and re-rendering from the
-stored row reproduces it. Nothing of the admired original enters the render —
-only the validated style parameters, and rng-generated data shaped by the
-spec's ``data_hints``.
+board image is exactly the render the user approved. Nothing of the admired
+original enters the render — only the validated style parameters, and
+rng-generated data shaped by the spec's ``data_hints``.
+
+The determinism is scoped, and worth being precise about: it holds within one
+version of this module and of matplotlib. It is what makes *preview == stored*
+true (the promise the user actually relies on when they approve an image). It is
+NOT a promise that a card rendered last year still reproduces bit-for-bit after
+this module or matplotlib changes — figure layout and glyph rasterisation move
+across versions. So the stored PNG, not a re-render, remains the card's image;
+a re-render is a fresh render of the same style, not a checksum of the old one.
 
 matplotlib is imported lazily inside :func:`render` — it is an ``mcp``-extra
 dependency, and importing this module must stay cheap for environments that
@@ -15,10 +22,26 @@ only validate specs.
 from __future__ import annotations
 
 import io
+import os
+import threading
 
 import numpy as np
 
+from . import spec as card_spec
+
+# Headless before matplotlib is imported anywhere: reading rcParams["backend"]
+# resolves the auto-sentinel by probing and importing GUI backends (macosx, qt,
+# gtk, tk) — work this process must never do. Setting the env var skips it.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 DPI = 300  # crisp on the board and in downscaled tool previews
+
+# pyplot's rcParams and figure registry are PROCESS-GLOBAL. FastMCP runs sync
+# tools in a worker-thread pool, so two concurrent previews would interleave
+# inside one rcParams and each render would come out wearing the other's palette
+# and type — silently breaking the determinism the whole feature rests on.
+# Renders are CPU-bound and short; serialise them.
+_RENDER_LOCK = threading.Lock()
 
 _DASH = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
 _MARKER = {
@@ -64,25 +87,44 @@ def _curve(trend: str, x: np.ndarray, i: int) -> np.ndarray:
     return 0.1 + 0.8 * y * (1.0 - 0.09 * i)
 
 
+def _monotone_like(base: np.ndarray, noisy: np.ndarray) -> np.ndarray:
+    """``noisy`` forced to follow ``base``'s monotone direction, if it has one.
+
+    A base that only ever rises → running max; only ever falls → running min;
+    anything else (a peak, a flat line) is returned untouched.
+    """
+    d = np.diff(base)
+    if np.all(d >= 0) and np.any(d > 0):
+        return np.maximum.accumulate(noisy)
+    if np.all(d <= 0) and np.any(d < 0):
+        return np.minimum.accumulate(noisy)
+    return noisy
+
+
 def _xs(spec: dict, n: int) -> np.ndarray:
     if spec["axes"]["x_scale"] == "log":
         return np.logspace(0.0, 2.0, n)
     return np.linspace(0.0, 10.0, n)
 
 
-def _draw_line(ax, spec: dict, rng) -> None:
+def _draw_line(fig, ax, spec: dict, rng) -> None:
     hints = spec["data_hints"]
     n = hints["n_points"]
     x = _xs(spec, n)
     t = np.linspace(0.0, 1.0, n)
     sigma = _NOISE[hints["noise"]]
     for i, s in enumerate(spec["series"]):
-        y = _curve(hints["trend"], t, i) + rng.normal(0.0, sigma, n)
-        y = np.clip(y, 0.02, None)  # keep a log y-axis renderable
+        base = _curve(hints["trend"], t, i)
+        y = np.clip(base + rng.normal(0.0, sigma, n), 0.02, None)  # log-y renderable
         if s["drawstyle"] == "step":
-            # A staircase reads as a survival/CDF curve only if it's monotone —
-            # noise must dent the step heights, never make the line go back up.
-            y = np.minimum.accumulate(y) if hints["trend"] != "rising" else np.maximum.accumulate(y)
+            # A survival/CDF staircase must not walk back against its own trend:
+            # noise may dent the step heights, never reverse them. The direction
+            # comes from THIS SERIES' base curve, not from the trend name —
+            # `saturating` rises, and `mixed` resolves per series — so keying off
+            # the name flattens a rising curve into a horizontal line. A
+            # non-monotone base (peaked, flat) is left alone: forcing it monotone
+            # would erase the very feature it has.
+            y = _monotone_like(base, y)
         ax.plot(
             x,
             y,
@@ -97,15 +139,24 @@ def _draw_line(ax, spec: dict, rng) -> None:
     ax.set_ylabel("signal")
 
 
-def _draw_scatter(ax, spec: dict, rng) -> None:
+def _draw_scatter(fig, ax, spec: dict, rng) -> None:
     hints = spec["data_hints"]
     series = spec["series"]
     per = max(hints["n_points"] // len(series), 3)
+    # Cluster spread follows `noise` (a spec that says "none" must look tighter
+    # than one that says "high" — otherwise a model iterating on the preview can
+    # never converge), and clusters are spread along a diagonal so they separate
+    # instead of landing on top of each other.
+    spread = 0.03 + 1.4 * _NOISE[hints["noise"]]
+    n = len(series)
     for i, s in enumerate(series):
-        cx, cy = rng.uniform(0.25, 0.75, 2)
+        step = (i + 0.5) / n
+        jitter = rng.uniform(-0.06, 0.06, 2)
+        cx = 0.2 + 0.6 * step + jitter[0]
+        cy = 0.2 + 0.6 * (1.0 - step if hints["trend"] == "falling" else step) + jitter[1]
         ax.scatter(
-            np.clip(rng.normal(cx, 0.06, per), 0.01, None),
-            np.clip(rng.normal(cy, 0.06, per), 0.01, None),
+            np.clip(rng.normal(cx, spread, per), 0.01, None),
+            np.clip(rng.normal(cy, spread, per), 0.01, None),
             s=26.0,
             marker=_MARKER[s["marker"]] or "o",
             alpha=0.85,
@@ -116,7 +167,7 @@ def _draw_scatter(ax, spec: dict, rng) -> None:
     ax.set_ylabel("dim 2")
 
 
-def _draw_bar(ax, spec: dict, rng) -> None:
+def _draw_bar(fig, ax, spec: dict, rng) -> None:
     hints = spec["data_hints"]
     series = spec["series"]
     k = int(min(max(hints["n_points"], 2), 12))  # n_points reads as "groups" here
@@ -137,7 +188,7 @@ def _draw_bar(ax, spec: dict, rng) -> None:
     ax.set_ylabel("value")
 
 
-def _draw_histogram(ax, spec: dict, rng) -> None:
+def _draw_histogram(fig, ax, spec: dict, rng) -> None:
     hints = spec["data_hints"]
     series = spec["series"]
     n = hints["n_points"]
@@ -156,7 +207,7 @@ def _draw_histogram(ax, spec: dict, rng) -> None:
     ax.set_ylabel("count")
 
 
-def _draw_heatmap(ax, fig, spec: dict, rng) -> None:
+def _draw_heatmap(fig, ax, spec: dict, rng) -> None:
     from matplotlib.colors import LinearSegmentedColormap
 
     side = int(np.clip(round(spec["data_hints"]["n_points"] ** 0.5), 8, 40))
@@ -175,12 +226,14 @@ def _draw_heatmap(ax, fig, spec: dict, rng) -> None:
     ax.grid(False)
 
 
-def _draw_box(ax, spec: dict, rng) -> None:
+def _draw_box(fig, ax, spec: dict, rng) -> None:
     hints = spec["data_hints"]
     series = spec["series"]
-    groups = len(series) if len(series) > 1 else 4
+    # One box per series — inventing extra groups would cycle the palette and
+    # give two groups the same colour on a card stamped "colourblind-safe".
+    groups = len(series)
     per = max(hints["n_points"] // groups, 5)
-    centers = _curve(hints["trend"], np.linspace(0.0, 1.0, groups), 0)
+    centers = _curve(hints["trend"], np.linspace(0.0, 1.0, max(groups, 2)), 0)[:groups]
     data = [rng.normal(centers[g], 0.08 + _NOISE[hints["noise"]], per) for g in range(groups)]
     bp = ax.boxplot(
         data,
@@ -266,39 +319,47 @@ def _finish_legend(ax, spec: dict, ctype: str) -> None:
     ax.legend(loc=spec["legend"].get("loc", "best"))
 
 
-def render(spec: dict, seed: int) -> tuple[bytes, int, int]:
-    """Render a *validated* spec → ``(png_bytes, width_px, height_px)``.
+# One entry per spec.CHART_TYPES member — a missing one is a KeyError at the
+# first test, not a silently wrong card.
+_DRAW = {
+    "line": _draw_line,
+    "scatter": _draw_scatter,
+    "bar": _draw_bar,
+    "histogram": _draw_histogram,
+    "heatmap": _draw_heatmap,
+    "box": _draw_box,
+}
 
-    Pass the output of ``spec.validate_spec`` only; raw user specs may be
-    missing the defaults this renderer assumes.
+def render(raw_spec: dict, seed: int) -> tuple[bytes, int, int]:
+    """Render a spec → ``(png_bytes, width_px, height_px)``.
+
+    New specs come from ``spec.validate_spec``; specs read back from the DB are
+    hydrated here, so a card stored before a field existed still renders (see
+    ``spec.hydrate``). Hydration is idempotent, so a validated spec passes
+    through unchanged — and with the same seed, byte-identical.
     """
     import matplotlib
-
-    # Headless, never a display server. Switching with force=True re-initialises
-    # the backend, so only do it when something else got there first.
-    if matplotlib.get_backend().lower() != "agg":
-        matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
+    spec = card_spec.for_render(raw_spec)
     rng = np.random.default_rng(seed)
     w_in, h_in = spec["chart"]["aspect"]
     ctype = spec["chart"]["type"]
     buf = io.BytesIO()
-    with plt.rc_context(_rc(spec)):
+
+    # Start from matplotlib's DEFAULTS, not the ambient rcParams: a developer's
+    # ~/.config/matplotlib/matplotlibrc (a stray `savefig.bbox: tight` is enough
+    # to change the output size, and with it the width/height we store) must not
+    # be able to change what a lab's board looks like. `backend` is excluded —
+    # we are already on Agg and switching it here would re-initialise it.
+    base = {k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}
+    with _RENDER_LOCK, plt.rc_context({**base, **_rc(spec)}):
         fig, ax = plt.subplots(figsize=(w_in, h_in), dpi=DPI)
         try:
-            if ctype == "line":
-                _draw_line(ax, spec, rng)
-            elif ctype == "scatter":
-                _draw_scatter(ax, spec, rng)
-            elif ctype == "bar":
-                _draw_bar(ax, spec, rng)
-            elif ctype == "histogram":
-                _draw_histogram(ax, spec, rng)
-            elif ctype == "heatmap":
-                _draw_heatmap(ax, fig, spec, rng)
-            else:
-                _draw_box(ax, spec, rng)
+            # Table, not an if/elif chain ending in a fallback: an unhandled
+            # chart type must raise here, not quietly render as some other chart
+            # and get stored as the style the user approved.
+            _DRAW[ctype](fig, ax, spec, rng)
             if ctype != "heatmap":
                 _apply_scales(ax, spec)
                 _finish_legend(ax, spec, ctype)
@@ -306,6 +367,10 @@ def render(spec: dict, seed: int) -> tuple[bytes, int, int]:
             # metadata: drop the Software chunk so bytes don't vary across
             # matplotlib versions — determinism is part of the contract.
             fig.savefig(buf, format="png", dpi=DPI, metadata={"Software": None})
+            # The TRUE raster size: Agg truncates inches*dpi, it doesn't round,
+            # so round(w_in * DPI) is off by a pixel for many aspects — and these
+            # numbers are stored as figures.width/height and drive the masonry.
+            width, height = (int(v) for v in fig.canvas.get_width_height())
         finally:
             plt.close(fig)
-    return buf.getvalue(), round(w_in * DPI), round(h_in * DPI)
+    return buf.getvalue(), width, height

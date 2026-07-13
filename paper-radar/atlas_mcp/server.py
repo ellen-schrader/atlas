@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import logging
 import sys
 from collections.abc import Callable
@@ -73,7 +74,13 @@ def _succeeded(result: object) -> bool:
     raising, so an exception check alone would record a refused call as a success —
     including the one the lab most wants to see: someone using Claude on a lab whose
     access is switched off.
+
+    Image tools return a LIST (``[text, Image]``) and put the same "Error: …"
+    string in its first element, so the list case has to be unwrapped too, or a
+    refused image/preview call is logged as a success.
     """
+    if isinstance(result, list):
+        result = result[0] if result else None
     return not (isinstance(result, str) and result.startswith("Error:"))
 
 
@@ -601,7 +608,14 @@ def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
         data, mime = moodboard.to_preview(moodboard.download(fig))
     except lab.LabError as exc:
         return [f"Error: {exc}"]
-    return [_untrusted("figure", _format_figure(fig)), Image(data=data, format=mime.split("/")[-1])]
+    header = _format_figure(fig)
+    if fig.get("origin") == "style_card" and fig.get("spec"):
+        # A style card's spec IS its style, losslessly — hand it over rather than
+        # make the model re-guess line widths and dashes from the pixels below.
+        header += "\n\nStyle spec (reuse these values directly):\n" + json.dumps(
+            fig["spec"], indent=2, sort_keys=True
+        )
+    return [_untrusted("figure", header), Image(data=data, format=mime.split("/")[-1])]
 
 
 @mcp.tool()
@@ -730,11 +744,29 @@ def get_moodboard_style(
     )
 
 
-def _cvd_verdict(palette: list[str]) -> tuple[bool, str]:
-    """Whether a palette survives all three dichromacies, with a short verdict."""
+def _cvd_verdict(palette: list[str], chart_type: str = "line") -> tuple[bool, str]:
+    """Whether a palette survives all three dichromacies, with a short verdict.
+
+    Honesty matters here, because the answer is stamped into the stored spec:
+
+    * A **heatmap** palette is not categorical at all — it is the stop list of a
+      continuous colour ramp, where pairwise distinguishability means nothing.
+      Claiming "colourblind-safe" for it would certify the classic unreadable
+      rainbow colormap as fine.
+    * A **single colour** is trivially safe (no pair to confuse), which is worth
+      saying plainly rather than implying a check that ``check_colorblind_safety``
+      itself refuses to run on one colour.
+    """
+    if chart_type == "heatmap":
+        return False, (
+            "this palette is a continuous colour ramp, not a categorical set — a "
+            "pairwise CVD check doesn't apply. A ramp reads under CVD when it is "
+            "one hue, light to dark; a multi-hue (rainbow) ramp does not"
+        )
+    if len(palette) < 2:
+        return True, "single-colour palette — no pair of series to confuse"
     report = moodboard.cvd_report(palette)
-    safe = all(res["safe"] for res in report.values())
-    if safe:
+    if all(res["safe"] for res in report.values()):
         return True, "palette is colourblind-safe"
     return False, (
         "palette is NOT colourblind-safe — check_colorblind_safety has the colliding "
@@ -744,7 +776,7 @@ def _cvd_verdict(palette: list[str]) -> tuple[bool, str]:
 
 @mcp.tool()
 @audited
-def preview_plot_spec(spec: dict) -> list:
+def preview_plot_spec(spec: dict, team_id: str | None = None) -> list:
     """Preview a style-card spec: validate it and render it with synthetic data.
 
     Use this to iterate on a spec before add_plot_to_moodboard. A style card
@@ -754,23 +786,46 @@ def preview_plot_spec(spec: dict) -> list:
     colourblind-safety summary. Writes nothing.
 
     Args:
-        spec: The style-card spec (JSON object, spec_version 1). Sections:
-            chart {type: line|scatter|bar|histogram|heatmap|box, aspect},
-            axes {x_scale, y_scale, grid, spines}, palette [hex...],
-            series [{line_width, dash, marker}...], legend {mode, loc},
-            typography {base_size, title_weight},
-            data_hints {n_series, n_points, trend, noise}, notes.
+        spec: The style-card spec (JSON object, spec_version 1):
+            chart: {type: line|scatter|bar|histogram|heatmap|box,
+                    aspect: [w_inches, h_inches]}
+            axes: {x_scale: linear|log, y_scale: linear|log,
+                   grid: none|x|y|both, spines: open|box}
+                   (log axes are for line/scatter only)
+            palette: ["#rrggbb", …] — one distinct colour PER SERIES. For a
+                heatmap this is a colour ramp instead (light→dark, one hue).
+            series: [{line_width: 0.25-6, dash: solid|dashed|dotted|dashdot,
+                      marker: none|circle|square|triangle|diamond|plus|x,
+                      drawstyle: linear|step}] — `step` is what makes a
+                      Kaplan–Meier curve or an empirical CDF read as itself;
+                      a smooth line through the same points does not (line only).
+            legend: {mode: direct|box|none, loc: <matplotlib loc, only with box>}
+            typography: {base_size: 6-20, title_weight: normal|bold}
+            data_hints: {n_series: 1-8, n_points: 3-500,
+                         trend: rising|falling|saturating|peaked|flat|mixed,
+                         noise: none|low|medium|high} — the SHAPE of the
+                         synthetic data, never real values.
+            notes: free text for anything the vocabulary can't carry.
+        team_id: Which lab, if you belong to more than one.
     """
     try:
+        # Resolve the lab even though this tool only renders: it is what gates a
+        # lab that has switched Claude access off, and what lets @audited record
+        # the call. Without it this tool would be both ungated and invisible.
+        lab.resolve_team(team_id)
         norm = card_spec.validate_spec(spec)
     except card_spec.SpecError as exc:
         return [f"Error: {exc}"]
+    except lab.LabError as exc:
+        return [f"Error: {exc}"]
     try:
         png, w, h = card_render.render(norm, card_spec.spec_seed(norm))
+        data, mime = moodboard.to_preview(png)
+    except lab.LabError as exc:  # to_preview raises this on undecodable bytes
+        return [f"Error: {exc}"]
     except Exception as exc:  # noqa: BLE001 — renderer failure → clean tool error
         return [f"Error: could not render the spec: {exc}"]
-    data, mime = moodboard.to_preview(png)
-    _safe, verdict = _cvd_verdict(norm["palette"])
+    _safe, verdict = _cvd_verdict(norm["palette"], norm["chart"]["type"])
     text = (
         f"Spec is valid: {norm['chart']['type']} chart, {len(norm['series'])} series, "
         f"renders at {w}×{h}px with synthetic data; {verdict}. "
@@ -841,7 +896,7 @@ async def add_plot_to_moodboard(
     except lab.LabError as exc:
         return f"Error: {exc}"
 
-    safe, verdict = _cvd_verdict(norm["palette"])
+    safe, verdict = _cvd_verdict(norm["palette"], norm["chart"]["type"])
     norm["cvd"] = {"checked": True, "safe": safe}
 
     detail = [

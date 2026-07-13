@@ -5,6 +5,7 @@ migration + manual stdio verification."""
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from atlas_mcp import spec as card_spec
@@ -116,11 +117,15 @@ def test_spec_seed_ignores_cvd_stamp():
 # --- renderer ----------------------------------------------------------------
 
 
-def _render(spec_dict, seed=7):
+def _render_norm(norm, seed=7):
     pytest.importorskip("matplotlib")
     from atlas_mcp import render as card_render
 
-    return card_render.render(card_spec.validate_spec(spec_dict), seed)
+    return card_render.render(norm, seed)
+
+
+def _render(spec_dict, seed=7):
+    return _render_norm(card_spec.validate_spec(spec_dict), seed)
 
 
 def test_render_is_deterministic():
@@ -153,13 +158,9 @@ def test_every_chart_type_renders(ctype):
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_step_drawstyle_renders_and_is_monotone():
-    # A Kaplan-Meier / CDF staircase: the spec accepts drawstyle=step on a line
-    # chart, and the synthetic data must not wander back up under noise.
-    import numpy as np
-
-    from atlas_mcp import render as card_render
-
+def test_step_drawstyle_validates_and_renders():
+    # The staircase itself is asserted per-trend in
+    # test_step_never_reverses_its_own_curve; this just pins the spec + PNG path.
     norm = card_spec.validate_spec(
         {
             "chart": {"type": "line"},
@@ -169,22 +170,128 @@ def test_step_drawstyle_renders_and_is_monotone():
         }
     )
     assert norm["series"][0]["drawstyle"] == "step"
-    png, _, _ = card_render.render(norm, 5)
+    png, _, _ = _render_norm(norm, 5)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
-    # the monotone guard, exercised directly on the curve the renderer builds
-    rng = np.random.default_rng(5)
-    t = np.linspace(0.0, 1.0, 40)
-    y = card_render._curve("falling", t, 0) + rng.normal(0.0, 0.12, 40)
-    y = np.minimum.accumulate(np.clip(y, 0.02, None))
-    assert np.all(np.diff(y) <= 0), "a survival curve must never step back up"
+
+def test_stored_spec_predating_a_field_still_renders():
+    # A card saved before `drawstyle` existed has no drawstyle in its stored
+    # spec. Reads must stay lenient (spec.hydrate) or every vocabulary addition
+    # silently breaks the cards already on the board.
+    pytest.importorskip("matplotlib")
+    from atlas_mcp import render as card_render
+
+    legacy = {
+        "spec_version": 1,
+        "chart": {"type": "line", "aspect": [5.0, 3.4]},
+        "axes": {"x_scale": "log", "y_scale": "linear", "grid": "y", "spines": "open"},
+        "palette": ["#0f8f8b", "#b4791a"],
+        # no "drawstyle" — the field did not exist when this was written
+        "series": [{"line_width": 2.4, "dash": "solid", "marker": "none"}] * 2,
+        "legend": {"mode": "direct"},
+        "typography": {"base_size": 11.0, "title_weight": "bold"},
+        "data_hints": {"n_series": 2, "n_points": 30, "trend": "saturating", "noise": "low"},
+        "cvd": {"checked": True, "safe": True},
+    }
+    png, _, _ = card_render.render(legacy, card_spec.spec_seed(legacy))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # a spec missing whole sections still renders (only chart.type survives)
+    png, _, _ = card_render.render({"chart": {"type": "bar"}}, 3)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_drawstyle_defaults_to_linear_and_is_line_only():
-    norm = card_spec.validate_spec({"chart": {"type": "line"}})
-    assert norm["series"][0]["drawstyle"] == "linear"
-    with pytest.raises(card_spec.SpecError, match="drawstyle"):
-        card_spec.validate_spec({"chart": {"type": "bar"}, "series": [{"drawstyle": "step"}]})
+@pytest.mark.parametrize("trend", card_spec.TRENDS)
+def test_step_never_reverses_its_own_curve(trend):
+    """Every trend, not just `falling`: a step curve must follow its base curve's
+    direction. Keying the guard off the trend NAME flattened `saturating` (which
+    rises) and `mixed` (which resolves per series) to a dead horizontal line."""
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    from atlas_mcp import render as card_render
+
+    norm = card_spec.validate_spec(
+        {
+            "chart": {"type": "line"},
+            "series": [{"drawstyle": "step"}, {"drawstyle": "step"}],
+            "palette": ["#0f8f8b", "#b4791a"],
+            "data_hints": {"trend": trend, "noise": "high", "n_points": 40},
+        }
+    )
+    with plt.rc_context(card_render._rc(norm)):
+        fig, ax = plt.subplots()
+        try:
+            card_render._draw_line(fig, ax, norm, np.random.default_rng(11))
+            drawn = [np.asarray(ln.get_ydata()) for ln in ax.get_lines()]
+        finally:
+            plt.close(fig)
+
+    for i, y in enumerate(drawn):
+        base = card_render._curve(trend, np.linspace(0.0, 1.0, 40), i)
+        span = float(y.max() - y.min())
+        if float(base.max() - base.min()) > 0.05:
+            # a curve that actually goes somewhere must not be flattened
+            assert span > 0.02, f"{trend} series {i} collapsed to a flat line"
+        d = np.diff(base)
+        if np.all(d >= 0) and np.any(d > 0):
+            assert np.all(np.diff(y) >= -1e-12), f"{trend} rising series stepped down"
+        elif np.all(d <= 0) and np.any(d < 0):
+            assert np.all(np.diff(y) <= 1e-12), f"{trend} falling series stepped up"
+
+
+def test_for_render_enforces_bounds_on_a_stored_spec():
+    """The read path must keep the resource bounds: `figures_update` RLS lets a
+    row's owner PATCH `spec` to anything, so a hostile stored spec must not be
+    able to allocate the process to death."""
+    with pytest.raises(card_spec.SpecError):  # would be a ~13 gigapixel figure
+        card_spec.for_render({"chart": {"type": "line", "aspect": [12000, 12000]}})
+    with pytest.raises(card_spec.SpecError):
+        card_spec.for_render({"chart": {"type": "line"}, "data_hints": {"n_points": 10**9}})
+    with pytest.raises(card_spec.SpecError):
+        card_spec.for_render({"chart": {"type": "line"}, "series": [{}] * 500})
+    # …while still tolerating a spec written before a rule existed
+    legacy = {"chart": {"type": "bar"}, "axes": {"x_scale": "log"}}  # now write-rejected
+    assert card_spec.for_render(legacy)["chart"]["type"] == "bar"
+
+
+def test_oversized_aspect_is_refused_at_write():
+    # 12x12in at 300dpi is ~13 MP: >10 MB PNG (the bucket's cap) and ~50 MB of buffer
+    with pytest.raises(card_spec.SpecError, match="too large"):
+        card_spec.validate_spec({"chart": {"type": "line", "aspect": [12, 12]}})
+
+
+def test_palette_rejects_a_repeated_colour():
+    # two spellings of one colour would satisfy "a colour per series" while the
+    # renderer drew both series in the same ink
+    with pytest.raises(card_spec.SpecError, match="repeats"):
+        card_spec.validate_spec(
+            {"chart": {"type": "line"}, "palette": ["#4477AA", "#4477aa"], "series": [{}, {}]}
+        )
+
+
+def test_heatmap_takes_a_single_hue_ramp():
+    # a heatmap draws no series — its palette is a colour ramp, so "one colour per
+    # series" must not apply, or the sequential ramp is impossible to ask for
+    norm = card_spec.validate_spec({"chart": {"type": "heatmap"}, "palette": ["#0f8f8b"]})
+    assert norm["palette"] == ["#0f8f8b"]
+
+
+def test_spec_version_rejects_bool_and_float():
+    # True == 1 and 1.0 == 1 in Python — a bare != would route both to v1's parser
+    for bad in (True, 1.0, "1"):
+        with pytest.raises(card_spec.SpecError, match="spec_version"):
+            card_spec.validate_spec({"chart": {"type": "line"}, "spec_version": bad})
+
+
+def test_hydrate_is_idempotent_on_a_validated_spec():
+    norm = card_spec.validate_spec(
+        {"chart": {"type": "scatter"}, "data_hints": {"n_points": 50}}
+    )
+    assert card_spec.hydrate(norm) == norm  # so a validated spec renders identically
 
 
 def test_log_axes_render():
@@ -234,10 +341,13 @@ def test_format_figure_style_card_cites_and_flags_synthetic(monkeypatch):
 
 
 class _FakeCtx:
-    def __init__(self, action="accept"):
+    def __init__(self, action="accept", raise_exc=False):
         self.action = action
+        self.raise_exc = raise_exc
 
     async def elicit(self, message, schema):
+        if self.raise_exc:
+            raise RuntimeError("client has no elicitation capability")
         return SimpleNamespace(action=self.action, data=schema())
 
 
@@ -321,6 +431,15 @@ def test_add_plot_refuses_unknown_paper(monkeypatch):
     )
     assert out.startswith("Error:")
     assert writes["n"] == 0  # refused before any write
+
+
+def test_add_plot_degrades_when_elicit_unsupported(monkeypatch):
+    # The shared gate's most dangerous branch: elicitation errors → we proceed on
+    # the explicit confirm=true. Covered for post_paper; must be covered for the
+    # second write tool too, or a regression is caught for one and not the other.
+    out, writes = _drive_add(monkeypatch, confirm=True, ctx=_FakeCtx(raise_exc=True))
+    assert "Added style card" in out
+    assert writes["n"] == 1
 
 
 def test_add_plot_rejects_bad_spec_and_bad_source_url(monkeypatch):

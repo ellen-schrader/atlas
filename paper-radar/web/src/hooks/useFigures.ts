@@ -150,13 +150,16 @@ export interface Provenance {
 }
 
 /** Provenance is kept for third-party figures (source + licence) and style cards
- *  (citation of the style's inspiration); 'own' clears it. */
+ *  (citation of the style's inspiration); 'own' clears it. A style card carries no
+ *  LICENCE: its image is our own synthetic render, so there is no third-party
+ *  copy to licence — only an inspiration to cite. */
 function provenanceColumns(p: Provenance) {
   const cited = p.origin !== "own";
+  const licensed = p.origin === "third_party";
   return {
     origin: p.origin,
     source_url: cited ? p.sourceUrl?.trim() || null : null,
-    license: cited ? p.license?.trim() || null : null,
+    license: licensed ? p.license?.trim() || null : null,
     attribution: cited ? p.attribution?.trim() || null : null,
   };
 }

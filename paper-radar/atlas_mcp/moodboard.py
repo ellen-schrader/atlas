@@ -12,18 +12,21 @@ import uuid
 
 from . import lab
 from .lab import LabError
-from .spec import DEFAULT_PALETTE, spec_seed
+from .spec import DEFAULT_PALETTE, normalize_hex, spec_seed
 
 BUCKET = "figures"
 
 # Explicit columns + the uploader profile and linked paper (for provenance).
-# Deliberately WITHOUT `spec`: no list/tool consumer reads it, and it would drag
-# a full JSON document per row into every board listing (and model context).
+# LIST omits `spec` on purpose — it would drag a full JSON document per row into
+# every board listing (and into the model's context). DETAIL includes it: the
+# spec is the machine-readable half of a style card, and "plot X in the style of
+# that card" needs to read it back losslessly rather than re-guess it from pixels.
 FIGURE_COLUMNS = (
     "id, team_id, uploaded_by, storage_path, title, caption, category, paper_id, tags, "
     "width, height, mime_type, origin, source_url, license, attribution, created_at, "
     "uploader:profiles!figures_uploaded_by_fkey(display_name), papers(id, title, doi)"
 )
+FIGURE_DETAIL_COLUMNS = FIGURE_COLUMNS + ", spec"
 
 
 @lab.with_refresh
@@ -61,11 +64,12 @@ def list_figures(
 
 @lab.with_refresh
 def get_figure(team: dict, figure_id: str) -> dict:
-    """One figure in the lab, hydrated with uploader + linked paper."""
+    """One figure in the lab, hydrated with uploader + linked paper (and, for a
+    style card, its spec)."""
     client = lab.get_client()
     rows = (
         client.table("figures")
-        .select(FIGURE_COLUMNS)
+        .select(FIGURE_DETAIL_COLUMNS)
         .eq("team_id", team["id"])
         .eq("id", figure_id)
         .limit(1)
@@ -91,6 +95,23 @@ def _download_raw(figure: dict) -> bytes:
 
 
 @lab.with_refresh
+def _insert_style_card(team: dict, row: dict, png: bytes, path: str) -> dict:
+    """Upload the render, then insert the row — the raw ops, so an expired token
+    is refreshed and retried by @with_refresh (it re-raises LabError untouched,
+    so a function that wrapped its own errors could never be retried)."""
+    client = lab.get_client()
+    client.storage.from_(BUCKET).upload(path, png, {"content-type": "image/png"})
+    try:
+        rows = client.table("figures").insert(row).execute().data or []
+    except Exception:
+        try:  # roll back the orphaned object; best-effort, never masks the cause
+            client.storage.from_(BUCKET).remove([path])
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    return rows[0] if rows else row
+
+
 def add_style_card(
     team: dict,
     *,
@@ -113,6 +134,7 @@ def add_style_card(
     """
     from . import render as figrender
 
+    lab._card_limiter.check()  # bounds an injection-driven loop of card writes
     uid = lab.current_user_id()
     if not uid:
         raise LabError("Couldn't determine your user id to attribute the style card to.")
@@ -123,12 +145,6 @@ def add_style_card(
         raise LabError(f"Could not render the spec: {exc}") from exc
 
     path = f"{team['id']}/{figure_id}.png"
-    client = lab.get_client()
-    try:
-        client.storage.from_(BUCKET).upload(path, png, {"content-type": "image/png"})
-    except Exception as exc:  # noqa: BLE001
-        raise LabError(f"Could not store the rendered preview: {exc}") from exc
-
     row = {
         "id": figure_id,
         "team_id": team["id"],
@@ -149,14 +165,11 @@ def add_style_card(
         "paper_id": paper_id,
     }
     try:
-        rows = client.table("figures").insert(row).execute().data or []
-    except Exception as exc:  # noqa: BLE001
-        try:
-            client.storage.from_(BUCKET).remove([path])
-        except Exception:  # noqa: BLE001 — cleanup is best-effort
-            pass
+        return _insert_style_card(team, row, png, path)
+    except LabError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — wrap OUTSIDE the retry boundary
         raise LabError(f"Could not save the style card: {exc}") from exc
-    return rows[0] if rows else row
 
 
 def download(figure: dict) -> bytes:
@@ -371,7 +384,8 @@ def _delta_e(a: tuple[float, float, float], b: tuple[float, float, float]) -> fl
 
 def normalize_hexes(raw) -> list[str]:
     """Parse a hex palette from a list or a comma/space-separated string; keep only
-    well-formed 6-digit colours, normalised to ``#rrggbb`` lower-case, de-duped."""
+    well-formed 6-digit colours, normalised to ``#rrggbb`` lower-case, de-duped.
+    Single-colour parsing lives in ``spec.normalize_hex`` — one hex parser."""
     import re
 
     if isinstance(raw, str):
@@ -380,9 +394,9 @@ def normalize_hexes(raw) -> list[str]:
         tokens = list(raw or [])
     out: list[str] = []
     for t in tokens:
-        t = str(t).strip().lstrip("#").lower()
-        if re.fullmatch(r"[0-9a-f]{6}", t) and f"#{t}" not in out:
-            out.append(f"#{t}")
+        hexv = normalize_hex(t)
+        if hexv and hexv not in out:
+            out.append(hexv)
     return out
 
 
@@ -435,6 +449,10 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
         "grid.linewidth: 0.6",
         "axes.spines.top: False",
         "axes.spines.right: False",
+        # Frameless, as the style cards render (render.py's `legend.frameon`) —
+        # without this the sheet a lab plots with would box its legends while
+        # every card on their board doesn't, from the same claimed "lab look".
+        "legend.frameon: False",
         "axes.titlesize: 13",
         "axes.titleweight: bold",
         "font.size: 11",

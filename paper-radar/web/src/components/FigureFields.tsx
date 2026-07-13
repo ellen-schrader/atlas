@@ -86,8 +86,9 @@ export function FigureFields({
         <PaperPicker teamId={teamId} value={paper} onChange={onPaper} />
       </Field>
 
-      {origin === "third_party" && (
-        <ThirdPartyFields
+      {origin !== "own" && (
+        <CitationFields
+          origin={origin}
           paperId={paper?.id ?? null}
           sourceUrl={sourceUrl}
           onSourceUrl={onSourceUrl}
@@ -132,9 +133,13 @@ function OriginToggle({
   );
 }
 
-/** Provenance for a third-party image: where it came from, its licence (with an
- *  advisory lookup from the linked paper's DOI), and a display credit. */
-function ThirdPartyFields({
+/** Where a figure came from: the source, a display credit, and — for a stored
+ *  third-party image only — its licence (with an advisory lookup from the linked
+ *  paper's DOI). A style card needs the same citation fields (they are the whole
+ *  legal premise: borrow the look, credit the source) but no licence: its image
+ *  is our own synthetic render, not a copy of anyone's figure. */
+function CitationFields({
+  origin,
   paperId,
   sourceUrl,
   onSourceUrl,
@@ -143,6 +148,7 @@ function ThirdPartyFields({
   attribution,
   onAttribution,
 }: {
+  origin: Figure["origin"];
   paperId: string | null;
   sourceUrl: string;
   onSourceUrl: (v: string) => void;
@@ -151,6 +157,7 @@ function ThirdPartyFields({
   attribution: string;
   onAttribution: (v: string) => void;
 }) {
+  const isStyleCard = origin === "style_card";
   const [looking, setLooking] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -180,7 +187,9 @@ function ThirdPartyFields({
   return (
     <div className="flex flex-col gap-4 rounded-card border border-border bg-surface-2 p-4">
       <p className="text-xs text-muted">
-        Style inspiration only — record where it came from. We derive style, not reproductions.
+        {isStyleCard
+          ? "Recreated with synthetic data — credit the figure whose look it borrows."
+          : "Style inspiration only — record where it came from. We derive style, not reproductions."}
       </p>
       <Field label="Source URL / DOI">
         <Input
@@ -189,25 +198,27 @@ function ThirdPartyFields({
           placeholder="https://doi.org/10.1016/…"
         />
       </Field>
-      <Field label="Licence">
-        <div className="flex gap-2">
-          <Input
-            value={license}
-            onChange={(e) => onLicense(e.target.value)}
-            placeholder="e.g. cc-by"
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="whitespace-nowrap"
-            onClick={look}
-            disabled={looking}
-          >
-            {looking ? "…" : "Look up"}
-          </Button>
-        </div>
-      </Field>
+      {!isStyleCard && (
+        <Field label="Licence">
+          <div className="flex gap-2">
+            <Input
+              value={license}
+              onChange={(e) => onLicense(e.target.value)}
+              placeholder="e.g. cc-by"
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="whitespace-nowrap"
+              onClick={look}
+              disabled={looking}
+            >
+              {looking ? "…" : "Look up"}
+            </Button>
+          </div>
+        </Field>
+      )}
       <Field label="Attribution">
         <Input
           value={attribution}
