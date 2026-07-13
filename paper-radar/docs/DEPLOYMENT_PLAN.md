@@ -109,6 +109,18 @@ wire the three tiers together with env vars. No data migration is needed.
     `vercel deploy --prod` from `paper-radar/web` (the CLI ignores
     `rootDirectory` for uploads from that directory).
 
+### Known issue — Fly trial plan (needs a card)
+
+The Fly account is on the trial plan: **machines are force-stopped after 5
+minutes** ("Trial machine stopping. To run for longer than 5m0s, add a credit
+card" in the logs). Consequences until a card is added at fly.io: the
+in-process layout cache never survives, numba's JIT for the map rarely gets 5
+uninterrupted minutes on the shared vCPU (map appears to never load), and
+users hitting the ~35 s cold boot window see 502s (which Fly Doctor
+misreports as "app not listening on the expected port"). The startup warmup
+(api/app.py) and baked numba cache (api/Dockerfile) shrink the pain; the
+5-minute kill itself only goes away with a card.
+
 ### Phase 5 — later / as needed
 
 - Custom domain + TLS on both hosts (defaults `*.vercel.app` / `*.fly.dev`

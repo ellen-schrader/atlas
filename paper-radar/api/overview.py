@@ -43,6 +43,23 @@ class _LayoutCache:
 _layout_cache = _LayoutCache()
 
 
+def warm_layout_path() -> None:
+    """Compile the UMAP/KMeans code path on a throwaway fit so the first real
+    /overview doesn't pay numba's JIT wall (minutes on a shared vCPU — long
+    enough that the Fly proxy times the request out). Run from a background
+    thread at startup; the image also bakes numba's on-disk cache at build
+    time, which speeds the imports but not the per-process fit compile."""
+    try:
+        from paper_radar.embed.index import cluster_embeddings, compute_umap
+
+        x = np.random.default_rng(0).normal(size=(32, 64)).astype(np.float32)
+        compute_umap(x)
+        cluster_embeddings(x)
+        log.info("umap/kmeans warmup complete")
+    except Exception:  # warmup must never take the API down with it
+        log.exception("umap warmup failed")
+
+
 def _parse_vec(value: object) -> list[float]:
     return json.loads(value) if isinstance(value, str) else value  # type: ignore[return-value]
 
