@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
-from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
+from paper_radar.ingest.urls import _clean_url, _normalize_key
 
 from . import embeddings, enrichment, maps
 from . import map_summary as map_summary_mod

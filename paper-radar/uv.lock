@@ -1902,7 +1902,6 @@ dependencies = [
     { name = "anthropic" },
     { name = "numpy" },
     { name = "pydantic-settings" },
-    { name = "pymupdf" },
     { name = "scikit-learn" },
     { name = "sqlmodel" },
     { name = "typer" },
@@ -1925,6 +1924,7 @@ dev = [
 ]
 legacy = [
     { name = "faiss-cpu" },
+    { name = "pymupdf" },
     { name = "sentence-transformers" },
     { name = "streamlit" },
 ]
@@ -1949,7 +1949,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pillow", marker = "extra == 'mcp'", specifier = ">=10.0" },
     { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "pymupdf", specifier = ">=1.24" },
+    { name = "pymupdf", marker = "extra == 'legacy'", specifier = ">=1.24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scikit-learn", specifier = ">=1.4" },

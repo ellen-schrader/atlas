@@ -31,7 +31,8 @@ import time
 from datetime import UTC, datetime
 
 from paper_radar.ingest.metadata import fetch_metadata
-from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key, extract_urls_from_dir
+from paper_radar.ingest.pdf_extract import extract_urls_from_dir  # needs the `legacy` extra
+from paper_radar.ingest.urls import _clean_url, _normalize_key
 from supabase import Client, create_client
 
 from .config import get_api_settings

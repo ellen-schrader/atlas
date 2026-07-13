@@ -671,7 +671,7 @@ def resolve_metadata(url: str) -> dict:
     `fetch_metadata` itself, a guard that rejects internal addresses — including ones
     reached by redirect."""
     from paper_radar.ingest.metadata import fetch_metadata
-    from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
+    from paper_radar.ingest.urls import _clean_url, _normalize_key
 
     _fetch_limiter.check()
     # validate_share_url now covers the DNS check too (it's inside validate_public_url),
