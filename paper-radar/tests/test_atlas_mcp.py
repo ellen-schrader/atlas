@@ -309,3 +309,37 @@ def test_cvd_simulation_leaves_gray_unchanged():
     for kind in ("deuteranopia", "protanopia", "tritanopia"):
         r, g, b = moodboard._simulate_cvd((128, 128, 128), kind)
         assert abs(r - 128) <= 3 and abs(g - 128) <= 3 and abs(b - 128) <= 3
+
+
+# --- taste vector / recommendations (numpy-free vector math) ----------------
+
+
+def _almost(a, b, tol=1e-9):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def test_unit_normalises_and_rejects_zero():
+    assert _almost(lab._unit([3.0, 4.0]), [0.6, 0.8])
+    assert lab._unit([0.0, 0.0]) is None
+
+
+def test_centroid_is_mean_of_unit_vectors():
+    # Two opposite unit vectors cancel; orthogonal ones average to the diagonal.
+    assert lab._centroid([[1.0, 0.0], [-1.0, 0.0]]) is None  # zero mean → no direction
+    c = lab._centroid([[1.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+    assert lab._centroid([]) is None
+    assert lab._centroid([[0.0, 0.0]]) is None  # only unusable vectors
+
+
+def test_centroid_weights_each_paper_equally():
+    # A long vector must not dominate a short one — both are unit-normalised first.
+    c = lab._centroid([[100.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+
+
+def test_parse_embedding_handles_json_string_and_list():
+    assert lab._parse_embedding("[0.1, 0.2, 0.3]") == [0.1, 0.2, 0.3]
+    assert lab._parse_embedding([0.1, 0.2]) == [0.1, 0.2]
+    assert lab._parse_embedding(None) is None
+    assert lab._parse_embedding("not-json") is None

@@ -15,6 +15,7 @@ server).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import socket
 import time
@@ -240,6 +241,116 @@ def recent(team: dict, limit: int) -> list[dict]:
         or []
     )
     return _hydrate(client, posts)
+
+
+# === similarity + recommendations (read-only, embedding-based) =============
+# All numpy-free: the MCP server runs under the lean `mcp` extra (no numpy), so
+# vector math here is plain Python over `list[float]`. The nearest-neighbour work
+# stays in Postgres (match_papers / recommend_papers over the HNSW index).
+
+
+def _unit(v: list[float]) -> list[float] | None:
+    """L2-normalise a vector; None if it has no magnitude."""
+    s = sum(x * x for x in v) ** 0.5
+    return [x / s for x in v] if s > 0 else None
+
+
+def _centroid(vectors: list[list[float]]) -> list[float] | None:
+    """The L2-normalised mean of unit-normalised vectors (equal weight each), so a
+    few papers define a taste direction. None when nothing usable was passed."""
+    acc: list[float] | None = None
+    n = 0
+    for v in vectors:
+        u = _unit(v)
+        if u is None:
+            continue
+        if acc is None:
+            acc = list(u)
+        else:
+            for i in range(len(acc)):
+                acc[i] += u[i]
+        n += 1
+    if acc is None:
+        return None
+    return _unit([x / n for x in acc])
+
+
+def _parse_embedding(raw) -> list[float] | None:
+    """PostgREST returns a pgvector column as a JSON string — normalise to a list."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    return raw
+
+
+def taste_vector(team: dict) -> list[float] | None:
+    """A taste centroid for the signed-in user: the mean embedding of the papers
+    they've read/are reading or reacted to in this lab. None on cold start (no
+    such engagement). RLS scopes every read to the caller."""
+    client = get_client()
+    uid = current_user_id()
+    if not uid:
+        return None
+    tid = team["id"]
+    ids: set[str] = set()
+    status = (
+        client.table("paper_status")
+        .select("paper_id")
+        .eq("team_id", tid)
+        .eq("user_id", uid)
+        .in_("status", ["read", "reading"])
+        .execute()
+        .data
+        or []
+    )
+    ids.update(r["paper_id"] for r in status)
+    reacted = (
+        client.table("reactions")
+        .select("paper_id")
+        .eq("team_id", tid)
+        .eq("user_id", uid)
+        .execute()
+        .data
+        or []
+    )
+    ids.update(r["paper_id"] for r in reacted)
+    if not ids:
+        return None
+    rows = client.table("papers").select("id, embedding").in_("id", list(ids)).execute().data or []
+    vectors = [v for v in (_parse_embedding(r.get("embedding")) for r in rows) if v]
+    return _centroid(vectors)
+
+
+@with_refresh
+def recommend(team: dict, limit: int) -> list[dict]:
+    """Papers to read next, ranked by the user's taste (recommend_papers RPC, which
+    already drops self-posted / already-engaged papers and re-ranks for freshness).
+    Empty list when there's no taste signal — the caller handles cold start."""
+    client = get_client()
+    vec = taste_vector(team)
+    if vec is None:
+        return []
+    rows = (
+        client.rpc("recommend_papers", {"p_team": team["id"], "p_query": vec, "p_limit": limit})
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return []
+    sim = {r["post_id"]: r["similarity"] for r in rows}
+    posts = (
+        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
+    )
+    hydrated = _hydrate(client, posts)
+    for h in hydrated:
+        h["similarity"] = sim.get(h["id"])
+    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
+    return hydrated
 
 
 @with_refresh

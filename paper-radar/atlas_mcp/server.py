@@ -133,6 +133,40 @@ def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
 
 
 @mcp.tool()
+def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
+    """Recommend papers for you to read next, based on your reading history.
+
+    Builds a taste profile from the papers you've read/reacted to in the lab and
+    ranks unseen papers by similarity (with a mild freshness boost). Falls back to
+    the most recent papers when you have no reading history yet.
+
+    Args:
+        limit: Maximum number of recommendations (1-50).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        hits = lab.recommend(team, _clamp(limit))
+        if hits:
+            return _untrusted(
+                "lab papers",
+                f"Recommended for you in {team['name']} (by your reading history):\n\n"
+                + _render(hits, ""),
+            )
+        # Cold start (or no unseen matches): recency fallback, said plainly.
+        recent = lab.recent(team, _clamp(limit))
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not recent:
+        return f"No papers in {team['name']} yet to recommend from."
+    return _untrusted(
+        "lab papers",
+        f"You have no reading history in {team['name']} yet, so here are the most "
+        f"recent papers instead:\n\n" + _render(recent, ""),
+    )
+
+
+@mcp.tool()
 def get_paper(paper_id: str, team_id: str | None = None) -> str:
     """Get full details for one paper posted in your lab, including its abstract.
 
