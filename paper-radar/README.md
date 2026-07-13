@@ -8,7 +8,7 @@ Papers arrive as PDFs exported from the lab's Teams channel. paper-radar:
 
 1. **Ingests** — pulls the (untruncated) URLs out of those PDFs, records who shared each one, and resolves bibliographic metadata (title, authors, venue, year, DOI, **abstract**, keywords) from arXiv / Crossref / PubMed / Europe PMC / publisher citation tags.
 2. **Enriches** — uses Claude (grounded on the resolved abstract) to write a short summary, assign domain tags, and find linked code/data repos. *(stub — you implement)*
-3. **Embeds** — computes local sentence-transformer embeddings, builds a FAISS index for semantic search, and a UMAP 2-D map of the collection.
+3. **Embeds** — computes local sentence-transformer embeddings and builds a FAISS index for semantic search (the hosted app's 2-D map is a t-SNE layout computed API-side).
 4. **Ranks** — a "taste model" scores papers by how interesting they are to the lab. *(stub — you implement)*
 5. **Serves** — a Streamlit app (behind email/password sign-in) to search, filter, browse, comment on, and react to papers.
 
@@ -34,7 +34,7 @@ PDFs (Teams export)
       │
       ├─ enrich/agent.py   Claude → PaperEnrichment            [STUB]
       ├─ embed/embed.py    sentence-transformers (bge-small)
-      │  embed/index.py    FAISS (cosine) + UMAP 2-D
+      │  embed/index.py    FAISS (cosine) + t-SNE 2-D
       └─ taste/score.py    in-context + pairwise ranking       [STUB]
          taste/eval.py     rank-correlation vs held-out labels [STUB]
       ▼
@@ -60,7 +60,7 @@ uv run streamlit run app/streamlit_app.py
 # --- full pipeline on real data ---
 uv run paper-radar ingest /path/to/teams_pdfs   # extract URLs + metadata → SQLite
 uv run paper-radar enrich                        # Claude summaries + tags (stub)
-uv run paper-radar embed                         # embeddings + FAISS + UMAP
+uv run paper-radar embed                         # embeddings + FAISS index
 uv run paper-radar serve                         # launch Streamlit
 
 # checks

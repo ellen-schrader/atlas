@@ -3,7 +3,7 @@
 Stages:
     ingest   -- pull URLs (+ light metadata) from exported Teams PDFs into the DB
     enrich   -- summarize/tag papers with Claude (implemented separately; stub)
-    embed    -- compute local embeddings, build the FAISS index, save UMAP coords
+    embed    -- compute local embeddings and build the FAISS index
     serve    -- launch the Streamlit app
 """
 
@@ -124,12 +124,11 @@ def enrich(
 def embed(
     rebuild: bool = typer.Option(True, help="Rebuild the index from scratch."),
 ) -> None:
-    """Embed papers, build the FAISS index, and save 2-D map coordinates."""
-    import numpy as np
+    """Embed papers and build the FAISS index."""
     from sqlmodel import select
 
     from .embed.embed import embed_papers
-    from .embed.index import build_index, compute_layout_2d, save_index
+    from .embed.index import build_index, save_index
 
     settings = get_settings()
     init_db()
@@ -150,15 +149,7 @@ def embed(
             session.add(paper)
         session.commit()
 
-        coords = compute_layout_2d(vecs)
-        settings.umap_coords_path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(settings.umap_coords_path, coords)
-
-    typer.secho(
-        f"Wrote index -> {settings.faiss_index_path} and map coords -> "
-        f"{settings.umap_coords_path}",
-        fg=typer.colors.GREEN,
-    )
+    typer.secho(f"Wrote index -> {settings.faiss_index_path}", fg=typer.colors.GREEN)
 
 
 @app.command()

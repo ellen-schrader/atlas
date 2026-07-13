@@ -29,6 +29,11 @@ def test_compute_layout_2d_shape_determinism_and_edges():
     assert (compute_layout_2d(vecs[:2]) == [[0.0, 0.0], [1.0, 0.0]]).all()
     # smallest projected size (perplexity must stay < n)
     assert compute_layout_2d(vecs[:3]).shape == (3, 2)
+    # all-identical embeddings must not reach t-SNE (PCA init would divide by
+    # zero std and segfault Barnes-Hut); expect the trivial line layout
+    same = compute_layout_2d(np.ones((5, 16), dtype=np.float32))
+    assert same.shape == (5, 2)
+    assert np.isfinite(same).all()
 
 
 def test_cluster_embeddings_deterministic_and_partitions():

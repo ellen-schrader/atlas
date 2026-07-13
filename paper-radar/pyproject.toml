@@ -11,7 +11,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
     "pymupdf>=1.24",
-    # sklearn backs the API's /map endpoint (embed/index.py: t-SNE + KMeans —
+    # sklearn backs the API's /overview map (embed/index.py: t-SNE + KMeans —
     # deliberately numba-free, see compute_layout_2d); the deps only the local
     # pipeline needs (sentence-transformers/torch, faiss, streamlit) live in
     # `legacy`.

@@ -22,9 +22,9 @@ wire the three tiers together with env vars. No data migration is needed.
 - **Web → Vercel** (or Cloudflare Pages — either works; both are free-tier
   fine for a lab). Static output, SPA rewrite to `index.html`.
 - **API → Fly.io** (or Railway/Render). A container host, per MIGRATION_PLAN
-  §12. The API is light — it never touches sentence-transformers/torch or
-  faiss (embeddings are Voyage API calls; the heavy deps are legacy
-  Streamlit-era code), and umap/sklearn load lazily only for `/map` — so a
+  §12. The API is light — it never touches sentence-transformers/torch,
+  faiss, or numba (embeddings are Voyage API calls; the heavy deps are legacy
+  Streamlit-era code, and the map layout is numba-free sklearn t-SNE) — so a
   small instance (512 MB–1 GB) should do.
 - **DB stays on Supabase** as-is.
 
@@ -39,9 +39,10 @@ wire the three tiers together with env vars. No data migration is needed.
    dependencies (~2–3 GB image, slow cold builds). Move those two to a
    `legacy` extra in `pyproject.toml` (faiss-cpu too — `embed/index.py` now
    imports it lazily, so only the local-index CLI path needs it).
-   umap/scikit-learn stay in the base — the API's `/map` endpoint uses them
-   (`api/overview.py` → `paper_radar.embed.index`). The Streamlit app keeps
-   working via `uv sync --extra dev --extra legacy`.
+   scikit-learn stays in the base — the API's `/overview` map uses it for
+   t-SNE + KMeans (`api/overview.py` → `paper_radar.embed.index`; UMAP and
+   its numba chain were dropped entirely). The Streamlit app keeps working
+   via `uv sync --extra dev --extra legacy`.
 3. ✓ **Add `api/Dockerfile`** — `python:3.12-slim`, install with `uv` from the
    lockfile (`uv sync --frozen --extra api --no-dev`), run
    `uvicorn api.app:app --host 0.0.0.0 --port 8080`. `/health` already exists

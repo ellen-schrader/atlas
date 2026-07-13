@@ -1,11 +1,12 @@
-"""Insights overview for a lab: UMAP layout + KMeans clusters (LLM-named).
+"""Insights overview for a lab: t-SNE 2-D layout + KMeans clusters (LLM-named).
 
-The expensive parts — the UMAP projection and the cluster assignment + Claude
-names — are cached in-process per team, keyed by the exact set of embedded
-papers, so they recompute only when that set changes. Point attributes
-(year/venue) and engagement are fetched fresh on each request by the caller, so
-they stay live. (Persisting names to the `trends` table across restarts is a
-follow-up — see docs/MAP_OVERVIEW_PLAN.md.)
+The layout + cluster assignment + Claude names are cached in-process per team,
+keyed by the exact set of embedded papers, so they recompute only when that
+set changes (a recompute is a few seconds — numba-free t-SNE, no JIT). The
+names are additionally persisted to the `trends` table (see _load_names /
+_store_names), so Claude is not re-asked after a restart. Point attributes
+(year/venue) and engagement are fetched fresh on each request by the caller,
+so they stay live.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ _MAX_TITLES_PER_CLUSTER = 25  # cap the prompt size when naming
 
 
 class _LayoutCache:
-    """Per-team cache of (umap coords + cluster ids + cluster names)."""
+    """Per-team cache of (2-D layout coords + cluster ids + cluster names)."""
 
     def __init__(self) -> None:
         self._d: dict[str, tuple[frozenset, tuple]] = {}

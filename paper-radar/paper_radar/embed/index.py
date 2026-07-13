@@ -1,4 +1,4 @@
-"""FAISS vector index + UMAP 2-D projection.
+"""FAISS vector index + t-SNE 2-D projection.
 
 Vectors are assumed L2-normalized (see ``embed.py``), so an inner-product index
 (``IndexFlatIP``) ranks by cosine similarity. The index is flat (exact) which is
@@ -124,8 +124,10 @@ def compute_layout_2d(
     n = embeddings.shape[0]
     if n == 0:
         return np.zeros((0, 2), dtype=np.float32)
-    if n < 3:
-        # Not enough points to embed; lay them out on a short line.
+    if n < 3 or bool(np.all(embeddings == embeddings[0])):
+        # Too few points to embed — or all identical (duplicate ingests, a
+        # broken embedding backend), where PCA init divides by a zero std and
+        # segfaults Barnes-Hut with NaNs. No structure either way: use a line.
         return np.array([[float(i), 0.0] for i in range(n)], dtype=np.float32)
 
     tsne = TSNE(
@@ -136,6 +138,9 @@ def compute_layout_2d(
         metric="cosine",
         init="pca",
         random_state=random_state,
+        # The Barnes-Hut loop dominates runtime and 500 iterations is visually
+        # equivalent at lab scale; halves worst-case latency on a shared vCPU.
+        max_iter=500,
     )
     coords = tsne.fit_transform(np.ascontiguousarray(embeddings, dtype=np.float32))
     return np.ascontiguousarray(coords, dtype=np.float32)
