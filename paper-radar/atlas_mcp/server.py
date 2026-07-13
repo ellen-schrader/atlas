@@ -289,6 +289,65 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
 
 
 @mcp.tool()
+def check_colorblind_safety(
+    figure_id: str | None = None,
+    palette: str | None = None,
+    team_id: str | None = None,
+) -> str:
+    """Check whether a palette is distinguishable to colourblind readers (CVD).
+
+    Simulates deuteranopia, protanopia, and tritanopia and reports any colour
+    pairs that become hard to tell apart, with a colourblind-safe alternative.
+
+    Args:
+        figure_id: A mood-board figure to pull the palette from (from list_moodboard).
+        palette: Or pass colours directly — hex like "#4477AA,#EE6677,#228833".
+        team_id: Which lab, if you belong to more than one (only with figure_id).
+    """
+    try:
+        if palette:
+            hexes = moodboard.normalize_hexes(palette)
+            source = "the supplied palette"
+        elif figure_id:
+            team = lab.resolve_team(team_id)
+            fig = moodboard.get_figure(team, figure_id)
+            hexes = moodboard.palette(moodboard.download(fig), n=8)
+            source = f"figure “{fig.get('title') or fig['id']}”"
+        else:
+            return "Give me a figure_id or a palette (e.g. \"#4477AA,#EE6677\")."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+
+    if len(hexes) < 2:
+        return (
+            f"Only {len(hexes)} usable colour(s) in {source} — need at least two to "
+            "check whether they're distinguishable."
+        )
+
+    report = moodboard.cvd_report(hexes)
+    lines = [f"Colourblind-safety check for {source}: {', '.join(hexes)}", ""]
+    all_safe = True
+    for kind, res in report.items():
+        if res["safe"]:
+            lines.append(f"• {kind}: safe — all colours stay distinct.")
+        else:
+            all_safe = False
+            collisions = "; ".join(f"{a}≈{b} (ΔE {de})" for a, b, de in res["pairs"])
+            lines.append(f"• {kind}: {len(res['pairs'])} risky pair(s) — {collisions}")
+    lines.append("")
+    if all_safe:
+        lines.append("Verdict: this palette is colourblind-safe. 👍")
+    else:
+        safe = ", ".join(moodboard.SAFE_CYCLE[: max(2, min(len(hexes), 6))])
+        lines.append(
+            "Verdict: not fully colourblind-safe. Consider a CVD-safe qualitative "
+            f"cycle (Paul Tol 'bright'): {safe}. Distinguishing lines by more than "
+            "colour alone — dash style, markers, or direct labels — also helps."
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def get_moodboard_style(
     category: str | None = None, limit: int = 8, team_id: str | None = None
 ) -> str:

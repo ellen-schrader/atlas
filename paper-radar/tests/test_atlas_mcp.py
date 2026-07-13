@@ -268,3 +268,44 @@ def test_mplstyle_falls_back_and_ships_thin_lines():
     cycle = s.split("prop_cycle")[1].lower()
     assert "ffffff" not in cycle  # never an all-white cycle
     assert "4477aa" in cycle  # the CVD-safe fallback palette
+
+
+# --- colourblind-safety check ----------------------------------------------
+
+
+def test_normalize_hexes_parses_and_dedupes():
+    from atlas_mcp import moodboard
+
+    assert moodboard.normalize_hexes("#4477AA, EE6677 228833") == [
+        "#4477aa", "#ee6677", "#228833",
+    ]
+    assert moodboard.normalize_hexes(["#4477AA", "#4477aa", "nothex"]) == ["#4477aa"]
+    assert moodboard.normalize_hexes("") == []
+
+
+def test_cvd_report_flags_red_green_confusion():
+    from atlas_mcp import moodboard
+
+    # matplotlib's default red/green — the textbook deuteranopia collision (a
+    # protanope separates them by lightness, so we assert on the deutan case).
+    report = moodboard.cvd_report(["#d62728", "#2ca02c"])
+    assert not report["deuteranopia"]["safe"]
+    # the collision is reported as the actual pair
+    a, b, de = report["deuteranopia"]["pairs"][0]
+    assert {a, b} == {"#d62728", "#2ca02c"}
+
+
+def test_cvd_report_passes_paul_tol_bright():
+    from atlas_mcp import moodboard
+
+    report = moodboard.cvd_report(moodboard.SAFE_CYCLE)
+    assert all(res["safe"] for res in report.values()), report
+
+
+def test_cvd_simulation_leaves_gray_unchanged():
+    from atlas_mcp import moodboard
+
+    # A neutral gray carries no chromatic signal to lose, so simulation is ~identity.
+    for kind in ("deuteranopia", "protanopia", "tritanopia"):
+        r, g, b = moodboard._simulate_cvd((128, 128, 128), kind)
+        assert abs(r - 128) <= 3 and abs(g - 128) <= 3 and abs(b - 128) <= 3
