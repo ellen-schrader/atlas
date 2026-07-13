@@ -187,9 +187,9 @@ def paper_link(paper_id: str) -> str:
 
 @with_refresh
 def list_teams() -> list[dict]:
-    """The labs the configured user belongs to (id, name, slug)."""
+    """The labs the configured user belongs to (id, name)."""
     client, uid = _session()
-    q = client.table("team_members").select("team_id, teams(id, name, slug)")
+    q = client.table("team_members").select("team_id, teams(id, name)")
     if uid:
         q = q.eq("user_id", uid)
     rows = q.execute().data or []
