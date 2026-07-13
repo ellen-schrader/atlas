@@ -85,6 +85,11 @@ export default function MapDashboard() {
       qc.invalidateQueries({ queryKey: ["map-papers", mapId] });
     },
   });
+  const delMap = useMutation({
+    mutationFn: () => deleteMap(mapId!),
+    onSuccess: () => navigate("/maps"),
+    onError: (e) => window.alert(`Couldn’t delete the map — ${(e as Error).message}`),
+  });
   // Quick read toggle from a row: mark read, or clear back to unread. (Clearing
   // also drops a reading-list "to_read" on that paper — an accepted simplification.)
   const setRead = useMutation({
@@ -208,9 +213,7 @@ export default function MapDashboard() {
                 setEditing(false);
               }}
               onDelete={() => {
-                if (window.confirm(`Delete the map “${data.name}”?`)) {
-                  deleteMap(data.map_id).then(() => navigate("/maps"));
-                }
+                if (window.confirm(`Delete the map “${data.name}”?`)) delMap.mutate();
               }}
               saving={curate.isPending}
             />
