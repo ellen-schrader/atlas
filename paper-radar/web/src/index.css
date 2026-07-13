@@ -2,40 +2,112 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Redesign palette: cool neutrals biased toward the blue accent, one restrained
-   accent, dark-first with both themes first-class. Token *names* are stable so
-   components never need to change when values are tuned. */
+/* Self-hosted, not a CDN link: the CSP forbids external font hosts, and a system
+   serif stack resolves to Iowan on macOS but Georgia on Windows — a different
+   product per OS. Source Serif 4 (SIL OFL); see public/fonts/LICENSE.txt. */
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/source-serif-4-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/source-serif-4-600-italic.woff2") format("woff2");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Atlas palette. The lab studies the spatial architecture of tissue — they read
+   multiplexed images of cells in space all day, and the app's core artifact is a
+   spatial map of their literature. Those are the same picture, so the interface
+   is coloured like the images they read: a near-black imaging ground in dark, a
+   slide-glass ground in light, and a fluorophore-cyan accent rather than a
+   default SaaS blue.
+   Token *names* are stable, so components never change when values are tuned. */
 :root {
-  --bg: #f6f7f9;
+  --bg: #f1f3f2;
   --surface: #ffffff;
-  --surface-2: #f0f2f5;
-  --surface-3: #e7eaef;
-  --border: #e5e8ee;
-  --border-strong: #d3d8e1;
-  --fg: #1b2029;
-  --muted: #5b6472;
-  --faint: #7d8694;
-  --accent: #3a67f0;
-  --accent-weak: rgba(58, 103, 240, 0.09);
+  --surface-2: #e9ecec;
+  --surface-3: #dfe3e3;
+  --border: #dfe3e3;
+  --border-strong: #c8cfcf;
+  --fg: #12181a;
+  --muted: #576466;
+  --faint: #7f8b8c;
+  --accent: #0e8e8a;
+  --accent-weak: rgba(14, 142, 138, 0.10);
   --accent-fg: #ffffff;
-  --danger: #dc2626;
+  --danger: #c2412f;
+
+  /* Data channels — the fluorophore set from a multiplexed panel. These colour
+     DATA ONLY (map clusters, venues, themes), never chrome, so a colour on
+     screen always means something. Never use them for UI surfaces. */
+  --ch-1: #0f8f8b;
+  --ch-2: #c23c86;
+  --ch-3: #b4791a;
+  --ch-4: #2f8f52;
+  --ch-5: #6a5cd8;
+  --ch-6: #c8503a;
+  --ch-off: #b9c1c1;
+
+  /* Sequential ramps for the map: publication year and topic relevance. */
+  --year-1: #bdd8d7;
+  --year-2: #8ec6c3;
+  --year-3: #57ada9;
+  --year-4: #28938f;
+  --year-5: #0e7773;
+
+  --rel-1: #dfe4e4;
+  --rel-2: #bdd8d7;
+  --rel-3: #8ec6c3;
+  --rel-4: #57ada9;
+  --rel-5: #28938f;
+  --rel-6: #0e7773;
+  --rel-7: #075451;
+
   color-scheme: light;
 }
 
 .dark {
-  --bg: #0b0e14;
-  --surface: #12161e;
-  --surface-2: #191e28;
-  --surface-3: #222836;
-  --border: #232935;
-  --border-strong: #333a48;
-  --fg: #e7eaf0;
-  --muted: #a2aab8;
-  --faint: #7b8391;
-  --accent: #6b8bff;
-  --accent-weak: rgba(107, 139, 255, 0.14);
-  --accent-fg: #0b0e14;
-  --danger: #f87171;
+  --bg: #080b11;
+  --surface: #0f141c;
+  --surface-2: #161d27;
+  --surface-3: #1f2732;
+  --border: #1c242f;
+  --border-strong: #2c3743;
+  --fg: #e6ecec;
+  --muted: #9aa8aa;
+  --faint: #6f7c7e;
+  --accent: #2fd4cf;
+  --accent-weak: rgba(47, 212, 207, 0.13);
+  --accent-fg: #04100f;
+  --danger: #ef6a55;
+
+  --ch-1: #2fd4cf;
+  --ch-2: #e75fae;
+  --ch-3: #e0a63c;
+  --ch-4: #4ec97b;
+  --ch-5: #9a8cf5;
+  --ch-6: #f0705a;
+  --ch-off: #39434c;
+
+  --year-1: #184f95;
+  --year-2: #256abf;
+  --year-3: #289690;
+  --year-4: #2fbdb6;
+  --year-5: #5fdcd6;
+
+  --rel-1: #1a222b;
+  --rel-2: #1d4a4c;
+  --rel-3: #22706f;
+  --rel-4: #289690;
+  --rel-5: #2fbdb6;
+  --rel-6: #5fdcd6;
+  --rel-7: #a8f0ec;
+
   color-scheme: dark;
 }
 
@@ -55,9 +127,20 @@
   --color-accent-fg: var(--accent-fg);
   --color-danger: var(--danger);
 
+  /* data channels — charts and the map only, never chrome */
+  --color-ch-1: var(--ch-1);
+  --color-ch-2: var(--ch-2);
+  --color-ch-3: var(--ch-3);
+  --color-ch-4: var(--ch-4);
+  --color-ch-5: var(--ch-5);
+  --color-ch-6: var(--ch-6);
+  --color-ch-off: var(--ch-off);
+
   /* fonts */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  /* display face — headings and the wordmark; the sans stays the UI voice */
+  --font-serif: "Source Serif 4", "Iowan Old Style", Charter, Georgia, serif;
 
   /* type scale (semantic roles) — use as text-display / text-heading / … */
   --text-eyebrow: 0.6875rem;

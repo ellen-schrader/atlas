@@ -3,7 +3,6 @@ import { useState } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import {
   BookMarked,
-  Compass,
   Images,
   LayoutGrid,
   LibraryBig,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
+import { AtlasMark } from "@/components/Brand";
 import { FigureModalProvider } from "@/components/FigureModal";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
@@ -52,16 +52,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   );
 
 function BrandMark({ size = 7 }: { size?: 6 | 7 }) {
-  return (
-    <span
-      className={cn(
-        "grid place-items-center rounded-md bg-accent text-white",
-        size === 7 ? "h-7 w-7" : "h-6 w-6",
-      )}
-    >
-      <Compass size={size === 7 ? 16 : 14} />
-    </span>
-  );
+  return <AtlasMark size={size === 7 ? 24 : 21} className="text-accent" />;
 }
 
 export default function Layout({ session, team }: { session: Session; team: Team }) {
@@ -82,7 +73,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         >
           <Menu size={18} />
         </button>
-        <span className="flex items-center gap-2 font-semibold tracking-tight">
+        <span className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
           <BrandMark size={6} /> Atlas
         </span>
         <NotificationsBell userId={session.user.id} align="right" className="ml-auto" />
@@ -104,7 +95,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
           )}
         >
           <div className="flex items-center justify-between px-1">
-            <span className="flex items-center gap-2 font-semibold tracking-tight">
+            <span className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
               <BrandMark size={7} /> Atlas
             </span>
             <div className="flex items-center gap-1">

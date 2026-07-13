@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from "react";
-import { Compass } from "lucide-react";
 
+import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,10 +45,8 @@ export default function Login() {
   return (
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white">
-          <Compass size={17} />
-        </span>
-        <span className="text-base font-semibold tracking-tight">Atlas</span>
+        <AtlasMark size={24} className="text-accent" />
+        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
       </div>
 
       <h2 className="text-xl font-bold tracking-tight">

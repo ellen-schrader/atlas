@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
-import { Compass } from "lucide-react";
 
+import { AtlasMark } from "@/components/Brand";
 import { Cover } from "@/components/Cover";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -14,10 +14,8 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         <Cover seed="atlas-brand" className="absolute inset-0 h-full w-full opacity-25" />
         <div className="relative flex h-full flex-col justify-between p-10">
           <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-white">
-              <Compass size={20} />
-            </span>
-            <span className="text-lg font-semibold tracking-tight">Atlas</span>
+            <AtlasMark size={28} className="text-accent" />
+            <span className="font-serif text-xl font-semibold tracking-tight">Atlas</span>
           </div>
           <div className="max-w-sm">
             <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight">
