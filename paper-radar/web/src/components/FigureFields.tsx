@@ -5,6 +5,7 @@ import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { lookupLicense, resolveDoi } from "@/lib/licenses";
+import type { Figure } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** The metadata fields shared by the figure upload dialog and the inline edit
@@ -38,7 +39,9 @@ export function FigureFields({
   onCategory: (v: string) => void;
   paper: PickedPaper | null;
   onPaper: (v: PickedPaper | null) => void;
-  origin: "own" | "third_party";
+  // "style_card" only reaches this form via the edit path (cards are created over
+  // MCP); the toggle is then replaced by a static note and origin passes through.
+  origin: Figure["origin"];
   onOrigin: (v: "own" | "third_party") => void;
   sourceUrl: string;
   onSourceUrl: (v: string) => void;
@@ -66,7 +69,13 @@ export function FigureFields({
       </Field>
 
       <Field label="Image origin">
-        <OriginToggle value={origin} onChange={onOrigin} />
+        {origin === "style_card" ? (
+          <span className="text-sm text-muted">
+            Style card — a synthetic recreation; the origin can't change.
+          </span>
+        ) : (
+          <OriginToggle value={origin} onChange={onOrigin} />
+        )}
       </Field>
 
       <Field label="Category">

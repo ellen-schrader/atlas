@@ -8,13 +8,17 @@ palettes. See docs/MOODBOARD_MCP_PLAN.md.
 from __future__ import annotations
 
 import io
+import uuid
 
 from . import lab
 from .lab import LabError
+from .spec import DEFAULT_PALETTE, spec_seed
 
 BUCKET = "figures"
 
 # Explicit columns + the uploader profile and linked paper (for provenance).
+# Deliberately WITHOUT `spec`: no list/tool consumer reads it, and it would drag
+# a full JSON document per row into every board listing (and model context).
 FIGURE_COLUMNS = (
     "id, team_id, uploaded_by, storage_path, title, caption, category, paper_id, tags, "
     "width, height, mime_type, origin, source_url, license, attribution, created_at, "
@@ -84,6 +88,75 @@ def categories(team: dict) -> list[dict]:
 @lab.with_refresh
 def _download_raw(figure: dict) -> bytes:
     return lab.get_client().storage.from_(BUCKET).download(figure["storage_path"])
+
+
+@lab.with_refresh
+def add_style_card(
+    team: dict,
+    *,
+    spec: dict,
+    title: str,
+    category: str = "",
+    tags: list[str] | None = None,
+    source_url: str | None = None,
+    attribution: str | None = None,
+    paper_id: str | None = None,
+) -> dict:
+    """Create a style card: render the (validated) spec with synthetic data,
+    store the render in the figures bucket, insert the row (origin='style_card').
+
+    The render is seeded from the spec's content (spec_seed) — the same seed
+    preview_plot_spec uses — so the board shows exactly the image the user
+    approved, and the stored row (which carries the spec) can always reproduce
+    it. Mirrors the web upload's orphan handling: if the row insert fails, the
+    just-uploaded object is best-effort removed.
+    """
+    from . import render as figrender
+
+    uid = lab.current_user_id()
+    if not uid:
+        raise LabError("Couldn't determine your user id to attribute the style card to.")
+    figure_id = str(uuid.uuid4())
+    try:
+        png, width, height = figrender.render(spec, spec_seed(spec))
+    except Exception as exc:  # noqa: BLE001 — surface renderer failures cleanly
+        raise LabError(f"Could not render the spec: {exc}") from exc
+
+    path = f"{team['id']}/{figure_id}.png"
+    client = lab.get_client()
+    try:
+        client.storage.from_(BUCKET).upload(path, png, {"content-type": "image/png"})
+    except Exception as exc:  # noqa: BLE001
+        raise LabError(f"Could not store the rendered preview: {exc}") from exc
+
+    row = {
+        "id": figure_id,
+        "team_id": team["id"],
+        "uploaded_by": uid,
+        "storage_path": path,
+        "title": title,
+        "caption": "",
+        "category": category,
+        "tags": tags or [],
+        "width": width,
+        "height": height,
+        "mime_type": "image/png",
+        "file_size": len(png),
+        "origin": "style_card",
+        "spec": spec,
+        "source_url": source_url,
+        "attribution": attribution,
+        "paper_id": paper_id,
+    }
+    try:
+        rows = client.table("figures").insert(row).execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        try:
+            client.storage.from_(BUCKET).remove([path])
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            pass
+        raise LabError(f"Could not save the style card: {exc}") from exc
+    return rows[0] if rows else row
 
 
 def download(figure: dict) -> bytes:
@@ -223,8 +296,9 @@ def aggregate_palette(raws: list[bytes], n: int = 6) -> list[str]:
 
 # --- colour-vision-deficiency (CVD) safety -------------------------------------
 # A CVD-safe qualitative default (Paul Tol 'bright') to recommend when a palette
-# collides. Distinguishable under all three dichromacies by construction.
-SAFE_CYCLE = ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377"]
+# collides. Distinguishable under all three dichromacies by construction. Single
+# source of truth is spec.DEFAULT_PALETTE, which style cards also fall back to.
+SAFE_CYCLE = list(DEFAULT_PALETTE)
 
 # Machado et al. (2009) dichromacy simulation matrices, severity 1.0, applied in
 # LINEAR RGB. Rows are the R/G/B outputs; columns the R/G/B inputs.
@@ -335,10 +409,7 @@ def mplstyle(hexes: list[str], lab_name: str) -> str:
     look"); axis/text ink stays neutral. When the mood board is monochrome we ship
     a CVD-safe scientific default cycle rather than an all-white one."""
     fallback = not hexes
-    # Paul Tol 'bright' — a safe, colourful default when nothing could be derived.
-    cycle = [h.lstrip("#") for h in hexes] or [
-        "4477AA", "EE6677", "228833", "CCBB44", "66CCEE", "AA3377"
-    ]
+    cycle = [h.lstrip("#") for h in (hexes or SAFE_CYCLE)]
     ink = "222222"
     header = f"# Atlas mood-board style — {lab_name}"
     if fallback:
