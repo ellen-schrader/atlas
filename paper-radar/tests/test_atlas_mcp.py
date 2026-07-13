@@ -343,3 +343,17 @@ def test_parse_embedding_handles_json_string_and_list():
     assert lab._parse_embedding([0.1, 0.2]) == [0.1, 0.2]
     assert lab._parse_embedding(None) is None
     assert lab._parse_embedding("not-json") is None
+
+
+# --- citation key (for draft_related_work) ----------------------------------
+
+
+def test_citation_key_author_year():
+    pytest.importorskip("mcp")
+    from atlas_mcp import server
+
+    assert server._citation_key({"authors": ["Jane Doe", "Bo Li"], "year": 2021}) == "Doe et al., 2021"
+    assert server._citation_key({"authors": ["Alan Turing"], "year": 1950}) == "Turing, 1950"
+    assert server._citation_key({"authors": [], "year": None}) == "Unknown, n.d."
+    # a single-token name still yields a usable surname
+    assert server._citation_key({"authors": ["Aristotle"], "year": -350}) == "Aristotle, -350"

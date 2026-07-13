@@ -66,6 +66,14 @@ def _format_hit(h: dict) -> str:
     return "\n".join(lines)
 
 
+def _citation_key(p: dict) -> str:
+    """An author-year citation key like "Chen et al., 2021" (surname of first author)."""
+    authors = [a for a in (p.get("authors") or []) if a and a.strip()]
+    surname = authors[0].strip().split()[-1] if authors else "Unknown"
+    year = p.get("year") or "n.d."
+    return f"{surname} et al., {year}" if len(authors) > 1 else f"{surname}, {year}"
+
+
 def _render(hits: list[dict], empty: str) -> str:
     if not hits:
         return empty
@@ -153,7 +161,8 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
                 f"Recommended for you in {team['name']} (by your reading history):\n\n"
                 + _render(hits, ""),
             )
-        # Cold start (or no unseen matches): recency fallback, said plainly.
+        # No recommendations — either no reading history yet, or nothing unseen is
+        # left (e.g. you posted everything). Fall back to recency, said plainly.
         recent = lab.recent(team, _clamp(limit))
     except lab.LabError as exc:
         return f"Error: {exc}"
@@ -161,9 +170,177 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         return f"No papers in {team['name']} yet to recommend from."
     return _untrusted(
         "lab papers",
-        f"You have no reading history in {team['name']} yet, so here are the most "
-        f"recent papers instead:\n\n" + _render(recent, ""),
+        f"No personalised recommendations in {team['name']} right now (no reading "
+        "history yet, or you've already seen every paper) — here are the most recent "
+        "instead:\n\n" + _render(recent, ""),
     )
+
+
+@mcp.tool()
+def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) -> str:
+    """Find papers in your lab similar to a given one ("more like this").
+
+    Uses the anchor paper's embedding to rank the lab's other papers by semantic
+    similarity; falls back to a title keyword search if it has no embedding.
+
+    Args:
+        paper_id: The anchor paper (from search_lab_papers / list_recent_papers).
+        limit: Maximum number of similar papers (1-50).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        anchor = lab.get_post(team, paper_id)  # validates membership + gives the title
+        title = anchor["paper"].get("title") or paper_id
+        hits = lab.similar(team, paper_id, _clamp(limit))
+        note = ""
+        if hits is None:  # no embedding on the anchor → keyword fallback
+            note = " (matched on title keywords — the paper has no embedding)"
+            hits = [
+                h
+                for h in lab.search(team, title, "keyword", _clamp(limit))
+                if h["paper_id"] != paper_id
+            ][: _clamp(limit)]
+    except embeddings.EmbeddingError as exc:
+        return f"Semantic similarity is unavailable ({exc})."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return f"No other papers similar to “{title}” in {team['name']} yet."
+    return _untrusted("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
+
+
+@mcp.tool()
+def lab_digest(days: int = 7, team_id: str | None = None) -> str:
+    """Summarise recent activity in your lab: new papers, comments, and mentions.
+
+    Args:
+        days: How many days back to look (1-90).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        d = lab.digest(team, max(1, min(int(days), 90)))
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    papers = d["new_papers"]
+    parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
+    if papers:
+        parts.append(f"{len(papers)} new paper(s):")
+        parts.append(_render(papers, ""))
+    else:
+        parts.append("No new papers.")
+    parts.append("")
+    parts.append(f"{d['n_comments']} new comment(s) across the lab.")
+    if d["mentions"]:
+        titles = "; ".join(m["title"] for m in d["mentions"])
+        parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
+    return _untrusted("lab activity", "\n".join(parts))
+
+
+@mcp.tool()
+def novelty_check(
+    text: str | None = None, paper_id: str | None = None, team_id: str | None = None
+) -> str:
+    """Check whether your lab has already covered an idea, abstract, or paper.
+
+    Embeds the text (or reuses a paper's embedding), finds the closest existing
+    lab papers, and gives a novelty verdict. Scope is your lab's corpus only.
+
+    Args:
+        text: The idea or abstract to check (a sentence or paragraph).
+        paper_id: Or check an existing paper against the rest of the lab.
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        hits = lab.novelty(team, text=text, paper_id=paper_id, limit=5)
+    except embeddings.EmbeddingError as exc:
+        return f"A novelty check needs the embedding service ({exc})."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return (
+            f"Nothing comparable in {team['name']} — this looks novel to your lab "
+            "(note: its corpus may simply be small or lack embeddings)."
+        )
+    top = hits[0].get("similarity") or 0.0
+    if top >= 0.75:
+        verdict = "Closely related work already exists in your lab — likely NOT novel here."
+    elif top >= 0.6:
+        verdict = "Adjacent work exists in your lab — partially covered."
+    else:
+        verdict = "Only loosely related work found — this looks novel to your lab."
+    return _untrusted(
+        "lab papers",
+        f"{verdict} (closest similarity {top:.2f}, lab corpus only)\n\n"
+        "Closest existing papers:\n\n" + _render(hits, ""),
+    )
+
+
+@mcp.tool()
+def draft_related_work(
+    topic: str | None = None,
+    paper_id: str | None = None,
+    limit: int = 8,
+    team_id: str | None = None,
+) -> str:
+    """Gather your lab's relevant papers as sourced material for a Related Work section.
+
+    Returns a numbered, citation-keyed source list (title, authors, year, abstract,
+    deep link) drawn ONLY from your lab, plus guidance to synthesise prose that cites
+    each one. Write the section only from these sources — never invent citations.
+
+    Args:
+        topic: The subject to survey (semantic search over the lab).
+        paper_id: Or anchor on a specific paper (finds related lab work).
+        limit: Maximum number of sources (1-20).
+        team_id: Which lab, if you belong to more than one.
+    """
+    n = max(1, min(int(limit), 20))
+    try:
+        team = lab.resolve_team(team_id)
+        if paper_id:
+            hits = lab.similar(team, paper_id, n)
+            if hits is None:  # no embedding → keyword fallback on the title
+                anchor = lab.get_post(team, paper_id)
+                hits = [
+                    h
+                    for h in lab.search(team, anchor["paper"].get("title") or "", "keyword", n)
+                    if h["paper_id"] != paper_id
+                ]
+            subject = f"“{lab.get_post(team, paper_id)['paper'].get('title') or paper_id}”"
+        elif topic and topic.strip():
+            hits = lab.search(team, topic.strip(), "semantic", n)
+            subject = f"“{topic.strip()}”"
+        else:
+            return "Give me a topic or a paper_id to draft related work for."
+    except embeddings.EmbeddingError as exc:
+        return f"Semantic gathering needs the embedding service ({exc}). Try a paper_id or keywords."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return f"No lab papers matched {subject} — nothing to cite from {team['name']}."
+
+    sources = []
+    for i, h in enumerate(hits, 1):
+        p = h["paper"]
+        block = [f"[{i}] ({_citation_key(p)}) {p.get('title') or p.get('url')}"]
+        authors = ", ".join(p.get("authors") or [])
+        if authors:
+            block.append(authors)
+        if p.get("abstract"):
+            block.append(f"Abstract: {p['abstract']}")
+        block.append(lab.paper_link(p["id"]))
+        sources.append("\n".join(block))
+
+    guide = (
+        f"Draft a Related Work section on {subject} for {team['name']} using ONLY the "
+        f"{len(sources)} sources below. Cite each as (Author, Year) with its deep link; "
+        "group related work by theme; for each, state its contribution and how it "
+        "relates. Do not introduce any reference that isn't listed here.\n\n"
+    )
+    return guide + _untrusted("lab papers", "\n\n".join(sources))
 
 
 @mcp.tool()

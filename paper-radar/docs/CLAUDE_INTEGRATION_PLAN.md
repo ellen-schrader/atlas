@@ -63,6 +63,24 @@ structured fields, so Claude refers to papers cleanly.
 - `get_paper(paper_id)` — full metadata, DOI, abstract, tags, and the `?paper=<id>` link.
 - `list_recent_papers(limit=10)` — the lab feed, newest first.
 
+**Scientist tools** (read-only; see `docs/MCP_SCIENTIST_TOOLS_PLAN.md`):
+
+- `recommend_reading(limit=8)` — papers to read next, ranked by a numpy-free taste
+  centroid over the caller's read/reacted papers via the `recommend_papers` RPC;
+  cold-start / all-seen falls back to recency.
+- `similar_papers(paper_id, limit=8)` — "more like this" from a paper's stored
+  embedding via `match_papers`; keyword fallback when the anchor has no embedding.
+- `novelty_check(text? , paper_id?)` — closest lab papers to an idea/abstract/paper
+  with a novelty verdict (lab corpus only).
+- `lab_digest(days=7)` — recent activity: new papers, comment count, your mentions.
+- `draft_related_work(topic? , paper_id?, limit=8)` — gathers the lab's relevant
+  papers as citation-keyed, deep-linked source material to synthesise a cited
+  Related Work section from (never invents references).
+
+**Mood board:** `list_moodboard`, `moodboard_categories`, `get_figure_image`,
+`get_figure_palette`, `get_moodboard_style`, and `check_colorblind_safety` (simulates
+deuteranopia/protanopia/tritanopia and flags indistinguishable colour pairs).
+
 P3 adds one **write** tool (DONE):
 
 - `post_paper(url, note?, mention?, team_id?, confirm=false)` — share a paper into the

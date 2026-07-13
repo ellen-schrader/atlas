@@ -353,6 +353,126 @@ def recommend(team: dict, limit: int) -> list[dict]:
     return hydrated
 
 
+def _match_by_vector(client: Client, team: dict, vec: list[float], limit: int) -> list[dict]:
+    """Hydrated posts in `team` nearest to `vec` (match_papers RPC), most-similar
+    first. Shared by the semantic search / similar / novelty paths."""
+    matches = (
+        client.rpc("match_papers", {"p_team": team["id"], "p_query": vec, "p_limit": limit})
+        .execute()
+        .data
+        or []
+    )
+    if not matches:
+        return []
+    sim = {m["post_id"]: m["similarity"] for m in matches}
+    posts = (
+        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
+    )
+    hydrated = _hydrate(client, posts)
+    for h in hydrated:
+        h["similarity"] = sim.get(h["id"])
+    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
+    return hydrated
+
+
+def _paper_embedding(client: Client, paper_id: str) -> list[float] | None:
+    rows = (
+        client.table("papers").select("embedding").eq("id", paper_id).limit(1).execute().data or []
+    )
+    return _parse_embedding(rows[0]["embedding"]) if rows else None
+
+
+@with_refresh
+def similar(team: dict, paper_id: str, limit: int) -> list[dict] | None:
+    """Papers in `team` most similar to `paper_id` (by its stored embedding), the
+    anchor itself excluded. None when the anchor has no embedding (caller falls
+    back to keyword search). match_papers is team-scoped, so results stay in-lab;
+    the caller validates the anchor belongs to the lab (for a clean error + title)."""
+    client = get_client()
+    vec = _paper_embedding(client, paper_id)
+    if vec is None:
+        return None
+    hits = _match_by_vector(client, team, vec, limit + 1)  # +1 to absorb the anchor
+    return [h for h in hits if h["paper_id"] != paper_id][:limit]
+
+
+@with_refresh
+def novelty(
+    team: dict, *, text: str | None = None, paper_id: str | None = None, limit: int = 5
+) -> list[dict]:
+    """The lab papers closest to `text` (embedded) or to `paper_id` (its embedding),
+    most-similar first, for a 'have we covered this?' check. Anchor excluded."""
+    client = get_client()
+    if paper_id:
+        get_post(team, paper_id)
+        vec = _paper_embedding(client, paper_id)
+        if vec is None:
+            raise LabError("That paper has no embedding to compare against.")
+    elif text and text.strip():
+        vec = embeddings.embed_query(text.strip())
+    else:
+        raise LabError("Give me some text or a paper_id to check.")
+    hits = _match_by_vector(client, team, vec, limit + (1 if paper_id else 0))
+    if paper_id:
+        hits = [h for h in hits if h["paper_id"] != paper_id]
+    return hits[:limit]
+
+
+@with_refresh
+def digest(team: dict, days: int) -> dict:
+    """Lab activity in the last `days`: new posts (hydrated), new-comment count, and
+    the papers the caller was @-mentioned on. All RLS-scoped to the lab."""
+    from datetime import datetime, timedelta, timezone
+
+    client = get_client()
+    tid = team["id"]
+    uid = current_user_id()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    posts = (
+        client.table("paper_posts")
+        .select(POST_COLUMNS + ", posted_by")
+        .eq("team_id", tid)
+        .gte("posted_at", cutoff)
+        .order("posted_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    new_papers = _hydrate(client, posts)
+
+    comments = (
+        client.table("comments")
+        .select("id", count="exact")
+        .eq("team_id", tid)
+        .gte("created_at", cutoff)
+        .execute()
+    )
+    n_comments = comments.count or 0
+
+    my_mentions: list[dict] = []
+    if uid:
+        rows = (
+            client.table("mentions")
+            .select("paper_id, created_at")
+            .eq("team_id", tid)
+            .eq("mentioned_user", uid)
+            .gte("created_at", cutoff)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            ids = list({r["paper_id"] for r in rows})
+            papers = (
+                client.table("papers").select("id, title").in_("id", ids).execute().data or []
+            )
+            by_id = {p["id"]: p.get("title") for p in papers}
+            my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
+
+    return {"days": days, "new_papers": new_papers, "n_comments": n_comments, "mentions": my_mentions}
+
+
 @with_refresh
 def get_post(team: dict, paper_id: str) -> dict:
     """One paper as posted in `team`, hydrated with its metadata."""
