@@ -1,8 +1,16 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  LayoutGrid,
+  ListFilter,
+  Plus,
+  Rows3,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 
+import { AddPaperDialog } from "@/components/AddPaperDialog";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { PaperCard } from "@/components/PaperCard";
@@ -23,9 +31,9 @@ import {
 } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { useTeamTags } from "@/hooks/useTeamTags";
-import { useTeamVenues } from "@/hooks/useTeamVenues";
-import { postPaper, semanticSearch } from "@/lib/api";
+import { type TagCount, useTeamTags } from "@/hooks/useTeamTags";
+import { type VenueCount, useTeamVenues } from "@/hooks/useTeamVenues";
+import { semanticSearch } from "@/lib/api";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -39,6 +47,18 @@ type SearchMode = "keyword" | "semantic";
  *  Shared with CardSkeletons so the skeleton can't drift from the real layout. */
 const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4";
 
+const STATUS_LABEL: Record<PaperStatus, string> = {
+  unread: "Unread",
+  to_read: "Saved to read",
+  reading: "Reading",
+  read: "Read",
+};
+
+const SORT_LABEL: Record<PaperSort, string> = {
+  shared: "Recently shared",
+  published: "Recently published",
+};
+
 export default function Papers() {
   const { team, userId } = useAppContext();
   const [mode, setMode] = useState<SearchMode>("keyword");
@@ -48,6 +68,7 @@ export default function Papers() {
   const [filters, setFilters] = useState<PaperFilters>(NO_FILTERS);
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
+  const [adding, setAdding] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // ⌘K / Ctrl-K focuses the search box.
@@ -108,31 +129,48 @@ export default function Papers() {
     return () => io.disconnect();
   }, [mode, search.hasNextPage, search.isFetchingNextPage, search]);
 
-  function clearFilters() {
+  const nFilters = activeFilterCount(filters);
+
+  function clearAll() {
     setRawQuery("");
     setFilters(NO_FILTERS);
     setSemanticQuery("");
+    setMode("keyword");
   }
 
-  const nFilters = activeFilterCount(filters);
+  /** Re-run the current query by meaning. Semantic search is a *refinement* of a
+   *  search you already typed, not a mode you must pick before typing — which is
+   *  what the old two-button toggle forced you to do. */
+  function searchByMeaning() {
+    const q = rawQuery.trim();
+    if (!q) return;
+    setFilters(NO_FILTERS);
+    setMode("semantic");
+    setSemanticQuery(q);
+  }
+
+  function backToKeyword() {
+    setMode("keyword");
+    setSemanticQuery("");
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    // In semantic mode Enter re-runs the (re-embedded) query; in keyword mode the
+    // list is already live, so Enter is a no-op that shouldn't reload the page.
     if (mode === "semantic") setSemanticQuery(rawQuery.trim());
   }
 
   // Which results view to show.
-  const state: "loading" | "error" | "prompt" | "empty" | "results" =
+  const state: "loading" | "error" | "empty" | "results" =
     mode === "semantic"
-      ? semanticQuery.length === 0
-        ? "prompt"
-        : semantic.isFetching
-          ? "loading"
-          : semantic.isError
-            ? "error"
-            : posts.length === 0
-              ? "empty"
-              : "results"
+      ? semantic.isFetching
+        ? "loading"
+        : semantic.isError
+          ? "error"
+          : posts.length === 0
+            ? "empty"
+            : "results"
       : search.isLoading
         ? "loading"
         : search.isError
@@ -141,8 +179,12 @@ export default function Papers() {
             ? "empty"
             : "results";
 
+  const narrowed = Boolean(query || nFilters > 0 || mode === "semantic");
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
+    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-8">
+      {/* Header. Adding a paper is the one *write* action on this page, so it gets
+          the one primary button — instead of a permanent form parked above the list. */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Papers</h1>
@@ -150,27 +192,15 @@ export default function Papers() {
             Everything shared in {team.name} — search, filter, and open to discuss.
           </p>
         </div>
-        <Link
-          to="/import"
-          className="shrink-0 rounded-control border border-border-strong px-3 py-1.5 text-sm font-semibold text-fg transition hover:border-accent hover:text-accent"
-        >
-          Import a .bib
-        </Link>
+        <Button onClick={() => setAdding(true)} className="shrink-0">
+          <Plus size={15} /> Add paper
+        </Button>
       </div>
 
-      <PostPaperBar teamId={team.id} />
-
-      {/* toolbar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="inline-flex shrink-0 overflow-hidden rounded-control border border-border">
-          <ModeButton active={mode === "keyword"} onClick={() => setMode("keyword")}>
-            <Search size={14} /> Keyword
-          </ModeButton>
-          <ModeButton active={mode === "semantic"} onClick={() => setMode("semantic")}>
-            <Sparkles size={14} /> Semantic
-          </ModeButton>
-        </div>
-        <form onSubmit={onSubmit} className="relative min-w-[220px] flex-1">
+      {/* One toolbar row: search, filters, sort, view. Everything that was a
+          permanently-expanded control is now a menu that opens when asked. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <form onSubmit={onSubmit} className="relative min-w-[240px] flex-1">
           <Search
             size={15}
             className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
@@ -178,28 +208,68 @@ export default function Papers() {
           <Input
             ref={searchRef}
             value={rawQuery}
-            onChange={(e) => setRawQuery(e.target.value)}
-            placeholder={
-              mode === "keyword"
-                ? "Search title, author, abstract, tag…"
-                : "Describe a topic, then press Enter…"
-            }
+            onChange={(e) => {
+              setRawQuery(e.target.value);
+              // Typing again after a semantic search means a new search, not a
+              // stale ranked list sitting under a changed query.
+              if (mode === "semantic") backToKeyword();
+            }}
+            placeholder="Search papers by title, author, abstract, or tag…"
             className="pl-9 pr-12"
           />
-          <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] text-faint pointer-fine:block">
-            ⌘K
-          </kbd>
+          {rawQuery ? (
+            <button
+              type="button"
+              onClick={() => {
+                setRawQuery("");
+                backToKeyword();
+                searchRef.current?.focus();
+              }}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded text-faint hover:text-fg"
+            >
+              <X size={14} />
+            </button>
+          ) : (
+            <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] text-faint pointer-fine:block">
+              ⌘K
+            </kbd>
+          )}
         </form>
-        {/* Sort matters most right after a bulk import, where every post shares the
-            same posted_at and "recently shared" degenerates into an arbitrary order. */}
-        <div className="inline-flex shrink-0 overflow-hidden rounded-control border border-border">
-          <ModeButton active={sort === "shared"} onClick={() => setSort("shared")}>
-            Recently shared
-          </ModeButton>
-          <ModeButton active={sort === "published"} onClick={() => setSort("published")}>
-            Recently published
-          </ModeButton>
-        </div>
+
+        <FilterMenu
+          filters={filters}
+          setFilters={setFilters}
+          tags={tags ?? []}
+          venues={venues ?? []}
+          disabled={mode === "semantic"}
+        />
+
+        <Menu
+          label={SORT_LABEL[sort]}
+          title="Sort"
+          disabled={mode === "semantic"}
+          width="w-56"
+        >
+          {(close) => (
+            <>
+              <MenuTitle>Sort by</MenuTitle>
+              {(Object.keys(SORT_LABEL) as PaperSort[]).map((s) => (
+                <MenuOption
+                  key={s}
+                  selected={sort === s}
+                  onClick={() => {
+                    setSort(s);
+                    close();
+                  }}
+                >
+                  {SORT_LABEL[s]}
+                </MenuOption>
+              ))}
+            </>
+          )}
+        </Menu>
+
         <div className="inline-flex overflow-hidden rounded-control border border-border">
           <ViewButton active={view === "cards"} onClick={() => setView("cards")} label="Card view">
             <LayoutGrid size={15} />
@@ -210,100 +280,72 @@ export default function Papers() {
         </div>
       </div>
 
-      {/* Filters. One tag filter isn't enough at 425 papers (UX review), so: your
-          reading status, the venue, and the tag — with one place to clear them all. */}
-      {mode === "keyword" && (
-        <div className="-mt-1 flex flex-wrap items-center gap-2">
-          <Select
-            label="Status"
-            value={filters.status ?? ""}
-            onChange={(v) =>
-              setFilters((f) => ({ ...f, status: (v || null) as PaperStatus | null }))
-            }
-            options={[
-              { value: "", label: "Any status" },
-              { value: "unread", label: "Unread" },
-              { value: "to_read", label: "Saved to read" },
-              { value: "reading", label: "Reading" },
-              { value: "read", label: "Read" },
-            ]}
-          />
-          <Select
-            label="Venue"
-            value={filters.venue ?? ""}
-            onChange={(v) => setFilters((f) => ({ ...f, venue: v || null }))}
-            options={[
-              { value: "", label: "Any venue" },
-              ...(venues ?? []).map((v) => ({
-                value: v.venue,
-                label: `${v.venue} (${v.count})`,
-              })),
-              // team_venues caps at 30. Say so, rather than let the menu imply these
-              // are all the venues the lab has.
-              ...((venues?.length ?? 0) >= 30
-                ? [{ value: "", label: "— top 30 venues shown —", disabled: true }]
-                : []),
-            ]}
-          />
+      {/* What's on screen, and how to undo it. Active filters are chips *here*,
+          where they describe the result — not a wall of every tag in the lab. */}
+      <div className="flex min-h-[26px] flex-wrap items-center gap-x-3 gap-y-2">
+        <ResultCount
+          mode={mode}
+          loading={state === "loading"}
+          total={total}
+          shown={posts.length}
+          narrowed={narrowed}
+        />
 
-          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+        {mode === "keyword" &&
+          (Object.keys(filters) as (keyof PaperFilters)[])
+            .filter((k) => filters[k])
+            .map((k) => (
+              <ActiveChip
+                key={k}
+                onRemove={() => setFilters((f) => ({ ...f, [k]: null }))}
+              >
+                {k === "status" ? STATUS_LABEL[filters.status as PaperStatus] : filters[k]}
+              </ActiveChip>
+            ))}
 
-          <FilterChip active={filters.tag === null} onClick={() => setFilters((f) => ({ ...f, tag: null }))}>
-            All tags
-          </FilterChip>
-          {(tags ?? []).map((t) => (
-            <FilterChip
-              key={t.tag}
-              active={filters.tag === t.tag}
-              onClick={() =>
-                setFilters((f) => ({ ...f, tag: f.tag === t.tag ? null : t.tag }))
-              }
-            >
-              {t.tag}
-            </FilterChip>
-          ))}
+        {mode === "semantic" && (
+          <ActiveChip onRemove={backToKeyword} tone="accent">
+            <Sparkles size={11} className="mr-1 inline" />
+            Ranked by meaning
+          </ActiveChip>
+        )}
 
-          {nFilters > 0 && (
-            <button
-              type="button"
-              onClick={() => setFilters(NO_FILTERS)}
-              className="ml-1 inline-flex items-center gap-1 text-xs font-medium text-muted underline hover:text-fg"
-            >
-              <X size={12} /> Clear {nFilters} {nFilters === 1 ? "filter" : "filters"}
-            </button>
-          )}
-        </div>
-      )}
+        {/* The escape hatch from semantic search's biggest weakness: it can't do
+            exact strings. And the way in — offered once you've typed, so nobody has
+            to know what "semantic" means before they can search at all. */}
+        {mode === "keyword" && rawQuery.trim() && (
+          <button
+            type="button"
+            onClick={searchByMeaning}
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
+          >
+            <Sparkles size={12} /> Search by meaning instead
+          </button>
+        )}
 
-      {/* count label */}
-      {mode === "keyword" && typeof total === "number" && !search.isLoading && (
-        <div className="-mb-2 -mt-2 text-xs text-faint tabular-nums">
-          {total} {total === 1 ? "paper" : "papers"}
-          {(query || nFilters > 0) && " match"}
-        </div>
-      )}
-      {mode === "semantic" && state === "results" && (
-        <div className="-mb-2 -mt-2 text-xs text-faint tabular-nums">
-          {posts.length} {posts.length === 1 ? "paper" : "papers"} by relevance
-        </div>
-      )}
+        {narrowed && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="ml-auto text-xs font-medium text-muted underline underline-offset-2 hover:text-fg"
+          >
+            Reset
+          </button>
+        )}
+      </div>
 
       {/* results */}
       {state === "loading" ? (
         <CardSkeletons />
       ) : state === "error" ? (
         <ErrorState onRetry={() => (mode === "semantic" ? semantic.refetch() : search.refetch())} />
-      ) : state === "prompt" ? (
-        <SemanticPrompt />
       ) : state === "empty" ? (
-        mode === "semantic" ? (
-          <MessageState
-            title="No papers match that description"
-            body="Try describing the topic differently, or switch to keyword search."
-          />
-        ) : (
-          <EmptyState filtered={Boolean(query || nFilters > 0)} onClear={clearFilters} />
-        )
+        <EmptyState
+          mode={mode}
+          narrowed={narrowed}
+          onClear={clearAll}
+          onAdd={() => setAdding(true)}
+        />
       ) : view === "cards" ? (
         <div className={CARD_GRID}>
           {posts.map((post) => (
@@ -316,6 +358,7 @@ export default function Papers() {
               teamId={team.id}
               userId={userId}
               bookmarked={bookmarked.has(post.papers.id)}
+              read={readIds?.has(post.papers.id) ?? false}
             />
           ))}
         </div>
@@ -335,31 +378,302 @@ export default function Papers() {
         <div className="py-4 text-center text-sm text-muted">Loading more…</div>
       )}
       <div ref={sentinel} aria-hidden className="h-px" />
+
+      <AddPaperDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        teamId={team.id}
+        onAdded={(paperId) => {
+          setAdding(false);
+          openPaper(paperId);
+        }}
+      />
     </div>
   );
 }
 
-function ModeButton({
+/** "55 papers" / "12 of 55" / "18 by relevance" — one line that always says what
+ *  the list below actually is. */
+function ResultCount({
+  mode,
+  loading,
+  total,
+  shown,
+  narrowed,
+}: {
+  mode: SearchMode;
+  loading: boolean;
+  total?: number;
+  shown: number;
+  narrowed: boolean;
+}) {
+  if (loading) return <span className="text-xs text-faint">Searching…</span>;
+  if (mode === "semantic") {
+    return (
+      <span className="text-xs text-faint tabular-nums">
+        {shown} {shown === 1 ? "paper" : "papers"} by relevance
+      </span>
+    );
+  }
+  if (typeof total !== "number") return null;
+  return (
+    <span className="text-xs text-faint tabular-nums">
+      {total} {total === 1 ? "paper" : "papers"}
+      {narrowed && " match"}
+    </span>
+  );
+}
+
+/** Status + venue + tag, behind one button with a count. Three always-visible
+ *  controls (two of which could list 30 venues and every tag in the lab) is the
+ *  single biggest source of noise on this page. */
+function FilterMenu({
+  filters,
+  setFilters,
+  tags,
+  venues,
+  disabled,
+}: {
+  filters: PaperFilters;
+  setFilters: (fn: (f: PaperFilters) => PaperFilters) => void;
+  tags: TagCount[];
+  venues: VenueCount[];
+  disabled?: boolean;
+}) {
+  const n = activeFilterCount(filters);
+  return (
+    <Menu
+      title="Filters"
+      disabled={disabled}
+      width="w-72"
+      active={n > 0}
+      label={
+        <>
+          <ListFilter size={14} />
+          Filters
+          {n > 0 && (
+            <span className="ml-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-fg tabular-nums">
+              {n}
+            </span>
+          )}
+        </>
+      }
+    >
+      {() => (
+        <div className="flex flex-col gap-3 p-3">
+          <FilterSelect
+            label="Your reading status"
+            value={filters.status ?? ""}
+            onChange={(v) => setFilters((f) => ({ ...f, status: (v || null) as PaperStatus | null }))}
+            options={[
+              { value: "", label: "Any status" },
+              ...(Object.keys(STATUS_LABEL) as PaperStatus[]).map((s) => ({
+                value: s,
+                label: STATUS_LABEL[s],
+              })),
+            ]}
+          />
+          <FilterSelect
+            label="Venue"
+            value={filters.venue ?? ""}
+            onChange={(v) => setFilters((f) => ({ ...f, venue: v || null }))}
+            options={[
+              { value: "", label: "Any venue" },
+              ...venues.map((v) => ({ value: v.venue, label: `${v.venue} (${v.count})` })),
+              // team_venues caps at 30. Say so, rather than let the menu imply these
+              // are all the venues the lab has.
+              ...(venues.length >= 30
+                ? [{ value: "", label: "— top 30 venues shown —", disabled: true }]
+                : []),
+            ]}
+          />
+          <FilterSelect
+            label="Tag"
+            value={filters.tag ?? ""}
+            onChange={(v) => setFilters((f) => ({ ...f, tag: v || null }))}
+            options={[
+              { value: "", label: "Any tag" },
+              ...tags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.n})` })),
+            ]}
+          />
+          {n > 0 && (
+            <button
+              type="button"
+              onClick={() => setFilters(() => NO_FILTERS)}
+              className="self-start text-xs font-medium text-muted underline underline-offset-2 hover:text-fg"
+            >
+              Clear {n} {n === 1 ? "filter" : "filters"}
+            </button>
+          )}
+        </div>
+      )}
+    </Menu>
+  );
+}
+
+/** A button that opens a panel below it. Closes on Escape, on a click outside, and
+ *  on choosing something. */
+function Menu({
+  label,
+  title,
+  width,
   active,
+  disabled,
+  children,
+}: {
+  label: ReactNode;
+  title: string;
+  width: string;
+  active?: boolean;
+  disabled?: boolean;
+  children: (close: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // A disabled control that stays open would float over results it can't affect.
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        title={title}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "inline-flex h-9 items-center gap-1.5 rounded-control border px-3 text-sm font-medium transition",
+          "disabled:cursor-not-allowed disabled:opacity-40",
+          active
+            ? "border-accent/50 bg-accent-weak text-accent"
+            : "border-border text-muted hover:border-border-strong hover:text-fg",
+        )}
+      >
+        {label}
+      </button>
+      {open && (
+        <div
+          className={cn(
+            "absolute right-0 top-full z-30 mt-1.5 overflow-hidden rounded-card border border-border bg-surface shadow-xl",
+            width,
+          )}
+        >
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuTitle({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-3 pb-1 pt-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+      {children}
+    </div>
+  );
+}
+
+function MenuOption({
+  selected,
   onClick,
   children,
 }: {
-  active: boolean;
+  selected: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
-      aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition",
-        active ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
+        "flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-surface-2",
+        selected ? "font-medium text-accent" : "text-fg",
       )}
     >
       {children}
+      {selected && <span aria-hidden>✓</span>}
     </button>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string; disabled?: boolean }[];
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-fg transition hover:border-border-strong focus:border-accent focus:outline-none"
+      >
+        {options.map((o, i) => (
+          <option key={`${o.value}-${i}`} value={o.value} disabled={o.disabled}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ActiveChip({
+  children,
+  onRemove,
+  tone = "default",
+}: {
+  children: ReactNode;
+  onRemove: () => void;
+  tone?: "default" | "accent";
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-chip border px-2 py-0.5 text-xs font-medium",
+        tone === "accent"
+          ? "border-accent/50 bg-accent-weak text-accent"
+          : "border-border bg-surface-2 text-muted",
+      )}
+    >
+      {children}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="Remove filter"
+        className="-mr-0.5 grid h-4 w-4 place-items-center rounded-full hover:bg-black/10"
+      >
+        <X size={11} />
+      </button>
+    </span>
   );
 }
 
@@ -383,31 +697,6 @@ function ViewButton({
       className={cn(
         "grid h-9 w-9 place-items-center transition",
         active ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-control border px-3 py-1.5 font-mono text-xs tracking-tight transition",
-        active
-          ? "border-accent/50 bg-accent-weak text-accent"
-          : "border-border text-muted hover:border-border-strong hover:text-fg",
       )}
     >
       {children}
@@ -504,63 +793,17 @@ function PaperTable({
   );
 }
 
-function PostPaperBar({ teamId }: { teamId: string }) {
-  const qc = useQueryClient();
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setMsg(null);
-    try {
-      const r = await postPaper(url.trim(), teamId);
-      setMsg((r.already_posted ? "Already in your lab: " : "Posted: ") + (r.paper.title ?? r.paper.url));
-      setUrl("");
-      await qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
-      await qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
-      await qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={submit} className="flex flex-col gap-2">
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="Paste a paper URL — arXiv, DOI, PubMed, or a publisher page"
-          disabled={busy}
-          required
-        />
-        <Button type="submit" disabled={busy || !url.trim()} className="w-full sm:w-auto">
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-          {busy ? "Posting…" : "Post"}
-        </Button>
-      </div>
-      {msg && <p className="text-xs text-muted">{msg}</p>}
-      {error && <p className="text-xs text-danger">{error}</p>}
-    </form>
-  );
-}
-
 function CardSkeletons() {
   return (
     <div className={CARD_GRID}>
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="overflow-hidden rounded-card border border-border bg-surface">
-          <div className="h-[132px] w-full animate-pulse bg-surface-2" />
+          <div className="h-1.5 w-full animate-pulse bg-surface-2" />
           <div className="flex flex-col gap-3 p-4">
             <div className="h-2.5 w-20 animate-pulse rounded bg-surface-2" />
             <div className="h-4 w-4/5 animate-pulse rounded bg-surface-2" />
             <div className="h-3 w-1/2 animate-pulse rounded bg-surface-2" />
+            <div className="h-3 w-2/3 animate-pulse rounded bg-surface-2" />
           </div>
         </div>
       ))}
@@ -568,38 +811,41 @@ function CardSkeletons() {
   );
 }
 
-function MessageState({ title, body }: { title: string; body: string }) {
+function EmptyState({
+  mode,
+  narrowed,
+  onClear,
+  onAdd,
+}: {
+  mode: SearchMode;
+  narrowed: boolean;
+  onClear: () => void;
+  onAdd: () => void;
+}) {
+  const title =
+    mode === "semantic"
+      ? "No papers match that description"
+      : narrowed
+        ? "No papers match"
+        : "No papers yet";
+  const body =
+    mode === "semantic"
+      ? "Try describing the topic differently, or go back to keyword search."
+      : narrowed
+        ? "Try a different search term, or clear the filters."
+        : "Add the first one — every paper your lab shares teaches Atlas its taste.";
+
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
       <div className="font-semibold text-fg">{title}</div>
-      <p className="text-sm text-muted">{body}</p>
-    </div>
-  );
-}
-
-function SemanticPrompt() {
-  return (
-    <MessageState
-      title="Search by meaning"
-      body="Describe a topic in your own words and press Enter — results are ranked by how close each paper is, not by keywords."
-    />
-  );
-}
-
-function EmptyState({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
-      <div className="font-semibold text-fg">
-        {filtered ? "No papers match your filters" : "No papers yet"}
-      </div>
-      <p className="text-sm text-muted">
-        {filtered
-          ? "Try a different search term or clear the tag filter."
-          : "Post one above — every paper your lab shares teaches Atlas its taste."}
-      </p>
-      {filtered && (
+      <p className="max-w-sm text-sm text-muted">{body}</p>
+      {narrowed ? (
         <Button variant="secondary" size="sm" onClick={onClear}>
-          Clear filters
+          Reset
+        </Button>
+      ) : (
+        <Button size="sm" onClick={onAdd}>
+          <Plus size={14} /> Add a paper
         </Button>
       )}
     </div>
@@ -615,42 +861,5 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
         Retry
       </Button>
     </div>
-  );
-}
-
-/** A compact labelled select — the filter bar's workhorse. Native, so it's keyboard-
- *  and mobile-friendly for free. */
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string; disabled?: boolean }[];
-}) {
-  const active = value !== "";
-  return (
-    <label className="inline-flex items-center gap-1.5">
-      <span className="sr-only">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={cn(
-          "rounded-chip border px-2 py-1 text-xs font-medium transition",
-          active
-            ? "border-accent bg-accent-weak text-accent"
-            : "border-border bg-surface text-muted hover:text-fg",
-        )}
-      >
-        {options.map((o, i) => (
-          <option key={`${o.value}-${i}`} value={o.value} disabled={o.disabled}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

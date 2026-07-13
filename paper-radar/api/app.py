@@ -77,10 +77,33 @@ class ResolvedPaper(BaseModel):
     source: str = "unknown"
 
 
+class PaperFields(BaseModel):
+    """Metadata the user has seen and approved in the Add-paper dialog.
+
+    Sent back with the post so the server stores exactly what was on screen. It
+    also covers the case the resolver cannot: a bot-walled publisher (Cell,
+    ScienceDirect) returns an empty record, and the user types the title and
+    authors in by hand.
+    """
+
+    title: str | None = None
+    authors: list[str] = []
+    venue: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    abstract: str | None = None
+    keywords: list[str] = []
+    # Where the metadata on screen came from: a resolver ("crossref", …) if the
+    # user accepted it as-is, "manual" if they typed or corrected it.
+    source: str = "manual"
+
+
 class PostRequest(BaseModel):
     url: str
     team_id: str
     note: str | None = None
+    # Omitted (the CLI, older clients) => resolve the URL server-side, as before.
+    fields: PaperFields | None = None
 
 
 class PostResponse(BaseModel):
@@ -138,17 +161,17 @@ class Cluster(BaseModel):
 
 class OverviewStats(BaseModel):
     over_time: list[dict]  # [{month: "2026-03", count: N}]
-    by_venue: list[dict]   # [{venue, count}] top venues
-    by_year: list[dict]    # [{year, count}]
-    by_lab: list[dict]     # [{lab, count}] top last-authors (proxy for source lab)
-    by_tag: list[dict]     # [{tag, count}] top LLM tags
+    by_venue: list[dict]  # [{venue, count}] top venues
+    by_year: list[dict]  # [{year, count}]
+    by_lab: list[dict]  # [{lab, count}] top last-authors (proxy for source lab)
+    by_tag: list[dict]  # [{tag, count}] top LLM tags
 
 
 class OverviewResponse(BaseModel):
     points: list[OverviewPoint]
     clusters: list[Cluster]
     stats: OverviewStats
-    total: int     # posts in the lab
+    total: int  # posts in the lab
     embedded: int  # posts whose paper has an embedding (points returned)
 
 
@@ -169,6 +192,39 @@ def _resolved(meta: PaperMetadata, url: str, url_norm: str) -> ResolvedPaper:
     return ResolvedPaper(url=meta.url, url_norm=url_norm, **fields)
 
 
+def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
+    """Backfill a canonical paper that was stored without a title. Returns True if repaired.
+
+    A bot-walled URL posted before this dialog existed is a row whose title is
+    null and which therefore renders as a bare URL everywhere. If someone now
+    supplies the title by hand, adopt it — otherwise the manual path would
+    silently do nothing for the very papers it exists to fix. Only ever fills a
+    blank; it never overwrites metadata a resolver already got right.
+    """
+    if row.get("title") or not meta.title:
+        return False
+    patch = {
+        "title": meta.title,
+        "metadata_source": meta.source,
+        # Repairing the title makes the paper embeddable for the first time.
+        "embedded_at": None,
+    }
+    for key in ("authors", "keywords"):
+        value = getattr(meta, key)
+        if value:
+            patch[key] = value
+    for key in ("venue", "year", "doi", "abstract"):
+        value = getattr(meta, key)
+        if value is not None:
+            patch[key] = value
+    try:
+        service_client().table("papers").update(patch).eq("id", row["id"]).execute()
+    except Exception as exc:  # a unique-DOI clash shouldn't fail the post
+        log.warning("repairing untitled paper %s failed: %s", row["id"], exc)
+        return False
+    return True
+
+
 def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:
     """Find the canonical paper (by url_norm, then DOI) or insert it. Service role.
 
@@ -178,16 +234,26 @@ def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bo
     svc = service_client()
 
     found = (
-        svc.table("papers").select("id, embedded_at").eq("url_norm", url_norm).limit(1).execute()
+        svc.table("papers")
+        .select("id, title, embedded_at")
+        .eq("url_norm", url_norm)
+        .limit(1)
+        .execute()
     )
     if found.data:
-        return found.data[0]["id"], found.data[0]["embedded_at"] is None
+        row = found.data[0]
+        return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
     if meta.doi:
         by_doi = (
-            svc.table("papers").select("id, embedded_at").eq("doi", meta.doi).limit(1).execute()
+            svc.table("papers")
+            .select("id, title, embedded_at")
+            .eq("doi", meta.doi)
+            .limit(1)
+            .execute()
         )
         if by_doi.data:
-            return by_doi.data[0]["id"], by_doi.data[0]["embedded_at"] is None
+            row = by_doi.data[0]
+            return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
 
     row = {
         "url": url,
@@ -317,7 +383,15 @@ def create_post(
 
     url = _clean_url(req.url)
     url_norm = _normalize_key(url)
-    meta = fetch_metadata(url)
+    # The web dialog resolves first and posts back what the user approved, so we
+    # store what they saw — and never re-fetch (which would overwrite a hand-typed
+    # title with the empty record a bot-walled publisher returns). Clients that
+    # send no fields keep the original resolve-on-post behaviour.
+    meta = (
+        PaperMetadata(url=url, **req.fields.model_dump())
+        if req.fields is not None
+        else fetch_metadata(url)
+    )
     paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
     post_id, already = _create_post(token, req.team_id, paper_id, user_id, req.note)
 
@@ -445,13 +519,21 @@ def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tupl
     # Filter to the loaded papers (not the whole team) — fewer rows, and avoids
     # a truncated count if a busy lab hits PostgREST's max-rows.
     rx = (
-        uc.table("reactions").select("paper_id").eq("team_id", team_id)
-        .in_("paper_id", paper_ids).execute().data
+        uc.table("reactions")
+        .select("paper_id")
+        .eq("team_id", team_id)
+        .in_("paper_id", paper_ids)
+        .execute()
+        .data
         or []
     )
     cm = (
-        uc.table("comments").select("paper_id").eq("team_id", team_id)
-        .in_("paper_id", paper_ids).execute().data
+        uc.table("comments")
+        .select("paper_id")
+        .eq("team_id", team_id)
+        .in_("paper_id", paper_ids)
+        .execute()
+        .data
         or []
     )
     for r in rx:
@@ -507,14 +589,7 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
         "paper_id, posted_at, "
         "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
     )
-    rows = (
-        uc.table("paper_posts")
-        .select(cols)
-        .eq("team_id", team_id)
-        .execute()
-        .data
-        or []
-    )
+    rows = uc.table("paper_posts").select(cols).eq("team_id", team_id).execute().data or []
     total = len(rows)
     stats = _compute_stats(rows)
 
@@ -607,19 +682,34 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
         weights[paper_id] = weights.get(paper_id, 0.0) + w
 
     for r in (
-        uc.table("reactions").select("paper_id, emoji, created_at")
-        .eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+        uc.table("reactions")
+        .select("paper_id, emoji, created_at")
+        .eq("team_id", team_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+        or []
     ):
         base = _W_SKEPTIC if r.get("emoji") == "🤔" else _W_REACTION
         add(r["paper_id"], base * _recency_decay(_parse_ts(r.get("created_at")), now))
     for c in (
-        uc.table("comments").select("paper_id, created_at")
-        .eq("team_id", team_id).eq("author_id", user_id).execute().data or []
+        uc.table("comments")
+        .select("paper_id, created_at")
+        .eq("team_id", team_id)
+        .eq("author_id", user_id)
+        .execute()
+        .data
+        or []
     ):
         add(c["paper_id"], _W_COMMENT * _recency_decay(_parse_ts(c.get("created_at")), now))
     for s in (
-        uc.table("paper_status").select("paper_id, status, updated_at")
-        .eq("team_id", team_id).eq("user_id", user_id).execute().data or []
+        uc.table("paper_status")
+        .select("paper_id, status, updated_at")
+        .eq("team_id", team_id)
+        .eq("user_id", user_id)
+        .execute()
+        .data
+        or []
     ):
         base = _W_BOOKMARK if s.get("status") == "to_read" else _W_READ
         add(s["paper_id"], base * _recency_decay(_parse_ts(s.get("updated_at")), now))
@@ -925,7 +1015,7 @@ def _require_member(token: str, team_id: str) -> str:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     member = (
-        user_client(token)      # as the caller, so RLS answers the question honestly
+        user_client(token)  # as the caller, so RLS answers the question honestly
         .table("team_members")
         .select("user_id")
         .eq("team_id", team_id)
@@ -977,8 +1067,7 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
     by_doi: dict[str, str] = {}
     for batch in _chunked(list(set(norms.values()))):
         rows = (
-            svc.table("papers").select("id, url_norm").in_("url_norm", batch).execute().data
-            or []
+            svc.table("papers").select("id, url_norm").in_("url_norm", batch).execute().data or []
         )
         by_norm |= {r["url_norm"]: r["id"] for r in rows}
     for batch in _chunked(list(set(dois))):
@@ -989,13 +1078,18 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
     posted: set[str] = set()
     for batch in _chunked(known_ids):
         rows = (
-            svc.table("paper_posts").select("paper_id")
-            .eq("team_id", team_id).in_("paper_id", batch).execute().data or []
+            svc.table("paper_posts")
+            .select("paper_id")
+            .eq("team_id", team_id)
+            .in_("paper_id", batch)
+            .execute()
+            .data
+            or []
         )
         posted |= {r["paper_id"] for r in rows}
 
     out: list[BibEntryPreview] = []
-    seen: set[str] = set()   # within-file dedupe key (doi, else normalised url)
+    seen: set[str] = set()  # within-file dedupe key (doi, else normalised url)
 
     for e in entries:
         ident = e.identifier
@@ -1031,8 +1125,16 @@ def bibtex_preflight(
     for key, reason in parsed.rejected:
         previews.append(
             BibEntryPreview(
-                key=key, title=None, authors=[], venue=None, year=None, published_at=None,
-                doi=None, url=None, status="rejected", reason=reason,
+                key=key,
+                title=None,
+                authors=[],
+                venue=None,
+                year=None,
+                published_at=None,
+                doi=None,
+                url=None,
+                status="rejected",
+                reason=reason,
             )
         )
 
@@ -1095,9 +1197,9 @@ def bibtex_import(
             paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
 
             if e.published_at:
-                svc.table("papers").update(
-                    {"published_at": e.published_at.isoformat()}
-                ).eq("id", paper_id).is_("published_at", "null").execute()
+                svc.table("papers").update({"published_at": e.published_at.isoformat()}).eq(
+                    "id", paper_id
+                ).is_("published_at", "null").execute()
 
             _post_id, already = _create_post(
                 token, req.team_id, paper_id, user_id, None, source="bibtex"
