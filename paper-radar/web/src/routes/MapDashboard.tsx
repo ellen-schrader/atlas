@@ -225,12 +225,14 @@ export default function MapDashboard() {
             </div>
           ) : (
             <>
-              {/* Top band: the map (hero, left) beside a continuous rail — the
-                  summary, sub-themes and labs — so the right column isn't starved. */}
-              <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+              {/* Top band: the map (hero, left) beside its own structural analytics —
+                  sub-themes and labs, which the map colours and cross-filters. Both are
+                  fixed-height, so the band stays balanced whatever the summary length.
+                  items-start keeps the map at its natural (fixed-aspect) size. */}
+              <div className="grid items-start gap-4 lg:grid-cols-[1.5fr_1fr]">
                 <div className="lg:order-1">
                   {data.points.length >= 2 ? (
-                    <section className="h-full rounded-card border border-border bg-surface p-5">
+                    <section className="rounded-card border border-border bg-surface p-5">
                       <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
                         The map
                       </h2>
@@ -262,13 +264,6 @@ export default function MapDashboard() {
                   )}
                 </div>
                 <aside className="flex flex-col gap-4 lg:order-2">
-                  <WhatsNew
-                    summary={summary.data}
-                    loading={summary.isLoading}
-                    generating={regen.isPending}
-                    onGenerate={() => regen.mutate()}
-                    titleOf={titleOf}
-                  />
                   <RankPanel title="Sub-themes">
                     <RankBars
                       items={data.clusters.map((c) => ({ label: c.label, count: c.size, tone: c.id }))}
@@ -298,6 +293,17 @@ export default function MapDashboard() {
                   )}
                 </aside>
               </div>
+
+              {/* The AI digest spans full width. Its length is the one unbounded
+                  variable on this page, so keeping it out of the band above means it can
+                  never stretch the map or leave a well of whitespace beside it. */}
+              <WhatsNew
+                summary={summary.data}
+                loading={summary.isLoading}
+                generating={regen.isPending}
+                onGenerate={() => regen.mutate()}
+                titleOf={titleOf}
+              />
 
               {/* Important papers — full width below the band: the reading queue. */}
               <section className="rounded-card border border-border bg-surface p-5">
@@ -594,31 +600,38 @@ function WhatsNew({
           <Loader2 size={14} className="animate-spin" /> Reading the recent papers…
         </p>
       ) : has && summary ? (
-        <>
-          <p className="text-sm leading-relaxed text-fg">{summary.text}</p>
+        // Full-width card: keep the prose at a readable measure on the left and move
+        // the cited papers into a sidebar on the right, so the extra width is used
+        // rather than stretching lines to an unreadable length or sitting empty.
+        <div className="lg:flex lg:gap-8">
+          <div className="lg:max-w-[68ch] lg:flex-1">
+            <p className="text-sm leading-relaxed text-fg">{summary.text}</p>
+            <p className="mt-2.5 text-xs text-faint">
+              {summary.ai ? "Synthesized from" : "Based on"} {summary.n_papers} of the lab’s papers
+              {summary.ai
+                ? " · grounded in them, nothing invented"
+                : " · add an Anthropic key for an AI synthesis"}
+              {summary.generated_at ? ` · ${formatRelative(summary.generated_at)}` : ""}.
+            </p>
+          </div>
           {sources.length > 0 && (
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-faint">Sources:</span>
-              {sources.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => openPaper(s.id)}
-                  className="rounded-chip border border-border bg-surface-2 px-2 py-0.5 text-accent transition hover:border-accent"
-                >
-                  {truncate(s.title, 40)}
-                </button>
-              ))}
+            <div className="mt-3 lg:mt-0 lg:w-56 lg:shrink-0">
+              <p className="mb-1.5 text-xs font-medium text-faint">Sources</p>
+              <div className="flex flex-wrap gap-1.5">
+                {sources.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => openPaper(s.id)}
+                    className="rounded-chip border border-border bg-surface-2 px-2 py-0.5 text-xs text-accent transition hover:border-accent"
+                  >
+                    {truncate(s.title, 40)}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
-          <p className="mt-2.5 text-xs text-faint">
-            {summary.ai ? "Synthesized from" : "Based on"} {summary.n_papers} of the lab’s papers
-            {summary.ai
-              ? " · grounded in them, nothing invented"
-              : " · add an Anthropic key for an AI synthesis"}
-            {summary.generated_at ? ` · ${formatRelative(summary.generated_at)}` : ""}.
-          </p>
-        </>
+        </div>
       ) : (
         <div className="flex flex-col items-start gap-2.5">
           <p className="text-sm text-muted">
