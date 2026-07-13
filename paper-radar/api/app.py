@@ -247,6 +247,16 @@ class _PerUserRateLimiter:
 # far below what would make the endpoint useful as a scanner.
 _resolve_limiter = _PerUserRateLimiter(max_events=30, window_seconds=60.0)
 
+# Paid outbound work a caller can trigger repeatedly on a shared key: query
+# embeddings (Voyage) and the map summary (Anthropic, heavier). Generous but
+# bounded, so one account can't drain the quota/budget for every tenant.
+_query_limiter = _PerUserRateLimiter(max_events=40, window_seconds=60.0)
+_summary_limiter = _PerUserRateLimiter(max_events=10, window_seconds=60.0)
+
+# Upper bound on the (service-role) similarity scan, so /similarity can't be used
+# to force an unbounded cosine scan of a whole team corpus. Covers any real lab.
+_SIMILARITY_MAX_PAPERS = 10_000
+
 
 def _validated_fetch_url(raw: str) -> str:
     """Clean + SSRF-check a URL we're about to fetch, as a 400 on rejection.
@@ -547,12 +557,14 @@ def semantic_search(
     The query is embedded here (the embedding key is server-side only); the
     ranking RPC runs as the caller, so RLS scopes results to their labs.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     query = req.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query must not be empty")
 
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         query_vector = embeddings.embed_query(query)
     except embeddings.EmbeddingError as exc:
@@ -606,7 +618,8 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
     see no posts in the team — then run the (uncapped) ranking with the service
     client, scoped to that same team_id. A non-member gets an empty result.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     query = req.query.strip()
     if not query:
@@ -619,6 +632,7 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
     if not visible:  # not a member (RLS returns nothing), or an empty lab
         return SimilarityResponse(similarities={})
 
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         query_vector = embeddings.embed_query(query)
     except embeddings.EmbeddingError as exc:
@@ -626,7 +640,10 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
 
     rows = (
         service_client()
-        .rpc("match_papers", {"p_team": req.team_id, "p_query": query_vector, "p_limit": 100000})
+        .rpc(
+            "match_papers",
+            {"p_team": req.team_id, "p_query": query_vector, "p_limit": _SIMILARITY_MAX_PAPERS},
+        )
         .execute()
         .data
         or []
@@ -990,23 +1007,34 @@ def get_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSumm
 
 
 @app.post("/maps/{map_id}/summary", response_model=MapSummary)
-def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+def make_map_summary(
+    map_id: str, force: bool = False, token: str = Depends(require_token)
+) -> MapSummary:
     """Generate (and cache) a grounded, cited summary of the map's recent papers.
 
     On demand only — never on page load — so the model cost is paid when a member
     asks. Any member of a visible map may refresh this shared summary, so the cache
     write uses the service client after RLS has confirmed the caller can see the map.
     """
-    if not get_user_id(token):
+    user_id = get_user_id(token)
+    if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("team_id, seed").eq("id", map_id).limit(1).execute().data or []
+        uc.table("maps").select("team_id, seed, ai_summary").eq("id", map_id).limit(1).execute().data
+        or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     team_id, seed = rows[0]["team_id"], rows[0]["seed"]
+
+    # Return the cached summary unless the caller explicitly forces a refresh —
+    # POST previously re-called the LLM (Anthropic) on every request.
+    cached = rows[0].get("ai_summary")
+    if cached and not force:
+        return MapSummary(**cached)
+    _summary_limiter.check(user_id)  # bound the paid LLM call
 
     members = (
         uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
@@ -1220,6 +1248,7 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
         return ProfileResponse(ok=True, embedded=False)
     if not get_api_settings().voyage_api_key:
         return ProfileResponse(ok=True, embedded=False)  # md saved; vector left as-is
+    _query_limiter.check(user_id)  # bound the paid embedding call
     try:
         # The profile describes what the user wants to read — embed it as a query
         # (papers are documents), the retrieval-tuned pairing for profile→paper.
