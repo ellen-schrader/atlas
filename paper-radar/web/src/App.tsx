@@ -7,6 +7,7 @@ import { useSession } from "@/hooks/useSession";
 import Dashboard from "@/routes/Dashboard";
 import Layout from "@/routes/Layout";
 import Login from "@/routes/Login";
+import Connect from "@/routes/Connect";
 import MapView from "@/routes/Map";
 import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
@@ -63,6 +64,7 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />
+        <Route path="/connect" element={<Connect />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
