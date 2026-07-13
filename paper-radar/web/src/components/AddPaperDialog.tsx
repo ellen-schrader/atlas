@@ -40,13 +40,45 @@ const EMPTY: PaperFields = {
  *  it's "try the DOI"; typing it all in is only the last resort. */
 type Step = "url" | "recover" | "review" | "done";
 
-/** Accept a bare DOI, a `doi:` prefix, or a full doi.org URL — people paste all three. */
-function doiUrl(input: string): string | null {
+/** Accept a bare DOI, a `doi:` prefix, or a full doi.org URL — people paste all three.
+ *  Returns the bare DOI, which is what `papers.doi` dedupes on: storing the doi.org
+ *  URL there instead would never match the same paper added by anyone else. */
+function bareDoi(input: string): string | null {
   const doi = input
     .trim()
     .replace(/^doi:\s*/i, "")
     .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
-  return /^10\.\d{4,9}\/\S+$/.test(doi) ? `https://doi.org/${doi}` : null;
+  return /^10\.\d{4,9}\/\S+$/.test(doi) ? doi : null;
+}
+
+function doiUrl(input: string): string | null {
+  const doi = bareDoi(input);
+  return doi ? `https://doi.org/${doi}` : null;
+}
+
+/** What we'll actually send — the same trimming and DOI normalisation the server sees.
+ *  Used both to build the payload and to tell whether the user changed anything. */
+function toPayload(fields: PaperFields, authorsText: string): PaperFields {
+  return {
+    ...fields,
+    title: fields.title?.trim() || null,
+    venue: fields.venue?.trim() || null,
+    // Normalise a pasted doi.org URL down to the bare DOI; keep anything unrecognised
+    // as typed rather than silently dropping it.
+    doi: bareDoi(fields.doi ?? "") ?? (fields.doi?.trim() || null),
+    abstract: fields.abstract?.trim() || null,
+    authors: authorsText
+      .split("\n")
+      .map((a) => a.trim())
+      .filter(Boolean),
+  };
+}
+
+/** Everything except provenance — comparing this to what the resolver gave us is how
+ *  we know whether the record is still the resolver's or has become the user's. */
+function metaKey(p: PaperFields): string {
+  const { source: _source, ...rest } = p;
+  return JSON.stringify(rest);
 }
 
 export function AddPaperDialog({
@@ -69,6 +101,8 @@ export function AddPaperDialog({
   const [fields, setFields] = useState<PaperFields>(EMPTY);
   const [authorsText, setAuthorsText] = useState("");
   const [note, setNote] = useState("");
+  /** metaKey() of what the resolver returned; null when nothing was resolved. */
+  const [baseline, setBaseline] = useState<string | null>(null);
 
   const [looking, setLooking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -94,6 +128,7 @@ export function AddPaperDialog({
     setFields(EMPTY);
     setAuthorsText("");
     setNote("");
+    setBaseline(null);
     setError(null);
     setDuplicate(null);
     setAdded(null);
@@ -114,7 +149,7 @@ export function AddPaperDialog({
    *  user actually pasted when the metadata came from its DOI instead — that link is
    *  what their lab will click, and `_upsert_paper` still dedupes on the DOI. */
   function applyResolved(resolved: Awaited<ReturnType<typeof resolvePaper>>) {
-    setFields({
+    const next: PaperFields = {
       title: resolved.title ?? "",
       authors: resolved.authors ?? [],
       venue: resolved.venue ?? "",
@@ -123,8 +158,12 @@ export function AddPaperDialog({
       abstract: resolved.abstract ?? "",
       keywords: resolved.keywords ?? [],
       source: resolved.source,
-    });
-    setAuthorsText((resolved.authors ?? []).join("\n"));
+    };
+    const authors = (resolved.authors ?? []).join("\n");
+    setFields(next);
+    setAuthorsText(authors);
+    // Remember exactly what the resolver said, so an edit downstream can be detected.
+    setBaseline(metaKey(toPayload(next, authors)));
     setStep("review");
   }
 
@@ -193,30 +232,24 @@ export function AddPaperDialog({
     }
   }
 
-  /** Last resort: type the record out. Keeps whatever URL and DOI we already have. */
+  /** Last resort: type the record out. Keeps whatever URL and DOI we already have.
+   *  No baseline — nothing here came from a resolver, so it's "manual" whatever they do. */
   function enterByHand() {
-    setFields({ ...EMPTY, doi: doiUrl(doi) ? doi.trim() : "", source: "manual" });
+    setFields({ ...EMPTY, doi: bareDoi(doi) ?? "", source: "manual" });
     setAuthorsText("");
+    setBaseline(null);
     setError(null);
     setStep("review");
   }
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const authors = authorsText
-      .split("\n")
-      .map((a) => a.trim())
-      .filter(Boolean);
-    // A title the user edited is no longer the resolver's record — say so honestly,
-    // so `metadata_source` doesn't credit Crossref for something a human typed.
-    const payload: PaperFields = {
-      ...fields,
-      title: fields.title?.trim() || null,
-      venue: fields.venue?.trim() || null,
-      doi: fields.doi?.trim() || null,
-      abstract: fields.abstract?.trim() || null,
-      authors,
-    };
+    const draft = toPayload(fields, authorsText);
+    // A record the user edited is no longer the resolver's, so don't let
+    // `metadata_source` credit Crossref for something a human typed. No baseline
+    // (the by-hand path) means it was theirs from the start.
+    const edited = baseline === null || metaKey(draft) !== baseline;
+    const payload: PaperFields = { ...draft, source: edited ? "manual" : draft.source };
     setSaving(true);
     setError(null);
     try {
@@ -505,9 +538,11 @@ export function AddPaperDialog({
                 onClick={() => {
                   setStep("url");
                   setUrl("");
+                  setDoi("");
                   setFields(EMPTY);
                   setAuthorsText("");
                   setNote("");
+                  setBaseline(null);
                   setAdded(null);
                 }}
               >

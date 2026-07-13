@@ -21,11 +21,12 @@ import logging
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import Annotated, Literal
 
 import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
@@ -77,6 +78,19 @@ class ResolvedPaper(BaseModel):
     source: str = "unknown"
 
 
+# Where a paper's metadata came from. Client-supplied, so it's an enum, not free
+# text — `metadata_source` is provenance, and a caller must not be able to write
+# "crossref" onto a record it invented.
+MetadataSource = Literal[
+    "arxiv", "crossref", "pubmed", "europepmc", "citation_meta", "manual", "unknown"
+]
+
+# List bounds cap the number of items, not their size — so bound the items too, or a
+# single 100MB author name still gets through.
+Author = Annotated[str, StringConstraints(max_length=300)]
+Keyword = Annotated[str, StringConstraints(max_length=200)]
+
+
 class PaperFields(BaseModel):
     """Metadata the user has seen and approved in the Add-paper dialog.
 
@@ -84,24 +98,29 @@ class PaperFields(BaseModel):
     also covers the case the resolver cannot: a bot-walled publisher (Cell,
     ScienceDirect) returns an empty record, and the user types the title and
     authors in by hand.
+
+    Every field is bounded. These land in `papers` verbatim, so without limits one
+    member could write an arbitrarily large abstract — the same hazard
+    MAX_BIBTEX_BYTES guards on the import path.
     """
 
-    title: str | None = None
-    authors: list[str] = []
-    venue: str | None = None
-    year: int | None = None
-    doi: str | None = None
-    abstract: str | None = None
-    keywords: list[str] = []
-    # Where the metadata on screen came from: a resolver ("crossref", …) if the
-    # user accepted it as-is, "manual" if they typed or corrected it.
-    source: str = "manual"
+    title: str | None = Field(default=None, max_length=2_000)
+    authors: list[Author] = Field(default=[], max_length=1_000)
+    venue: str | None = Field(default=None, max_length=500)
+    # papers.year is int4; an out-of-range value would fail the insert as a 500.
+    year: int | None = Field(default=None, ge=1000, le=2200)
+    doi: str | None = Field(default=None, max_length=255)
+    abstract: str | None = Field(default=None, max_length=100_000)
+    keywords: list[Keyword] = Field(default=[], max_length=200)
+    # A resolver ("crossref", …) if the user accepted what it found as-is;
+    # "manual" if they typed or corrected any of it.
+    source: MetadataSource = "manual"
 
 
 class PostRequest(BaseModel):
-    url: str
+    url: str = Field(max_length=2_000)
     team_id: str
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=5_000)
     # Omitted (the CLI, older clients) => resolve the URL server-side, as before.
     fields: PaperFields | None = None
 
@@ -376,10 +395,13 @@ def resolve(req: ResolveRequest) -> ResolvedPaper:
 def create_post(
     req: PostRequest, background: BackgroundTasks, token: str = Depends(require_token)
 ) -> PostResponse:
-    """Post a paper into a lab (JWT-verified; RLS enforces lab membership)."""
-    user_id = get_user_id(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    """Post a paper into a lab (JWT-verified; membership checked before any write)."""
+    # Checked up front, not left to RLS on the paper_post insert below. `_upsert_paper`
+    # runs first and writes `papers` with the service role — and since it can now
+    # *repair* an existing row (not just insert a new one), an RLS denial arriving
+    # afterwards would be too late: a non-member's metadata would already be on a row
+    # every other lab sharing that paper can see.
+    user_id = _require_member(token, req.team_id)
 
     url = _clean_url(req.url)
     url_norm = _normalize_key(url)

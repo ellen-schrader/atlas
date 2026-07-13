@@ -358,7 +358,9 @@ export default function Papers() {
               teamId={team.id}
               userId={userId}
               bookmarked={bookmarked.has(post.papers.id)}
-              read={readIds?.has(post.papers.id) ?? false}
+              // Undefined while the query is in flight — `?? false` would claim every
+              // card is unread for a frame, which is the one thing the dot mustn't do.
+              read={readIds ? readIds.has(post.papers.id) : undefined}
             />
           ))}
         </div>

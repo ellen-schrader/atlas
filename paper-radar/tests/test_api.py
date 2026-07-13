@@ -214,7 +214,7 @@ def _stub_post(monkeypatch, seen: dict):
     """Wire /posts up to nothing: capture the metadata it would store, write nothing."""
     import api.app as app_mod
 
-    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "user-1")
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
@@ -267,7 +267,7 @@ def test_posting_without_fields_still_resolves_server_side(monkeypatch):
     from paper_radar.ingest.metadata import PaperMetadata
 
     seen: dict = {}
-    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "user-1")
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
@@ -288,6 +288,82 @@ def test_posting_without_fields_still_resolves_server_side(monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert seen["meta"].title == "Resolved by the server"
+
+
+def test_posting_to_a_lab_you_are_not_in_writes_nothing(monkeypatch):
+    """`_upsert_paper` runs with the service role and can now *repair* an existing
+    `papers` row, not just insert one. If membership were left to RLS on the paper_post
+    insert (which happens after), a non-member's hand-typed metadata would already be
+    on a row every other lab sharing that paper can see by the time the 403 lands."""
+    import api.app as app_mod
+
+    def _no_writes(*_a, **_k):
+        raise AssertionError("nothing may be written before membership is checked")
+
+    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "attacker")
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_writes)
+    monkeypatch.setattr(app_mod, "_create_post", _no_writes)
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_writes)
+
+    class _NoMembership:
+        def table(self, _n):
+            return self
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": []})()  # not a member of anything
+
+    monkeypatch.setattr(app_mod, "user_client", lambda _t: _NoMembership())
+
+    resp = client.post(
+        "/posts",
+        json={
+            "url": "https://arxiv.org/abs/2401.01234",
+            "team_id": "someone-elses-lab",
+            "fields": {"title": "spam", "source": "manual"},
+        },
+        headers={"Authorization": "Bearer forged"},
+    )
+    assert resp.status_code == 403
+    assert "not a member" in resp.json()["detail"].lower()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": "x" * 2_001},
+        {"abstract": "x" * 100_001},
+        {"authors": ["a" * 301]},  # one oversized item, not just too many
+        {"authors": ["a"] * 1_001},
+        {"year": 99_999_999_999},  # papers.year is int4 — would 500 on insert
+        {"source": "crossref-but-i-typed-it"},  # provenance is an enum, not free text
+    ],
+)
+def test_paper_fields_are_bounded(monkeypatch, fields):
+    """These land in `papers` verbatim, so an unbounded field is an unbounded write —
+    the same hazard MAX_BIBTEX_BYTES already guards on the import path."""
+    import api.app as app_mod
+
+    def _no_writes(*_a, **_k):
+        raise AssertionError("a rejected payload must not reach the database")
+
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_writes)
+
+    resp = client.post(
+        "/posts",
+        json={"url": "https://arxiv.org/abs/2401.01234", "team_id": "t", "fields": fields},
+        headers={"Authorization": "Bearer good"},
+    )
+    assert resp.status_code == 422, f"{fields} was accepted"
 
 
 def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
