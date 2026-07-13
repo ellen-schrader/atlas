@@ -198,11 +198,19 @@ export default function MapDashboard() {
                 {papers.isLoading ? (
                   <p className="py-6 text-center text-sm text-faint">Loading papers…</p>
                 ) : shown.length ? (
-                  <ul className="flex flex-col">
-                    {shown.map((p) => (
-                      <PaperRow key={p.paper_id} p={p} />
-                    ))}
-                  </ul>
+                  <>
+                    {/* A long topic has hundreds of members — cap the height and
+                        scroll rather than letting the list run off the page. */}
+                    <ul className="-mr-1 flex max-h-[22rem] flex-col overflow-y-auto pr-1">
+                      {shown.map((p) => (
+                        <PaperRow key={p.paper_id} p={p} />
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs text-faint">
+                      {shown.length} paper{shown.length === 1 ? "" : "s"}
+                      {shown.length > 6 ? " · scroll for more" : ""}
+                    </p>
+                  </>
                 ) : (
                   <p className="py-6 text-center text-sm text-faint">
                     {unreadOnly ? "Nothing unread here — you’re caught up." : "No papers match."}
