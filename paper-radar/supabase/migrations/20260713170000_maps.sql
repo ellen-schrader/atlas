@@ -48,6 +48,9 @@ create policy maps_delete on public.maps for delete
     to authenticated using (created_by = auth.uid());
 
 grant select, insert, update, delete on public.maps to authenticated;
+-- The API caches the AI summary (maps.ai_summary) via the service role after it has
+-- RLS-checked the caller can see the map, so the backend role needs table privileges.
+grant select, insert, update, delete on public.maps to service_role;
 
 -- === membership =============================================================
 -- The live member set: the map's team posts ranked by cosine similarity to the

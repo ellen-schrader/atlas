@@ -421,7 +421,9 @@ interface Scaled extends OverviewPoint {
   py: number;
 }
 
-function Scatter({
+// Exported so the scoped map dashboard (/maps/:id) can reuse the exact same
+// scatter — points, cluster hulls, legend with glyphs, hover, and click-to-open.
+export function Scatter({
   points,
   clusters,
   colorBy,

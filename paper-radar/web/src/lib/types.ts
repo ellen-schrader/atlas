@@ -135,3 +135,57 @@ export interface OverviewData {
   total: number; // posts in the lab
   embedded: number; // posts with an embedded paper (points returned)
 }
+
+/** A saved topic map (its definition + metadata; not its members). */
+export interface MapDoc {
+  id: string;
+  team_id: string;
+  created_by: string;
+  name: string;
+  seed: string;
+  visibility: "lab" | "private";
+  created_at: string;
+  updated_at: string;
+}
+
+/** The scoped overview for one map: an OverviewData over just its members, plus
+ *  the map's identity and a freshness count. */
+export interface MapOverviewData extends OverviewData {
+  map_id: string;
+  name: string;
+  seed: string;
+  visibility: string;
+  new_this_week: number;
+}
+
+/** One member paper in a map's ranked list, with the caller's read-state. */
+export interface MapPaper {
+  post_id: string;
+  paper_id: string;
+  title: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  similarity: number | null; // relevance to the seed
+  reactions: number;
+  comments: number;
+  read_status: "to_read" | "reading" | "read" | null;
+  posted_at: string | null;
+}
+
+export interface MapPapersData {
+  total: number;
+  papers: MapPaper[];
+  labs: { lab: string; count: number }[];
+}
+
+/** An AI (or fallback) summary of a map's recent developments. `ai` is false when
+ *  it's the no-key recency blurb; `text` is empty when none has been generated. */
+export interface MapSummary {
+  text: string;
+  cited_ids: string[];
+  n_papers: number;
+  ai: boolean;
+  generated_at: string | null;
+}

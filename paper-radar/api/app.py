@@ -20,7 +20,7 @@ import json
 import logging
 from collections import Counter
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import numpy as np
@@ -33,6 +33,7 @@ from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
 from . import embeddings, enrichment, maps
+from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .config import get_api_settings
 from .deps import require_token
@@ -594,25 +595,20 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
     )
 
 
-@app.get("/overview", response_model=OverviewResponse)
-def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
-    """Insights overview for a lab: 2-D layout + named clusters + stats (RLS-scoped).
+# Explicit columns for the overview: the post date + the paper's metadata and
+# embedding. Shared by the whole-lab overview and the scoped map overview.
+_OVERVIEW_COLS = (
+    "paper_id, posted_at, "
+    "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
+)
 
-    The layout (t-SNE) + clustering + cluster names are cached per team by the
-    embedded set; engagement and stats are computed fresh so they stay live.
-    """
-    if not get_user_id(token):
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    uc = user_client(token)
-    cols = (
-        "paper_id, posted_at, "
-        "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
-    )
-    rows = uc.table("paper_posts").select(cols).eq("team_id", team_id).execute().data or []
+def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:
+    """Turn paper_posts rows (with joined papers) into the 2-D layout + clusters +
+    stats. `cached_layout` keys on the papers' content signature, so passing a
+    *subset* (a map's members) yields that subset's own layout and sub-themes."""
     total = len(rows)
     stats = _compute_stats(rows)
-
     papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
     if not papers:
         return OverviewResponse(points=[], clusters=[], stats=stats, total=total, embedded=0)
@@ -620,7 +616,6 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
 
     point_by_id, clusters = overview_mod.cached_layout(team_id, papers)
     eng = _engagement_counts(uc, team_id, [p["id"] for p in papers])
-
     points = [
         OverviewPoint(
             paper_id=p["id"],
@@ -645,6 +640,271 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
         total=total,
         embedded=len(papers),
     )
+
+
+@app.get("/overview", response_model=OverviewResponse)
+def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
+    """Insights overview for a lab: 2-D layout + named clusters + stats (RLS-scoped).
+
+    The layout (t-SNE) + clustering + cluster names are cached per team by the
+    embedded set; engagement and stats are computed fresh so they stay live.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+    rows = (
+        uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).execute().data or []
+    )
+    return _build_overview(uc, team_id, rows)
+
+
+class MapOverviewResponse(OverviewResponse):
+    map_id: str
+    name: str
+    seed: str
+    visibility: str
+    new_this_week: int  # members posted in the last 7 days
+
+
+@app.get("/maps/{map_id}/overview", response_model=MapOverviewResponse)
+def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOverviewResponse:
+    """The scoped map: a t-SNE + sub-themes over just the map's member papers.
+
+    Membership comes from the `map_members` RPC (seed similarity + pins − excludes);
+    RLS on `maps` means a caller who can't see the map gets a 404.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = (
+        uc.table("maps").select("id, team_id, name, seed, visibility").eq("id", map_id).limit(1)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    m = rows[0]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    member_ids = [x["paper_id"] for x in members]
+    if not member_ids:
+        base = OverviewResponse(
+            points=[], clusters=[], stats=_compute_stats([]), total=0, embedded=0
+        )
+        return MapOverviewResponse(
+            **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
+            visibility=m["visibility"], new_this_week=0,
+        )
+
+    post_rows = (
+        uc.table("paper_posts").select(_OVERVIEW_COLS)
+        .eq("team_id", m["team_id"]).in_("paper_id", member_ids)
+        .execute().data or []
+    )
+    base = _build_overview(uc, m["team_id"], post_rows)
+    cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+    new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
+    return MapOverviewResponse(
+        **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
+        visibility=m["visibility"], new_this_week=new_this_week,
+    )
+
+
+class MapPaper(BaseModel):
+    post_id: str
+    paper_id: str
+    title: str | None = None
+    authors: list[str] = []
+    venue: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    similarity: float | None = None  # relevance to the map's seed
+    reactions: int = 0
+    comments: int = 0
+    read_status: str | None = None  # 'to_read'|'reading'|'read'|None, for the caller
+    posted_at: str | None = None
+
+
+class MapPapersResponse(BaseModel):
+    total: int
+    papers: list[MapPaper]
+    labs: list[dict]  # [{lab, count}] over the member set
+
+
+@app.get("/maps/{map_id}/papers", response_model=MapPapersResponse)
+def map_papers(
+    map_id: str, sort: str = "importance", token: str = Depends(require_token)
+) -> MapPapersResponse:
+    """The map's member papers, ranked, with the caller's read-state and relevance,
+    plus the labs driving the topic. The client filters (unread / search / lab) and
+    the sub-themes come from /maps/{id}/overview, so this endpoint stays cheap."""
+    uid = get_user_id(token)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = uc.table("maps").select("team_id").eq("id", map_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    team_id = rows[0]["team_id"]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    if not members:
+        return MapPapersResponse(total=0, papers=[], labs=[])
+    sim_by_pid = {x["paper_id"]: x["similarity"] for x in members}
+    paper_ids = list(sim_by_pid)
+
+    meta = {
+        p["id"]: p
+        for p in (
+            uc.table("papers").select("id, title, authors, venue, year, doi")
+            .in_("id", paper_ids).execute().data or []
+        )
+    }
+    posts = {
+        p["paper_id"]: p
+        for p in (
+            uc.table("paper_posts").select("id, paper_id, posted_at")
+            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+        )
+    }
+    eng = _engagement_counts(uc, team_id, paper_ids)
+    read = {
+        r["paper_id"]: r["status"]
+        for r in (
+            uc.table("paper_status").select("paper_id, status")
+            .eq("team_id", team_id).eq("user_id", uid).in_("paper_id", paper_ids)
+            .execute().data or []
+        )
+    }
+
+    now = datetime.now(UTC)
+    max_eng = max([eng.get(pid, (0, 0))[0] + eng.get(pid, (0, 0))[1] for pid in paper_ids] + [1])
+    scored: list[tuple[float, MapPaper]] = []
+    for pid in paper_ids:
+        p = meta.get(pid)
+        if not p:
+            continue
+        post = posts.get(pid, {})
+        r_, c_ = eng.get(pid, (0, 0))
+        sim = sim_by_pid.get(pid) or 0.0
+        recency = _recency_decay(_parse_ts(post.get("posted_at")), now)
+        importance = sim + 0.15 * ((r_ + c_) / max_eng) + 0.08 * recency
+        scored.append(
+            (
+                importance,
+                MapPaper(
+                    post_id=post.get("id", ""), paper_id=pid, title=p.get("title"),
+                    authors=p.get("authors") or [], venue=p.get("venue"), year=p.get("year"),
+                    doi=p.get("doi"), similarity=sim, reactions=r_, comments=c_,
+                    read_status=read.get(pid), posted_at=post.get("posted_at"),
+                ),
+            )
+        )
+
+    if sort == "recent":
+        scored.sort(key=lambda t: (t[1].posted_at or ""), reverse=True)
+    elif sort == "discussed":
+        scored.sort(key=lambda t: (t[1].reactions + t[1].comments), reverse=True)
+    else:  # importance (default)
+        scored.sort(key=lambda t: t[0], reverse=True)
+    papers = [t[1] for t in scored]
+
+    lab_counts: Counter = Counter()
+    for mp in papers:
+        lab = _last_author_lab(mp.authors)
+        if lab:
+            lab_counts[lab] += 1
+    labs = [{"lab": lab, "count": n} for lab, n in lab_counts.most_common(8)]
+    return MapPapersResponse(total=len(papers), papers=papers, labs=labs)
+
+
+class MapSummary(BaseModel):
+    text: str
+    cited_ids: list[str] = []
+    n_papers: int = 0
+    ai: bool = False  # true = LLM-synthesized; false = recency fallback / none
+    generated_at: str | None = None
+
+
+_SUMMARY_MAX_PAPERS = 8  # abstracts sent to the model
+_SUMMARY_MIN_PAPERS = 3  # below this a topic is too thin to summarize
+
+
+@app.get("/maps/{map_id}/summary", response_model=MapSummary)
+def get_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+    """The cached AI summary, if one has been generated. RLS 404s a hidden map."""
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    rows = (
+        user_client(token).table("maps").select("ai_summary").eq("id", map_id).limit(1)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    cached = rows[0].get("ai_summary")
+    return MapSummary(**cached) if cached else MapSummary(text="")
+
+
+@app.post("/maps/{map_id}/summary", response_model=MapSummary)
+def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+    """Generate (and cache) a grounded, cited summary of the map's recent papers.
+
+    On demand only — never on page load — so the model cost is paid when a member
+    asks. Any member of a visible map may refresh this shared summary, so the cache
+    write uses the service client after RLS has confirmed the caller can see the map.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = (
+        uc.table("maps").select("team_id, seed").eq("id", map_id).limit(1).execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    team_id, seed = rows[0]["team_id"], rows[0]["seed"]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    sim = {m["paper_id"]: m["similarity"] for m in members}
+    paper_ids = list(sim)
+    papers = (
+        uc.table("papers").select("id, title, abstract, year")
+        .in_("id", paper_ids).execute().data or []
+        if paper_ids
+        else []
+    )
+    posts = {
+        p["paper_id"]: p.get("posted_at")
+        for p in (
+            uc.table("paper_posts").select("paper_id, posted_at")
+            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+        )
+    }
+    # most recent, then most relevant — this is a "what's *new*" brief.
+    papers.sort(key=lambda p: (posts.get(p["id"]) or "", sim.get(p["id"]) or 0), reverse=True)
+    top = [
+        {
+            "paper_id": p["id"],
+            "title": p.get("title"),
+            "abstract": p.get("abstract"),
+            "year": p.get("year"),
+        }
+        for p in papers[:_SUMMARY_MAX_PAPERS]
+    ]
+
+    if len(top) < _SUMMARY_MIN_PAPERS:
+        result = {
+            "text": f"Only {len(top)} paper(s) in this map so far — too little to summarize yet.",
+            "cited_ids": [], "n_papers": len(top), "ai": False,
+        }
+    else:
+        result = map_summary_mod.generate_summary(seed, top)
+    result["generated_at"] = datetime.now(UTC).isoformat()
+
+    # Derived cache, not user content; the RLS select above already gated visibility.
+    service_client().table("maps").update({"ai_summary": result}).eq("id", map_id).execute()
+    return MapSummary(**result)
 
 
 # --- profile embedding + recommendations -----------------------------------
