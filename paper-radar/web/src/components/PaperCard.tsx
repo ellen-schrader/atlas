@@ -5,7 +5,7 @@ import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { SourceLabel } from "@/components/SourceLabel";
 import type { PaperPost } from "@/lib/types";
-import { cn, formatAuthors, formatDate } from "@/lib/utils";
+import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 
 /** A paper in the lab's collection: cover, source, title, authors, tags, and a
  *  footer with engagement + who posted. Opens the detail view on click. When
@@ -82,7 +82,11 @@ export function PaperCard({
           <EngagementSummary reactions={reactions} comments={comments} />
           <span className="text-meta inline-flex items-center gap-2 text-muted">
             {posterName && <Avatar name={posterName} size={20} />}
-            <span className="tabular-nums">{formatDate(post.posted_at)}</span>
+            {/* Relative reads better in a feed, and the exact date is a hover away.
+                The cards were the last surface still showing an absolute date. */}
+            <span className="tabular-nums" title={formatDate(post.posted_at)}>
+              {formatRelative(post.posted_at)}
+            </span>
           </span>
         </div>
       </div>

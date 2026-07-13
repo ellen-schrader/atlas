@@ -1,8 +1,9 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles } from "lucide-react";
+import { LayoutGrid, Loader2, Plus, Rows3, Search, Sparkles, X } from "lucide-react";
 
+import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { PaperCard } from "@/components/PaperCard";
 import { SourceLabel } from "@/components/SourceLabel";
@@ -11,13 +12,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
-import { type PaperSort, usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
+import {
+  activeFilterCount,
+  NO_FILTERS,
+  type PaperFilters,
+  type PaperSort,
+  type PaperStatus,
+  usePaperCount,
+  usePaperSearch,
+} from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { useTeamTags } from "@/hooks/useTeamTags";
+import { useTeamVenues } from "@/hooks/useTeamVenues";
 import { postPaper, semanticSearch } from "@/lib/api";
 import type { PaperPost } from "@/lib/types";
-import { cn, formatAuthors, formatDate } from "@/lib/utils";
+import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 type SearchMode = "keyword" | "semantic";
@@ -35,7 +45,7 @@ export default function Papers() {
   const [rawQuery, setRawQuery] = useState("");
   const query = useDebouncedValue(rawQuery.trim(), 250);
   const [semanticQuery, setSemanticQuery] = useState("");
-  const [tag, setTag] = useState<string | null>(null);
+  const [filters, setFilters] = useState<PaperFilters>(NO_FILTERS);
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -53,9 +63,10 @@ export default function Papers() {
   }, []);
 
   // Keyword: live, server-side, paginated full-text search.
-  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", tag, sort);
-  const { data: total } = usePaperCount(team.id, query, tag);
+  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", filters, sort);
+  const { data: total } = usePaperCount(team.id, query, filters);
   const { data: tags } = useTeamTags(team.id);
+  const { data: venues } = useTeamVenues(team.id);
 
   // Semantic: runs on submit (each search embeds the query), so it isn't live.
   const semantic = useQuery({
@@ -96,9 +107,11 @@ export default function Papers() {
 
   function clearFilters() {
     setRawQuery("");
-    setTag(null);
+    setFilters(NO_FILTERS);
     setSemanticQuery("");
   }
+
+  const nFilters = activeFilterCount(filters);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -194,17 +207,63 @@ export default function Papers() {
         </div>
       </div>
 
-      {/* tag filters (keyword only) */}
+      {/* Filters. One tag filter isn't enough at 425 papers (UX review), so: your
+          reading status, the venue, and the tag — with one place to clear them all. */}
       {mode === "keyword" && (
-        <div className="-mt-1 flex flex-wrap gap-2">
-          <FilterChip active={tag === null} onClick={() => setTag(null)}>
-            All
+        <div className="-mt-1 flex flex-wrap items-center gap-2">
+          <Select
+            label="Status"
+            value={filters.status ?? ""}
+            onChange={(v) =>
+              setFilters((f) => ({ ...f, status: (v || null) as PaperStatus | null }))
+            }
+            options={[
+              { value: "", label: "Any status" },
+              { value: "unread", label: "Unread" },
+              { value: "to_read", label: "Saved to read" },
+              { value: "reading", label: "Reading" },
+              { value: "read", label: "Read" },
+            ]}
+          />
+          <Select
+            label="Venue"
+            value={filters.venue ?? ""}
+            onChange={(v) => setFilters((f) => ({ ...f, venue: v || null }))}
+            options={[
+              { value: "", label: "Any venue" },
+              ...(venues ?? []).map((v) => ({
+                value: v.venue,
+                label: `${v.venue} (${v.count})`,
+              })),
+            ]}
+          />
+
+          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+
+          <FilterChip active={filters.tag === null} onClick={() => setFilters((f) => ({ ...f, tag: null }))}>
+            All tags
           </FilterChip>
           {(tags ?? []).map((t) => (
-            <FilterChip key={t.tag} active={tag === t.tag} onClick={() => setTag(t.tag)}>
+            <FilterChip
+              key={t.tag}
+              active={filters.tag === t.tag}
+              onClick={() =>
+                setFilters((f) => ({ ...f, tag: f.tag === t.tag ? null : t.tag }))
+              }
+            >
               {t.tag}
             </FilterChip>
           ))}
+
+          {nFilters > 0 && (
+            <button
+              type="button"
+              onClick={() => setFilters(NO_FILTERS)}
+              className="ml-1 inline-flex items-center gap-1 text-xs font-medium text-muted underline hover:text-fg"
+            >
+              <X size={12} /> Clear {nFilters} {nFilters === 1 ? "filter" : "filters"}
+            </button>
+          )}
         </div>
       )}
 
@@ -212,7 +271,7 @@ export default function Papers() {
       {mode === "keyword" && typeof total === "number" && !search.isLoading && (
         <div className="-mb-2 -mt-2 text-xs text-faint tabular-nums">
           {total} {total === 1 ? "paper" : "papers"}
-          {(query || tag) && " match"}
+          {(query || nFilters > 0) && " match"}
         </div>
       )}
       {mode === "semantic" && state === "results" && (
@@ -235,7 +294,7 @@ export default function Papers() {
             body="Try describing the topic differently, or switch to keyword search."
           />
         ) : (
-          <EmptyState filtered={Boolean(query || tag)} onClear={clearFilters} />
+          <EmptyState filtered={Boolean(query || nFilters > 0)} onClear={clearFilters} />
         )
       ) : view === "cards" ? (
         <div className={CARD_GRID}>
@@ -253,7 +312,15 @@ export default function Papers() {
           ))}
         </div>
       ) : (
-        <PaperTable posts={posts} counts={counts} readIds={readIds} onOpen={(id) => openPaper(id)} />
+        <PaperTable
+          posts={posts}
+          counts={counts}
+          readIds={readIds}
+          teamId={team.id}
+          userId={userId}
+          bookmarked={bookmarked}
+          onOpen={(id) => openPaper(id)}
+        />
       )}
 
       {mode === "keyword" && search.isFetchingNextPage && (
@@ -344,12 +411,18 @@ function PaperTable({
   posts,
   counts,
   readIds,
+  teamId,
+  userId,
+  bookmarked,
   onOpen,
 }: {
   posts: PaperPost[];
   counts?: Record<string, { reactions: number; comments: number }>;
   readIds?: Set<string>;
   onOpen: (paperId: string) => void;
+  teamId: string;
+  userId: string;
+  bookmarked: Set<string>;
 }) {
   return (
     <div className="overflow-x-auto rounded-card border border-border shadow-sm">
@@ -360,6 +433,9 @@ function PaperTable({
             <th className="px-4 py-2.5 font-semibold">Authors</th>
             <th className="px-4 py-2.5 font-semibold">Engagement</th>
             <th className="px-4 py-2.5 font-semibold">Posted</th>
+            <th className="px-4 py-2.5 font-semibold">
+              <span className="sr-only">Save</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -394,8 +470,22 @@ function PaperTable({
                 <td className="px-4 py-3">
                   <EngagementSummary reactions={c?.reactions ?? 0} comments={c?.comments ?? 0} />
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-meta text-muted tabular-nums">
-                  {formatDate(post.posted_at)}
+                <td
+                  className="whitespace-nowrap px-4 py-3 text-meta text-muted tabular-nums"
+                  title={formatDate(post.posted_at)}
+                >
+                  {formatRelative(post.posted_at)}
+                </td>
+                {/* The card view has always had a bookmark; the table view hadn't, so
+                    the same paper was saveable in one view and not the other. */}
+                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                  <BookmarkButton
+                    paperId={p.id}
+                    teamId={teamId}
+                    userId={userId}
+                    bookmarked={bookmarked.has(p.id)}
+                    className="text-muted hover:text-accent"
+                  />
                 </td>
               </tr>
             );
@@ -517,5 +607,42 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
         Retry
       </Button>
     </div>
+  );
+}
+
+/** A compact labelled select — the filter bar's workhorse. Native, so it's keyboard-
+ *  and mobile-friendly for free. */
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const active = value !== "";
+  return (
+    <label className="inline-flex items-center gap-1.5">
+      <span className="sr-only">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          "rounded-chip border px-2 py-1 text-xs font-medium transition",
+          active
+            ? "border-accent bg-accent-weak text-accent"
+            : "border-border bg-surface text-muted hover:text-fg",
+        )}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

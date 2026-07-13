@@ -1,7 +1,8 @@
 import { Avatar } from "@/components/Avatar";
+import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import type { PaperPost } from "@/lib/types";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 /** Compact one-line paper row for dense lists (e.g. "Recently posted"). An unread
  *  dot + full-strength title distinguishes new papers; read ones dim. Metadata is
@@ -12,12 +13,19 @@ export function PaperListRow({
   reactions = 0,
   comments = 0,
   read = false,
+  teamId,
+  userId,
+  bookmarked = false,
   onOpen,
 }: {
   post: PaperPost;
   reactions?: number;
   comments?: number;
   read?: boolean;
+  /** Bookmarking needs the lab + user; omit them and the control is simply absent. */
+  teamId?: string;
+  userId?: string;
+  bookmarked?: boolean;
   onOpen: () => void;
 }) {
   const p = post.papers;
@@ -25,9 +33,20 @@ export function PaperListRow({
   const tags = (post.tags.length ? post.tags : p.tags).slice(0, 2);
 
   return (
-    <button
+    // role="button" rather than a real <button>, because the bookmark control inside
+    // is itself a <button> — and nesting buttons is invalid HTML, which browsers
+    // resolve by dropping the inner one. Same pattern PaperCard already uses.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-2"
     >
       <span
         aria-label={read ? undefined : "Unread"}
@@ -51,8 +70,26 @@ export function PaperListRow({
       <EngagementSummary reactions={reactions} comments={comments} className="hidden sm:flex" />
       <span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted">
         {posterName && <Avatar name={posterName} size={20} />}
-        <span className="whitespace-nowrap tabular-nums">{formatDate(post.posted_at)}</span>
+        <span
+          className="whitespace-nowrap tabular-nums"
+          title={formatDate(post.posted_at)}
+        >
+          {formatRelative(post.posted_at)}
+        </span>
+        {teamId && userId && (
+          // The card view has always had this; the table view hadn't, so the same
+          // paper was bookmarkable in one view and not the other.
+          <span onClick={(e) => e.stopPropagation()} role="none">
+            <BookmarkButton
+              paperId={post.papers.id}
+              teamId={teamId}
+              userId={userId}
+              bookmarked={bookmarked}
+              className="text-muted hover:text-accent"
+            />
+          </span>
+        )}
       </span>
-    </button>
+    </div>
   );
 }
