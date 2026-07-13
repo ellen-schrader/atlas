@@ -13,7 +13,7 @@ import { useAppContext } from "@/routes/Layout";
  * *collection* (an atlas), so this is a library, not a single page.
  */
 export default function MapsLibrary() {
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: maps, isLoading } = useQuery({
@@ -113,23 +113,33 @@ export default function MapsLibrary() {
             <div className="mt-2 text-xs text-faint">
               {m.visibility === "lab" ? "Shared with lab" : "Only you"}
             </div>
-            <button
-              type="button"
-              aria-label={`Delete ${m.name}`}
-              onClick={(e) => {
-                e.preventDefault();
-                if (window.confirm(`Delete the map “${m.name}”?`)) del.mutate(m.id);
-              }}
-              className="absolute right-3 top-3 text-faint opacity-0 transition hover:text-danger group-hover:opacity-100"
-            >
-              <Trash2 size={14} />
-            </button>
+            {/* Only the creator can delete (RLS enforces it), so don't offer the
+                affordance to anyone else — it would just 404. */}
+            {m.created_by === userId && (
+              <button
+                type="button"
+                aria-label={`Delete ${m.name}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (window.confirm(`Delete the map “${m.name}”?`)) del.mutate(m.id);
+                }}
+                className="absolute right-3 top-3 text-faint opacity-0 transition hover:text-danger group-hover:opacity-100"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </Link>
         ))}
       </div>
 
+      {del.isError && (
+        <p className={cn("text-sm text-danger")}>
+          Couldn’t delete that map — {(del.error as Error).message}
+        </p>
+      )}
+
       {!isLoading && !maps?.length && (
-        <p className={cn("text-sm text-faint")}>No topic maps yet — create your first one above.</p>
+        <p className="text-sm text-faint">No topic maps yet — create your first one above.</p>
       )}
     </div>
   );
