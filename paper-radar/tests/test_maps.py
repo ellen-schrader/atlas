@@ -171,3 +171,61 @@ def test_delete_missing_or_foreign_is_404(stub):
 def test_endpoints_require_a_token():
     assert client.get("/maps?team_id=t1").status_code == 401
     assert client.post("/maps", json={"team_id": "t", "name": "n", "seed": "s"}).status_code == 401
+
+
+# --- map summary generation (fallback + anti-hallucination) -----------------
+
+import sys  # noqa: E402
+import types  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from api import map_summary  # noqa: E402
+
+
+def test_summary_empty_when_no_papers():
+    assert map_summary.generate_summary("seed", []) == {
+        "text": "", "cited_ids": [], "n_papers": 0, "ai": False
+    }
+
+
+def test_summary_falls_back_without_key(monkeypatch):
+    monkeypatch.setattr(
+        map_summary, "get_llm_settings", lambda: SimpleNamespace(anthropic_api_key=None)
+    )
+    papers = [{"paper_id": c, "title": f"Paper {c}"} for c in "abcd"]
+    out = map_summary.generate_summary("ovarian cancer", papers)
+    assert out["ai"] is False
+    assert out["cited_ids"] == ["a", "b", "c"]  # the recency fallback cites the top few
+    assert out["n_papers"] == 4
+    assert "Paper a" in out["text"]
+
+
+def test_summary_never_cites_outside_the_evidence(monkeypatch):
+    """The model may return an id we never gave it; it must be dropped."""
+    monkeypatch.setattr(
+        map_summary,
+        "get_llm_settings",
+        lambda: SimpleNamespace(anthropic_api_key="k", anthropic_model="m"),
+    )
+
+    class _Messages:
+        def parse(self, **_kw):
+            return SimpleNamespace(
+                parsed_output=SimpleNamespace(
+                    summary="  Recent work.  ", cited_ids=["a", "GHOST", "b"]
+                )
+            )
+
+    class _Client:
+        def __init__(self, api_key=None):
+            self.messages = _Messages()
+
+    fake = types.ModuleType("anthropic")
+    fake.Anthropic = _Client
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    papers = [{"paper_id": c, "title": f"P{c}", "abstract": "x"} for c in "abc"]
+    out = map_summary.generate_summary("seed", papers)
+    assert out["ai"] is True
+    assert out["cited_ids"] == ["a", "b"]  # GHOST filtered out
+    assert out["text"] == "Recent work."  # stripped

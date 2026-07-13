@@ -691,6 +691,11 @@ _OVERVIEW_COLS = (
     "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
 )
 
+# Cap on members pulled per map surface (scatter / list / summary). A map with
+# more members than this is truncated to the top by seed similarity; kept in one
+# place so the three endpoints agree and the bound is documented.
+_MAP_MEMBER_LIMIT = 500
+
 
 def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:
     """Turn paper_posts rows (with joined papers) into the 2-D layout + clusters +
@@ -774,7 +779,10 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     m = rows[0]
 
-    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    members = (
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        .execute().data or []
+    )
     member_ids = [x["paper_id"] for x in members]
     if not member_ids:
         base = OverviewResponse(
@@ -837,7 +845,10 @@ def map_papers(
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     team_id = rows[0]["team_id"]
 
-    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    members = (
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        .execute().data or []
+    )
     if not members:
         return MapPapersResponse(total=0, papers=[], labs=[])
     sim_by_pid = {x["paper_id"]: x["similarity"] for x in members}
@@ -954,7 +965,10 @@ def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSum
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     team_id, seed = rows[0]["team_id"], rows[0]["seed"]
 
-    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    members = (
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        .execute().data or []
+    )
     sim = {m["paper_id"]: m["similarity"] for m in members}
     paper_ids = list(sim)
     papers = (
