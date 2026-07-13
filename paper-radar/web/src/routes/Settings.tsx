@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
@@ -60,8 +60,6 @@ function ClaudePrivacyPanel({
   teamName: string;
   userId: string;
 }) {
-  const navigate = useNavigate();
-
   return (
     <Panel
       title="Claude access"
@@ -75,11 +73,9 @@ function ClaudePrivacyPanel({
             What Claude can see
           </h3>
           <div className="mt-2.5">
-            <ClaudeScope />
+            <ClaudeScope teamName={teamName} />
           </div>
           <p className="mt-3 text-xs leading-relaxed text-faint">
-            Claude can also <span className="text-muted">post a paper</span> into {teamName}, with a
-            comment that @-mentions a teammate — it previews first and only writes when you confirm.
             Access is lab-wide and owner-controlled, because it isn’t one member’s call.
           </p>
         </div>
@@ -89,13 +85,9 @@ function ClaudePrivacyPanel({
             <h3 className="text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
               Recent Claude activity
             </h3>
-            <button
-              type="button"
-              onClick={() => navigate("/connect")}
-              className="text-xs font-medium text-accent hover:underline"
-            >
+            <Link to="/connect" className="text-xs font-medium text-accent hover:underline">
               Set up Claude →
-            </button>
+            </Link>
           </div>
           <ClaudeActivity teamId={teamId} teamName={teamName} limit={5} />
         </div>

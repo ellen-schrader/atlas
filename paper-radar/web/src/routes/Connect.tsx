@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from "react";
-import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
-import { ClaudeAccessToggle, ClaudeActivity } from "@/components/ClaudeAccess";
+import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
 import { useMcpAccess } from "@/hooks/useMcpAccess";
 import { cn } from "@/lib/utils";
@@ -222,27 +222,7 @@ ATLAS_TEAM_ID=${team.id}`;
         <h2 className="mb-3 font-serif text-lg font-semibold tracking-tight">
           What Claude can do with {team.name}
         </h2>
-        <ul className="flex flex-col gap-2">
-          <Perm kind="allow">
-            Read papers your lab has posted — titles, abstracts, authors, venues, DOIs, tags
-          </Perm>
-          <Perm kind="allow">
-            Read the note attached to a post, and who posted it
-          </Perm>
-          <Perm kind="allow">
-            Read the mood board and derive your palette + a matplotlib style sheet
-          </Perm>
-          <Perm kind="write">
-            <b className="text-fg">Post a paper</b> into the lab, optionally with a comment that
-            @-mentions a teammate. This <b className="text-fg">writes to the shared lab</b> — it
-            previews by default and only writes when you confirm.
-          </Perm>
-          <Perm kind="deny">
-            Read your lab’s <b>comments or reactions</b> — the discussion stays between people
-          </Perm>
-          <Perm kind="deny">Anything in another lab</Perm>
-          <Perm kind="deny">Delete or edit existing papers, comments, or reactions</Perm>
-        </ul>
+        <ClaudeScope teamName={team.name} />
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
           <ShieldAlert size={16} className="mt-0.5 shrink-0 text-danger" />
@@ -281,7 +261,11 @@ ATLAS_TEAM_ID=${team.id}`;
  *  shared with Settings, so the two screens can't drift apart. */
 function AccessPanel() {
   const { team, userId } = useAppContext();
-  const { data: enabled } = useMcpAccess(team.id);
+  const { data: enabled, isLoading } = useMcpAccess(team.id);
+
+  // Don't assert "off" before we know: without this the page tells a lab that HAS
+  // Claude enabled that their setup won't work, then flips.
+  if (isLoading) return null;
 
   return (
     <section
@@ -290,7 +274,12 @@ function AccessPanel() {
         enabled ? "border-accent/40 bg-accent-weak" : "border-border bg-surface",
       )}
     >
-      <ClaudeAccessToggle teamId={team.id} teamName={team.name} userId={userId} />
+      <ClaudeAccessToggle
+        teamId={team.id}
+        teamName={team.name}
+        userId={userId}
+        headingLevel="h2"
+      />
       {!enabled && (
         <p className="mt-3 text-xs text-faint">
           The steps above won’t work until this is on.
@@ -341,29 +330,6 @@ function Step({
         {children}
       </div>
     </section>
-  );
-}
-
-/**
- * One capability. A single `kind` rather than three booleans, so `ok + no` is not
- * representable and the icon, its colour, and the text colour all derive from one
- * source. `write` gets a genuine warning glyph — the one dangerous capability here
- * (Claude posting into the shared lab) must not rest on colour alone to be noticed.
- */
-function Perm({ kind, children }: { kind: "allow" | "write" | "deny"; children: ReactNode }) {
-  const icon = {
-    allow: <Check size={15} className="text-accent" />,
-    write: <AlertTriangle size={15} className="text-danger" />,
-    deny: <X size={15} className="text-faint" />,
-  }[kind];
-
-  return (
-    <li className="flex gap-2.5 text-sm">
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className={cn("leading-relaxed", kind === "deny" ? "text-faint" : "text-muted")}>
-        {children}
-      </span>
-    </li>
   );
 }
 
