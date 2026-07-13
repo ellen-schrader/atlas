@@ -189,6 +189,7 @@ export interface MapPatch {
   unpin?: string;
   exclude?: string;
   uninclude?: string;
+  clear_excluded?: boolean;
 }
 export function updateMap(mapId: string, patch: MapPatch): Promise<MapDoc> {
   return authedRequest<MapDoc>(`/maps/${encodeURIComponent(mapId)}`, {

@@ -767,6 +767,7 @@ class MapOverviewResponse(OverviewResponse):
     new_this_week: int  # members posted in the last 7 days
     min_similarity: float  # the map's relevance floor
     below_threshold: int  # embedded papers that fall just under the floor
+    excluded_count: int  # papers the owner has dismissed from the map
 
 
 @app.get("/maps/{map_id}/overview", response_model=MapOverviewResponse)
@@ -792,7 +793,9 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
     m = rows[0]
-    min_sim = float((m.get("config") or {}).get("min_similarity", _DEFAULT_MIN_SIMILARITY))
+    cfg = m.get("config") or {}
+    min_sim = float(cfg.get("min_similarity", _DEFAULT_MIN_SIMILARITY))
+    excluded_count = len(cfg.get("excluded") or [])
     stat = uc.rpc("map_member_stats", {"p_map": map_id}).execute().data or []
     below = (stat[0].get("below", 0) if stat else 0) or 0
 
@@ -808,7 +811,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         return MapOverviewResponse(
             **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
             visibility=m["visibility"], created_by=m["created_by"], new_this_week=0,
-            min_similarity=min_sim, below_threshold=below,
+            min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
         )
 
     post_rows = (
@@ -822,7 +825,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     return MapOverviewResponse(
         **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
         visibility=m["visibility"], created_by=m["created_by"], new_this_week=new_this_week,
-        min_similarity=min_sim, below_threshold=below,
+        min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
     )
 
 

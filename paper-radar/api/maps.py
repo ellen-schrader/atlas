@@ -45,6 +45,11 @@ class MapOut(BaseModel):
     updated_at: str
 
 
+class MapListItem(MapOut):
+    paper_count: int = 0  # members in scope (past the relevance floor + pins − excludes)
+    owner_name: str | None = None
+
+
 def _out(row: dict) -> MapOut:
     return MapOut(**{k: row[k] for k in MapOut.model_fields})
 
@@ -115,6 +120,7 @@ class MapPatch(BaseModel):
     unpin: str | None = None
     exclude: str | None = None  # paper_id to add to excluded (drops it from the map)
     uninclude: str | None = None
+    clear_excluded: bool = False  # restore all dismissed papers
 
 
 @router.patch("/{map_id}", response_model=MapOut)
@@ -163,6 +169,8 @@ def update_map(map_id: str, req: MapPatch, token: str = Depends(require_token)) 
         pinned.discard(req.exclude)  # excluding a paper un-pins it
     if req.uninclude:
         excluded.discard(req.uninclude)
+    if req.clear_excluded:
+        excluded.clear()
     config["pinned"] = sorted(pinned)
     config["excluded"] = sorted(excluded)
     updates["config"] = config
@@ -174,21 +182,35 @@ def update_map(map_id: str, req: MapPatch, token: str = Depends(require_token)) 
     return _out(updated[0])
 
 
-@router.get("", response_model=list[MapOut])
-def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapOut]:
-    """The caller's visible maps in a lab (RLS hides other members' private maps)."""
+@router.get("", response_model=list[MapListItem])
+def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapListItem]:
+    """The caller's visible maps in a lab (RLS hides other members' private maps),
+    each with its in-scope paper count and owner name for the library cards."""
     _require_user(token)
+    uc = user_client(token)
     rows = (
-        user_client(token)
-        .table("maps")
-        .select(_COLUMNS)
-        .eq("team_id", team_id)
-        .order("updated_at", desc=True)
-        .execute()
-        .data
-        or []
+        uc.table("maps").select(_COLUMNS).eq("team_id", team_id)
+        .order("updated_at", desc=True).execute().data or []
     )
-    return [_out(r) for r in rows]
+    if not rows:
+        return []
+    owners = list({r["created_by"] for r in rows})
+    profiles = (
+        uc.table("profiles").select("id, display_name").in_("id", owners).execute().data or []
+    )
+    name_of = {p["id"]: p.get("display_name") for p in profiles}
+    out: list[MapListItem] = []
+    for r in rows:
+        stat = uc.rpc("map_member_stats", {"p_map": r["id"]}).execute().data or []
+        count = (stat[0].get("in_scope", 0) if stat else 0) or 0
+        out.append(
+            MapListItem(
+                **{k: r[k] for k in MapOut.model_fields},
+                paper_count=count,
+                owner_name=name_of.get(r["created_by"]),
+            )
+        )
+    return out
 
 
 @router.get("/{map_id}", response_model=MapOut)

@@ -76,6 +76,7 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />
         <Route path="/maps" element={<MapsLibrary />} />
+        <Route path="/maps/overview" element={<MapView />} />
         <Route path="/maps/:mapId" element={<MapDashboard />} />
         <Route path="/connect" element={<Connect />} />
         <Route path="/settings" element={<Settings />} />
