@@ -58,7 +58,10 @@ export function PaperCard({
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
       )}
     >
-      <div className="relative h-1.5 w-full shrink-0">
+      {/* The cover is a 600×340 canvas squashed into a 6px strip, so its fluorophore
+          blobs average out into a far more saturated band than they read as at full
+          size. Knock it back, or every card in the grid shouts a different colour. */}
+      <div className="relative h-1.5 w-full shrink-0 opacity-[0.35]">
         <Cover seed={p.id} />
       </div>
 
