@@ -1,10 +1,10 @@
 import { type ReactNode, useState } from "react";
-import { AlertTriangle, Check, ShieldAlert, X } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
+import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
-import { useMcpAccess, useMcpToolCalls, useSetMcpAccess } from "@/hooks/useMcpAccess";
-import { useMyRole } from "@/hooks/useMyRole";
-import { cn, formatRelative } from "@/lib/utils";
+import { useMcpAccess } from "@/hooks/useMcpAccess";
+import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 /**
@@ -222,27 +222,7 @@ ATLAS_TEAM_ID=${team.id}`;
         <h2 className="mb-3 font-serif text-lg font-semibold tracking-tight">
           What Claude can do with {team.name}
         </h2>
-        <ul className="flex flex-col gap-2">
-          <Perm kind="allow">
-            Read papers your lab has posted — titles, abstracts, authors, venues, DOIs, tags
-          </Perm>
-          <Perm kind="allow">
-            Read the note attached to a post, and who posted it
-          </Perm>
-          <Perm kind="allow">
-            Read the mood board and derive your palette + a matplotlib style sheet
-          </Perm>
-          <Perm kind="write">
-            <b className="text-fg">Post a paper</b> into the lab, optionally with a comment that
-            @-mentions a teammate. This <b className="text-fg">writes to the shared lab</b> — it
-            previews by default and only writes when you confirm.
-          </Perm>
-          <Perm kind="deny">
-            Read your lab’s <b>comments or reactions</b> — the discussion stays between people
-          </Perm>
-          <Perm kind="deny">Anything in another lab</Perm>
-          <Perm kind="deny">Delete or edit existing papers, comments, or reactions</Perm>
-        </ul>
+        <ClaudeScope teamName={team.name} />
 
         <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
           <ShieldAlert size={16} className="mt-0.5 shrink-0 text-danger" />
@@ -277,14 +257,14 @@ ATLAS_TEAM_ID=${team.id}`;
   );
 }
 
-/** The lab-wide switch. Any member sees its state; only an owner can move it. */
+/** The lab-wide switch, wrapped in Connect's section chrome. The control itself is
+ *  shared with Settings, so the two screens can't drift apart. */
 function AccessPanel() {
   const { team, userId } = useAppContext();
-  const { data: role } = useMyRole(team.id, userId);
   const { data: enabled, isLoading } = useMcpAccess(team.id);
-  const setAccess = useSetMcpAccess(team.id);
-  const isOwner = role === "owner";
 
+  // Don't assert "off" before we know: without this the page tells a lab that HAS
+  // Claude enabled that their setup won't work, then flips.
   if (isLoading) return null;
 
   return (
@@ -294,64 +274,24 @@ function AccessPanel() {
         enabled ? "border-accent/40 bg-accent-weak" : "border-border bg-surface",
       )}
     >
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
-            {enabled ? (
-              <>
-                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-accent" />
-                Claude access is on
-              </>
-            ) : (
-              <>
-                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-faint" />
-                Claude access is off
-              </>
-            )}
-          </h2>
-          <p className="mt-1 max-w-[58ch] text-sm text-muted">
-            {enabled
-              ? `Claude can read ${team.name}'s papers and post into it. Every call is logged below.`
-              : `The steps above won't work until this is on — Atlas refuses every tool call for ${team.name} while it's off.`}
-          </p>
-        </div>
-
-        <button
-          type="button"
-          disabled={!isOwner || setAccess.isPending}
-          onClick={() => setAccess.mutate(!enabled)}
-          title={isOwner ? undefined : "Only a lab owner can change this"}
-          className={cn(
-            "shrink-0 rounded-control px-3.5 py-2 text-sm font-semibold transition",
-            !isOwner && "cursor-not-allowed opacity-50",
-            enabled
-              ? "border border-border-strong bg-surface text-fg hover:border-danger hover:text-danger"
-              : "bg-accent text-accent-fg hover:brightness-110",
-          )}
-        >
-          {setAccess.isPending ? "…" : enabled ? "Turn off" : "Turn on for the lab"}
-        </button>
-      </div>
-
-      {!isOwner && (
+      <ClaudeAccessToggle
+        teamId={team.id}
+        teamName={team.name}
+        userId={userId}
+        headingLevel="h2"
+      />
+      {!enabled && (
         <p className="mt-3 text-xs text-faint">
-          Only an owner of {team.name} can change this. Ask one to turn it on.
-        </p>
-      )}
-      {setAccess.isError && (
-        <p className="mt-3 text-xs text-danger">
-          Couldn’t change access — {(setAccess.error as Error).message}
+          The steps above won’t work until this is on.
         </p>
       )}
     </section>
   );
 }
 
-/** What Claude actually did. Visible to the whole lab — a log only the connector can read is not a check. */
+/** The tool-call log. Visible to the whole lab — a log only the connector can read is not a check. */
 function ActivityLog() {
   const { team } = useAppContext();
-  const { data: calls, isLoading } = useMcpToolCalls(team.id);
-
   return (
     <section className="rounded-card border border-border bg-surface p-5">
       <h2 className="font-serif text-lg font-semibold tracking-tight">Recent Claude activity</h2>
@@ -359,31 +299,7 @@ function ActivityLog() {
         Every tool call Claude makes against {team.name}, visible to everyone in the lab. Blocked
         attempts show up here too.
       </p>
-
-      {isLoading ? (
-        <p className="text-sm text-faint">Loading…</p>
-      ) : !calls?.length ? (
-        <p className="rounded-control border border-dashed border-border px-3 py-6 text-center text-sm text-faint">
-          Claude hasn’t used {team.name} yet.
-        </p>
-      ) : (
-        <ul className="flex flex-col divide-y divide-border">
-          {calls.map((c) => (
-            <li key={c.id} className="flex items-center gap-3 py-2 text-sm">
-              {c.ok ? (
-                <Check size={14} className="shrink-0 text-accent" />
-              ) : (
-                <X size={14} className="shrink-0 text-danger" />
-              )}
-              <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg">{c.tool}</code>
-              {!c.ok && <span className="shrink-0 text-xs text-danger">blocked</span>}
-              <span className="shrink-0 font-mono text-xs text-faint">
-                {formatRelative(c.called_at)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ClaudeActivity teamId={team.id} teamName={team.name} />
     </section>
   );
 }
@@ -414,29 +330,6 @@ function Step({
         {children}
       </div>
     </section>
-  );
-}
-
-/**
- * One capability. A single `kind` rather than three booleans, so `ok + no` is not
- * representable and the icon, its colour, and the text colour all derive from one
- * source. `write` gets a genuine warning glyph — the one dangerous capability here
- * (Claude posting into the shared lab) must not rest on colour alone to be noticed.
- */
-function Perm({ kind, children }: { kind: "allow" | "write" | "deny"; children: ReactNode }) {
-  const icon = {
-    allow: <Check size={15} className="text-accent" />,
-    write: <AlertTriangle size={15} className="text-danger" />,
-    deny: <X size={15} className="text-faint" />,
-  }[kind];
-
-  return (
-    <li className="flex gap-2.5 text-sm">
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className={cn("leading-relaxed", kind === "deny" ? "text-faint" : "text-muted")}>
-        {children}
-      </span>
-    </li>
   );
 }
 

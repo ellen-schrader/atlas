@@ -1,6 +1,8 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { LabManagement } from "@/components/LabManagement";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,8 +35,64 @@ export default function Settings() {
 
       <ProfilePanel userId={userId} initial={profile?.profile_md ?? ""} />
 
+      <ClaudePrivacyPanel teamId={team.id} teamName={team.name} userId={userId} />
+
       <LabManagement teamId={team.id} teamName={team.name} teamSlug={team.slug} userId={userId} />
     </div>
+  );
+}
+
+/**
+ * Claude access, in Settings as well as on Connect.
+ *
+ * Connect is where you *set the integration up*; this is where someone goes when the
+ * question is "what can Claude see of my lab, and who decided that?" — which is a
+ * privacy question, and privacy questions get answered in Settings. The control and
+ * the scope copy are shared with Connect, so the two screens can't tell different
+ * stories.
+ */
+function ClaudePrivacyPanel({
+  teamId,
+  teamName,
+  userId,
+}: {
+  teamId: string;
+  teamName: string;
+  userId: string;
+}) {
+  return (
+    <Panel
+      title="Claude access"
+      desc={`Whether Claude can read ${teamName} — and what it can see when it does.`}
+    >
+      <div className="mt-4 flex flex-col gap-5">
+        <ClaudeAccessToggle teamId={teamId} teamName={teamName} userId={userId} />
+
+        <div className="border-t border-border pt-4">
+          <h3 className="text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+            What Claude can see
+          </h3>
+          <div className="mt-2.5">
+            <ClaudeScope teamName={teamName} />
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-faint">
+            Access is lab-wide and owner-controlled, because it isn’t one member’s call.
+          </p>
+        </div>
+
+        <div className="border-t border-border pt-4">
+          <div className="mb-2.5 flex items-center justify-between gap-3">
+            <h3 className="text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+              Recent Claude activity
+            </h3>
+            <Link to="/connect" className="text-xs font-medium text-accent hover:underline">
+              Set up Claude →
+            </Link>
+          </div>
+          <ClaudeActivity teamId={teamId} teamName={teamName} limit={5} />
+        </div>
+      </div>
+    </Panel>
   );
 }
 
