@@ -19,10 +19,33 @@ def test_health():
     assert resp.json() == {"status": "ok"}
 
 
-def test_resolve_recognizes_scheme_and_computes_dedup_key():
+AUTH = {"Authorization": "Bearer good"}
+
+
+@pytest.fixture
+def signed_in(monkeypatch):
+    """/resolve needs an account now — it makes the server fetch a URL you chose."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "user-1")
+    # A fresh limiter per test, so one test's calls can't 429 the next one's.
+    monkeypatch.setattr(
+        app_mod, "_resolve_limiter", app_mod._PerUserRateLimiter(max_events=30, window_seconds=60.0)
+    )
+
+
+def test_resolve_requires_a_bearer_token():
+    """It used to be open to the internet: an unauthenticated caller could make the
+    server GET any URL, which is a port scanner for whatever network it runs in."""
+    resp = client.post("/resolve", json={"url": "https://arxiv.org/abs/2401.01234"})
+    assert resp.status_code == 401
+
+
+def test_resolve_recognizes_scheme_and_computes_dedup_key(signed_in):
     resp = client.post(
         "/resolve",
         json={"url": "https://arxiv.org/abs/2401.01234", "network": False},
+        headers=AUTH,
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -132,17 +155,163 @@ def test_compute_stats_aggregates_posts():
     assert labs == {"B. Last": 1, "C. Only": 1}
 
 
-def test_resolve_dedup_key_strips_tracking_params():
+def test_resolve_dedup_key_strips_tracking_params(signed_in):
     resp = client.post(
         "/resolve",
         json={
             "url": "https://www.nature.com/articles/s41586-024-01234-5?utm_source=x&fbclid=y",
             "network": False,
         },
+        headers=AUTH,
     )
     assert resp.status_code == 200
     norm = resp.json()["url_norm"]
     assert norm == "//nature.com/articles/s41586-024-01234-5"
+
+
+# --- SSRF guard on the URL-fetching endpoints ------------------------------
+
+
+SSRF_URLS = [
+    "http://169.254.169.254/latest/meta-data/",  # cloud metadata — the classic target
+    "http://127.0.0.1:8000/admin",
+    "http://localhost/x",
+    "https://10.0.0.5/a",
+    "http://192.168.1.1/a",
+    "http://[::1]/a",
+    "http://100.100.100.200/latest/meta-data/",  # CGNAT metadata — was a bypass
+    "http://239.255.255.250/",  # multicast — was a bypass
+    "http://169.254.169.254./",  # trailing dot — was a bypass
+    "https://svc.internal/x",
+    "file:///etc/passwd",
+    "ftp://host/x",
+    "http://[::1",  # malformed — must be a clean 400, not a 500
+]
+
+
+@pytest.mark.parametrize("url", SSRF_URLS)
+def test_resolve_refuses_to_fetch_internal_addresses(signed_in, monkeypatch, url):
+    """A member can still reach /resolve, so auth alone doesn't make the fetch safe."""
+    import api.app as app_mod
+
+    def _no_fetch(*_a, **_k):
+        raise AssertionError(f"the server must not fetch {url}")
+
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_fetch)
+
+    resp = client.post("/resolve", json={"url": url}, headers=AUTH)
+    assert resp.status_code == 400, f"{url} was accepted"
+
+
+@pytest.mark.parametrize("url", SSRF_URLS)
+def test_posts_refuses_to_fetch_internal_addresses(monkeypatch, url):
+    """/posts resolves the URL server-side when the client sends no `fields` — the
+    same sink as /resolve, reachable by any lab member."""
+    import api.app as app_mod
+
+    def _no_fetch(*_a, **_k):
+        raise AssertionError(f"the server must not fetch {url}")
+
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_fetch)
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_fetch)
+
+    resp = client.post("/posts", json={"url": url, "team_id": "t"}, headers=AUTH)
+    assert resp.status_code == 400, f"{url} was accepted"
+
+
+def test_resolve_is_rate_limited(signed_in, monkeypatch):
+    """Each call costs an outbound request, so it's an amplifier if left unbounded."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(
+        app_mod, "_resolve_limiter", app_mod._PerUserRateLimiter(max_events=3, window_seconds=60.0)
+    )
+    body = {"url": "https://arxiv.org/abs/2401.01234", "network": False}
+    for _ in range(3):
+        assert client.post("/resolve", json=body, headers=AUTH).status_code == 200
+    assert client.post("/resolve", json=body, headers=AUTH).status_code == 429
+
+
+def test_blocked_url_does_not_spend_rate_limit_quota(signed_in, monkeypatch):
+    """A rejected URL never fetches, so it must not burn one of the caller's 30/min."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(
+        app_mod, "_resolve_limiter", app_mod._PerUserRateLimiter(max_events=1, window_seconds=60.0)
+    )
+    # A blocked URL 400s and spends nothing...
+    assert (
+        client.post("/resolve", json={"url": "http://127.0.0.1/x"}, headers=AUTH).status_code == 400
+    )
+    # ...so the one real call still has its quota.
+    body = {"url": "https://arxiv.org/abs/2401.01234", "network": False}
+    assert client.post("/resolve", json=body, headers=AUTH).status_code == 200
+
+
+def test_posts_with_fields_does_not_validate_or_fetch_url(monkeypatch):
+    """The reviewed-fields path never fetches, so it must not run the SSRF/URL check —
+    a hand-entered link the resolver can't reach (a bare DOI, a bot-walled page) must
+    still post, and the network-free path must stay network-free."""
+    import api.app as app_mod
+
+    seen: dict = {}
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(
+        app_mod,
+        "_upsert_paper",
+        lambda meta, _u, _n: (seen.update(meta=meta), ("paper-1", False))[1],
+    )
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+
+    def _no_fetch(*_a, **_k):
+        raise AssertionError("the fields path must not fetch or validate for a fetch")
+
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_fetch)
+    monkeypatch.setattr(app_mod, "_validated_fetch_url", _no_fetch)
+
+    # A bare DOI as the "link" — not a fetchable http URL, but with fields it must post.
+    resp = client.post(
+        "/posts",
+        json={
+            "url": "10.1016/j.cell.2011.02.013",
+            "team_id": "t",
+            "fields": {"title": "Hallmarks of Cancer", "source": "manual"},
+        },
+        headers=AUTH,
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen["meta"].title == "Hallmarks of Cancer"
+
+
+def test_rate_limiter_is_thread_safe():
+    """Concurrent callers must not both slip past the cap, and the >10k eviction must
+    not crash mid-rebuild. Exercises the lock directly, off the HTTP path."""
+    import threading
+
+    from api.app import _PerUserRateLimiter
+
+    rl = _PerUserRateLimiter(max_events=100, window_seconds=60.0)
+    admitted = 0
+    admitted_lock = threading.Lock()
+
+    def hammer():
+        nonlocal admitted
+        for _ in range(50):
+            try:
+                rl.check("same-user")
+                with admitted_lock:
+                    admitted += 1
+            except Exception:
+                pass
+
+    threads = [threading.Thread(target=hammer) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # 8×50 = 400 attempts, cap 100: an unsynchronized limiter would admit >100 (or crash).
+    assert admitted == 100
 
 
 # --- BibTeX import ---------------------------------------------------------

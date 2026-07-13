@@ -14,17 +14,15 @@ server).
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
-import socket
 import time
 from contextvars import ContextVar
 from functools import lru_cache, wraps
-from urllib.parse import urlsplit
 
 from api import embeddings
 from api.config import get_api_settings
+from paper_radar.ingest import url_guard
 from supabase import Client, ClientOptions, create_client
 
 from .config import get_atlas_settings
@@ -106,8 +104,11 @@ def _is_auth_error(exc: Exception) -> bool:
     if code in (401, "401", "PGRST301", "PGRST302"):
         return True
     msg = f"{getattr(exc, 'message', '')} {exc}".lower()
-    return "jwt expired" in msg or "token is expired" in msg or "unauthorized" in msg or (
-        "jwt" in msg and "expired" in msg
+    return (
+        "jwt expired" in msg
+        or "token is expired" in msg
+        or "unauthorized" in msg
+        or ("jwt" in msg and "expired" in msg)
     )
 
 
@@ -146,9 +147,7 @@ def require_access(team: dict) -> None:
     """
     client, _ = _session()
     try:
-        rows = (
-            client.table("mcp_access").select("enabled").eq("team_id", team["id"]).execute().data
-        )
+        rows = client.table("mcp_access").select("enabled").eq("team_id", team["id"]).execute().data
     except Exception as exc:  # noqa: BLE001
         raise LabError(f"Could not check Claude access for {team['name']}: {exc}") from exc
 
@@ -301,9 +300,7 @@ def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
         # user, so RLS still scopes results to this lab.
         vector = embeddings.embed_query(query)  # raises EmbeddingError if unavailable
         matches = (
-            client.rpc(
-                "match_papers", {"p_team": team["id"], "p_query": vector, "p_limit": limit}
-            )
+            client.rpc("match_papers", {"p_team": team["id"], "p_query": vector, "p_limit": limit})
             .execute()
             .data
             or []
@@ -540,9 +537,7 @@ def digest(team: dict, days: int) -> dict:
         )
         if rows:
             ids = list({r["paper_id"] for r in rows})
-            papers = (
-                client.table("papers").select("id, title").in_("id", ids).execute().data or []
-            )
+            papers = client.table("papers").select("id, title").in_("id", ids).execute().data or []
             by_id = {p["id"]: p.get("title") for p in papers}
             my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
 
@@ -580,60 +575,21 @@ def get_post(team: dict, paper_id: str) -> dict:
 # mentionee is a co-member), never with the service-role key — except the one
 # global-corpus dedup below, which cannot leak or escalate.
 
-MAX_URL_LEN = 2048
 MAX_NOTE_LEN = 2000
 
 
 def validate_share_url(url: str) -> str:
-    """Accept only a plausible public http(s) article URL. Blocks non-http
-    schemes and loopback/private/link-local hosts so an injected URL can't point
-    the metadata fetch at internal infrastructure (SSRF)."""
-    raw = (url or "").strip()
-    if not raw:
-        raise LabError("No URL given.")
-    if len(raw) > MAX_URL_LEN:
-        raise LabError("That URL is too long.")
-    parts = urlsplit(raw)
-    if parts.scheme not in ("http", "https"):
-        raise LabError("Only http(s) links can be shared.")
-    host = parts.hostname
-    if not host:
-        raise LabError("That URL has no host.")
-    lowered = host.lower()
-    if lowered == "localhost" or lowered.endswith(".localhost") or lowered.endswith(".internal"):
-        raise LabError("That host isn't allowed.")
+    """Accept only a plausible public http(s) article URL, as a LabError.
+
+    The rules live in `paper_radar.ingest.url_guard` now — the HTTP API fetches the
+    same URLs through the same `fetch_metadata`, and having the guard here meant MCP
+    was defended and the API wasn't. This wraps the shared check to keep the MCP
+    error type (and the "shared" wording the tools speak).
+    """
     try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
-    if ip is not None and _is_blocked_ip(ip):
-        raise LabError("That host isn't allowed.")
-    return raw
-
-
-def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
-    return bool(
-        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_unspecified
-    )
-
-
-def _reject_private_dns(host: str) -> None:
-    """Resolve `host` and reject if it maps to a private/loopback/link-local IP —
-    blocks a *public hostname* that points at internal infra (the literal-IP check
-    in validate_share_url can't catch that). Best-effort: it does not close the
-    DNS-rebinding window between here and the fetch; airtight SSRF protection would
-    need a check at connect time."""
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return  # unresolvable — let fetch_metadata surface the real error
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            continue
-        if _is_blocked_ip(ip):
-            raise LabError("That host resolves to a disallowed address.")
+        return url_guard.validate_public_url(url)
+    except url_guard.BlockedUrl as exc:
+        raise LabError(str(exc).replace("fetched", "shared")) from exc
 
 
 class _RateLimiter:
@@ -707,14 +663,16 @@ def resolve_member(team: dict, name: str) -> dict:
 
 def resolve_metadata(url: str) -> dict:
     """Fetch citation metadata for a validated URL (one outbound request). Covered
-    by the fetch rate limiter (so dry-run previews can't be looped for free) and a
-    DNS check that rejects public names resolving to internal addresses."""
+    by the fetch rate limiter (so dry-run previews can't be looped for free) and, in
+    `fetch_metadata` itself, a guard that rejects internal addresses — including ones
+    reached by redirect."""
     from paper_radar.ingest.metadata import fetch_metadata
     from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
     _fetch_limiter.check()
+    # validate_share_url now covers the DNS check too (it's inside validate_public_url),
+    # so the separate _reject_private_dns call it used to need is gone.
     safe = validate_share_url(url)
-    _reject_private_dns(urlsplit(safe).hostname or "")
     clean = _clean_url(safe)
     meta = fetch_metadata(clean)
     return {"clean_url": clean, "url_norm": _normalize_key(clean), "meta": meta}

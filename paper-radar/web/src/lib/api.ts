@@ -68,7 +68,9 @@ export interface ResolvedPaper extends PaperFields {
  *  dialog. A bot-walled publisher resolves to a record with no title — that is
  *  an expected outcome, not an error, and the caller falls back to manual entry. */
 export function resolvePaper(url: string): Promise<ResolvedPaper> {
-  return request<ResolvedPaper>("/resolve", {
+  // Authenticated: /resolve makes the server fetch a URL you chose, so it isn't open
+  // to the world any more.
+  return authedRequest<ResolvedPaper>("/resolve", {
     method: "POST",
     body: JSON.stringify({ url }),
   });

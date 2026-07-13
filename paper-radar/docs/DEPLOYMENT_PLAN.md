@@ -51,8 +51,9 @@ wire the three tiers together with env vars. No data migration is needed.
    scoped) — its aarch64 wheels SIGILL in the Docker Desktop VM; amd64 prod
    builds and dev machines stay current. Retest the pin on a version bump.
 4. ✓ **Verify prod builds locally**: `docker build` (2 GB image, no torch) +
-   container smoke test against hosted Supabase (`/health`, `/resolve`);
-   `npm run build` in `web/` (tsc + vite) passes.
+   container smoke test against hosted Supabase (`/health`; `/resolve` now needs a
+   bearer token — an unauthenticated probe returns `401`, so hit it with a JWT or
+   just smoke-test `/health`); `npm run build` in `web/` (tsc + vite) passes.
 
 ### Phase 2 — database hygiene (small, before first deploy)
 
