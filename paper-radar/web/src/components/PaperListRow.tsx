@@ -41,6 +41,9 @@ export function PaperListRow({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Only when the row itself has focus: keydown bubbles, so without this an
+        // Enter on the nested bookmark would toggle the bookmark AND open the paper.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen();
@@ -79,7 +82,7 @@ export function PaperListRow({
         {teamId && userId && (
           // The card view has always had this; the table view hadn't, so the same
           // paper was bookmarkable in one view and not the other.
-          <span onClick={(e) => e.stopPropagation()} role="none">
+          <span onClick={(e) => e.stopPropagation()}>
             <BookmarkButton
               paperId={post.papers.id}
               teamId={teamId}

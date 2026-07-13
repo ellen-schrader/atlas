@@ -63,8 +63,11 @@ export default function Papers() {
   }, []);
 
   // Keyword: live, server-side, paginated full-text search.
-  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", filters, sort);
-  const { data: total } = usePaperCount(team.id, query, filters);
+  // Semantic results come from a different query and ignore these filters, so don't
+  // fetch with them — and don't let a filter set in keyword mode silently persist.
+  const activeFilters = mode === "keyword" ? filters : NO_FILTERS;
+  const search = usePaperSearch(team.id, mode === "keyword" ? query : "", activeFilters, sort);
+  const { data: total } = usePaperCount(team.id, query, activeFilters);
   const { data: tags } = useTeamTags(team.id);
   const { data: venues } = useTeamVenues(team.id);
 
@@ -235,6 +238,11 @@ export default function Papers() {
                 value: v.venue,
                 label: `${v.venue} (${v.count})`,
               })),
+              // team_venues caps at 30. Say so, rather than let the menu imply these
+              // are all the venues the lab has.
+              ...((venues?.length ?? 0) >= 30
+                ? [{ value: "", label: "— top 30 venues shown —", disabled: true }]
+                : []),
             ]}
           />
 
@@ -621,7 +629,7 @@ function Select({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; disabled?: boolean }[];
 }) {
   const active = value !== "";
   return (
@@ -637,8 +645,8 @@ function Select({
             : "border-border bg-surface text-muted hover:text-fg",
         )}
       >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
+        {options.map((o, i) => (
+          <option key={`${o.value}-${i}`} value={o.value} disabled={o.disabled}>
             {o.label}
           </option>
         ))}

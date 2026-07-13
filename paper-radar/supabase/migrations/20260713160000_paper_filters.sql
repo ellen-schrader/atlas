@@ -120,7 +120,11 @@ as $$
       and p.venue <> ''
     group by p.venue
     order by count(*) desc, p.venue
-    limit 30;   -- a long tail of one-off venues is noise in a filter menu
+    -- The long tail of one-off venues is noise in a filter menu, so the list is
+    -- capped. The UI says so rather than silently pretending these are all the
+    -- venues a lab has — a filter that quietly omits options is a filter you
+    -- can't trust.
+    limit 30;
 $$;
 
 grant execute on function public.team_venues(uuid) to authenticated;
