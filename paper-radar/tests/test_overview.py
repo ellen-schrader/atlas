@@ -6,7 +6,7 @@ import numpy as np
 
 from api import overview as ov
 from paper_radar.config import Settings
-from paper_radar.embed.index import auto_k, cluster_embeddings
+from paper_radar.embed.index import auto_k, cluster_embeddings, compute_layout_2d
 
 
 def test_auto_k_scales_and_clamps():
@@ -14,6 +14,21 @@ def test_auto_k_scales_and_clamps():
     assert auto_k(100) == 4      # floor
     assert auto_k(395) == 8      # round(7.9)
     assert auto_k(1000) == 8     # clamped to the palette size
+
+
+def test_compute_layout_2d_shape_determinism_and_edges():
+    rng = np.random.default_rng(0)
+    vecs = rng.normal(size=(40, 16)).astype(np.float32)
+    a = compute_layout_2d(vecs)
+    b = compute_layout_2d(vecs)
+    assert a.shape == (40, 2)
+    assert a.dtype == np.float32
+    assert (a == b).all()  # deterministic (fixed seed)
+    # tiny collections skip the projection entirely
+    assert compute_layout_2d(vecs[:0]).shape == (0, 2)
+    assert (compute_layout_2d(vecs[:2]) == [[0.0, 0.0], [1.0, 0.0]]).all()
+    # smallest projected size (perplexity must stay < n)
+    assert compute_layout_2d(vecs[:3]).shape == (3, 2)
 
 
 def test_cluster_embeddings_deterministic_and_partitions():

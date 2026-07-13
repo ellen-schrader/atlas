@@ -105,20 +105,21 @@ def cluster_embeddings(embeddings: np.ndarray, *, k: int | None = None) -> np.nd
     return km.fit_predict(vecs).astype(int)
 
 
-def compute_umap(
+def compute_layout_2d(
     embeddings: np.ndarray,
     *,
-    n_neighbors: int = 15,
-    min_dist: float = 0.1,
     random_state: int = 42,
 ) -> np.ndarray:
     """Project ``(n, dim)`` embeddings to ``(n, 2)`` coordinates for plotting.
 
-    ``n_neighbors`` is clamped for tiny collections (UMAP requires it to be < n).
-    With fewer than 3 points UMAP is not meaningful, so a trivial layout is
-    returned instead.
+    t-SNE rather than UMAP: comparable layouts at lab scale (hundreds of
+    papers) with no numba JIT — UMAP's first fit compiled for minutes on the
+    API machine's shared vCPU, which is longer than the request (or, on the
+    Fly trial plan, the machine) survives. Deterministic via fixed seed.
+    With fewer than 3 points a projection is not meaningful, so a trivial
+    layout is returned instead.
     """
-    import umap  # imported lazily; pulls in numba
+    from sklearn.manifold import TSNE
 
     n = embeddings.shape[0]
     if n == 0:
@@ -127,12 +128,14 @@ def compute_umap(
         # Not enough points to embed; lay them out on a short line.
         return np.array([[float(i), 0.0] for i in range(n)], dtype=np.float32)
 
-    reducer = umap.UMAP(
+    tsne = TSNE(
         n_components=2,
-        n_neighbors=min(n_neighbors, n - 1),
-        min_dist=min_dist,
+        # t-SNE requires perplexity < n; ~n/3 keeps tiny collections valid
+        # while capping at the usual default for larger ones.
+        perplexity=min(30.0, (n - 1) / 3),
         metric="cosine",
+        init="pca",
         random_state=random_state,
     )
-    coords = reducer.fit_transform(np.ascontiguousarray(embeddings, dtype=np.float32))
+    coords = tsne.fit_transform(np.ascontiguousarray(embeddings, dtype=np.float32))
     return np.ascontiguousarray(coords, dtype=np.float32)

@@ -19,18 +19,6 @@ COPY paper_radar ./paper_radar
 COPY api ./api
 RUN uv sync --frozen --extra api --no-dev
 
-# Bake numba's on-disk cache for umap/pynndescent: compiling at build time
-# roughly quarters `import umap` on a shared vCPU. The fit-path kernels still
-# JIT once per process — api/app.py warms those in a startup thread.
-# Non-fatal: umap's compile SIGILLs in the Docker Desktop aarch64 VM (local
-# smoke builds only); the startup warmup covers machines that skip the bake.
-RUN /app/.venv/bin/python -c "\
-import numpy as np; \
-from paper_radar.embed.index import cluster_embeddings, compute_umap; \
-x = np.random.default_rng(0).normal(size=(32, 64)).astype('float32'); \
-compute_umap(x); cluster_embeddings(x)" \
-    || echo "WARNING: numba cache bake failed (non-fatal); startup warmup still applies"
-
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8080
 

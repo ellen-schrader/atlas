@@ -124,12 +124,12 @@ def enrich(
 def embed(
     rebuild: bool = typer.Option(True, help="Rebuild the index from scratch."),
 ) -> None:
-    """Embed papers, build the FAISS index, and save UMAP 2-D coordinates."""
+    """Embed papers, build the FAISS index, and save 2-D map coordinates."""
     import numpy as np
     from sqlmodel import select
 
     from .embed.embed import embed_papers
-    from .embed.index import build_index, compute_umap, save_index
+    from .embed.index import build_index, compute_layout_2d, save_index
 
     settings = get_settings()
     init_db()
@@ -150,12 +150,12 @@ def embed(
             session.add(paper)
         session.commit()
 
-        coords = compute_umap(vecs)
+        coords = compute_layout_2d(vecs)
         settings.umap_coords_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(settings.umap_coords_path, coords)
 
     typer.secho(
-        f"Wrote index -> {settings.faiss_index_path} and UMAP coords -> "
+        f"Wrote index -> {settings.faiss_index_path} and map coords -> "
         f"{settings.umap_coords_path}",
         fg=typer.colors.GREEN,
     )

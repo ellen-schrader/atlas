@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -53,16 +52,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def _warm_umap() -> None:
-    # numba JIT-compiles umap's kernels once per process — minutes on a shared
-    # vCPU, which the in-process layout cache can't hide right after a machine
-    # (re)start. Compile off the request path so the first /overview is warm.
-    threading.Thread(
-        target=overview_mod.warm_layout_path, name="umap-warmup", daemon=True
-    ).start()
 
 
 # --- schemas ---------------------------------------------------------------

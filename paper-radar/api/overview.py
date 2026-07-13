@@ -43,23 +43,6 @@ class _LayoutCache:
 _layout_cache = _LayoutCache()
 
 
-def warm_layout_path() -> None:
-    """Compile the UMAP/KMeans code path on a throwaway fit so the first real
-    /overview doesn't pay numba's JIT wall (minutes on a shared vCPU — long
-    enough that the Fly proxy times the request out). Run from a background
-    thread at startup; the image also bakes numba's on-disk cache at build
-    time, which speeds the imports but not the per-process fit compile."""
-    try:
-        from paper_radar.embed.index import cluster_embeddings, compute_umap
-
-        x = np.random.default_rng(0).normal(size=(32, 64)).astype(np.float32)
-        compute_umap(x)
-        cluster_embeddings(x)
-        log.info("umap/kmeans warmup complete")
-    except Exception:  # warmup must never take the API down with it
-        log.exception("umap warmup failed")
-
-
 def _parse_vec(value: object) -> list[float]:
     return json.loads(value) if isinstance(value, str) else value  # type: ignore[return-value]
 
@@ -182,17 +165,17 @@ def _store_names(
 
 
 def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
-    """UMAP + clusters + names for ``papers`` (each with id, title, embedding).
+    """2-D layout + clusters + names for ``papers`` (each with id, title, embedding).
 
     Returns ``(point_by_id, clusters)`` where ``point_by_id[id] = {x, y, cluster}``
-    and ``clusters = [{id, label, description, size}]``. UMAP + KMeans are
+    and ``clusters = [{id, label, description, size}]``. Layout + KMeans are
     deterministic; the LLM names are reused from ``trends`` when the embedded set
     is unchanged, so Claude is only called when the clustering actually changes.
     """
-    from paper_radar.embed.index import cluster_embeddings, compute_umap
+    from paper_radar.embed.index import cluster_embeddings, compute_layout_2d
 
     vecs = np.array([_parse_vec(p["embedding"]) for p in papers], dtype=np.float32)
-    coords = compute_umap(vecs)
+    coords = compute_layout_2d(vecs)
     labels = cluster_embeddings(vecs)
 
     titles_by_cluster: dict[int, list[str]] = defaultdict(list)
