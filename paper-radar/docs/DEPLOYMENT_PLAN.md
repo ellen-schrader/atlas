@@ -59,11 +59,12 @@ wire the three tiers together with env vars. No data migration is needed.
    `supabase link --project-ref eegjxioiidymmiizflkh` + `supabase db push` →
    "Remote database is up to date"; `supabase migration list` shows all 16
    local migrations applied remotely.
-6. **Backups — open item.** The org is on the **free plan**: no automated
-   daily backups, no PITR (confirmed via management API). Fine while testing;
-   before the lab relies on comments/reactions/reading-lists, upgrade to Pro
-   (daily backups, 7-day retention) or schedule a `pg_dump` cron as a stopgap.
-   The `service_role` key is server-side only (API env, never the web).
+6. ✓ **Backups (stopgap).** The org is on the **free plan** (no automated
+   backups, no PITR), so `.github/workflows/db-backup.yml` dumps schema +
+   data nightly (03:00 UTC) to private workflow artifacts, 30-day retention.
+   Not covered: the mood-board storage bucket. Upgrade to Pro (daily
+   backups + PITR option) once the lab depends on the data. The
+   `service_role` key is server-side only (API env, never the web).
 
 ### Phase 3 — first manual deploy (done 2026-07-12)
 
