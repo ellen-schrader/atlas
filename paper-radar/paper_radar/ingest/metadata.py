@@ -42,13 +42,13 @@ _PMID_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(?P<pmid>\d+)", re.IGNORECAS
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
 
 _TIMEOUT = 10.0
-_API_UA = "paper-radar/0.1 (mailto:mail@ellen-schrader.de)"
+_API_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
 # A browser-like UA gets past the crudest bot filters when scraping landing pages.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-_NCBI_PARAMS = "&tool=paper-radar&email=mail@ellen-schrader.de"
+_NCBI_PARAMS = "&tool=paper-radar&email=atlas@ellen-schrader.de"
 _MAX_HTML_BYTES = 1_000_000
 
 
