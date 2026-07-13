@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookMarked, Check, Loader2, X } from "lucide-react";
+import { BookMarked, Check, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
 import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
@@ -45,13 +45,16 @@ const BANDS: { key: "today" | "week" | "earlier"; label: string }[] = [
 ];
 
 /** The user's saved (to-read) papers as a working queue: scaled and grouped by
- *  when they were saved, or ranked by taste fit. "Date added" is a pure Supabase
- *  read (works offline); "Recommended" ranks the same papers via the API. */
+ *  when they were saved, or ranked by taste fit, and searchable/filterable once
+ *  the list grows. "Date added" is a pure Supabase read (works offline);
+ *  "Recommended" ranks the same papers via the API. */
 export default function ReadingList() {
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const qc = useQueryClient();
   const [sort, setSort] = useState<Sort>("added");
+  const [query, setQuery] = useState("");
+  const [venue, setVenue] = useState("");
 
   const byDate = useReadingList(userId, team.id);
   const readWeek = useReadThisWeek(userId, team.id);
@@ -82,6 +85,26 @@ export default function ReadingList() {
   const recError = sort === "recommended" && byRec.isError;
   const empty = !loading && !recError && items.length === 0;
 
+  // Venue options come from the whole saved list (not the filtered view), so the
+  // menu is stable, and each option carries its count.
+  const venues = Object.entries(
+    (byDate.data ?? []).reduce<Record<string, number>>((m, r) => {
+      const v = r.papers?.venue;
+      if (v) m[v] = (m[v] ?? 0) + 1;
+      return m;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const q = query.trim().toLowerCase();
+  const filtering = Boolean(q || venue);
+  const shown = items.filter(
+    (it) =>
+      (!venue || it.venue === venue) &&
+      (!q ||
+        it.title.toLowerCase().includes(q) ||
+        it.authors.some((a) => a.toLowerCase().includes(q))),
+  );
+
   // Canonical backlog size comes from the date view (always loaded), so the
   // header stays stable even while the ranked view is fetching.
   const total = byDate.data?.length ?? 0;
@@ -91,10 +114,15 @@ export default function ReadingList() {
   // single ranked run, so it stays flat.
   const bands =
     sort === "added"
-      ? BANDS.map((b) => ({ ...b, items: items.filter((i) => i.added && bucketOf(i.added) === b.key) })).filter(
+      ? BANDS.map((b) => ({ ...b, items: shown.filter((i) => i.added && bucketOf(i.added) === b.key) })).filter(
           (b) => b.items.length > 0,
         )
       : null;
+
+  function clearFilters() {
+    setQuery("");
+    setVenue("");
+  }
 
   async function markRead(paperId: string) {
     await supabase
@@ -156,6 +184,40 @@ export default function ReadingList() {
         </div>
       </div>
 
+      {total > 0 && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex flex-1 items-center gap-2 rounded-control border border-border bg-surface-2 px-2.5 py-1.5">
+            <Search size={14} className="shrink-0 text-faint" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search title or author…"
+              className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery("")} aria-label="Clear search">
+                <X size={13} className="text-muted hover:text-fg" />
+              </button>
+            )}
+          </div>
+          {venues.length > 1 && (
+            <select
+              value={venue}
+              onChange={(e) => setVenue(e.target.value)}
+              aria-label="Filter by venue"
+              className="rounded-control border border-border bg-surface px-2.5 py-1.5 text-sm text-fg transition hover:border-border-strong focus:border-accent focus:outline-none"
+            >
+              <option value="">All venues</option>
+              {venues.map(([v, c]) => (
+                <option key={v} value={v}>
+                  {v} ({c})
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
       {loading && (
         <div className="flex items-center justify-center py-16 text-muted">
           <Loader2 className="animate-spin" size={20} />
@@ -191,8 +253,25 @@ export default function ReadingList() {
         </div>
       )}
 
-      {!loading && !recError && items.length > 0 && (
+      {!loading && !recError && items.length > 0 && shown.length === 0 && (
+        <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-surface-2 py-14 text-center">
+          <p className="text-sm font-medium">No papers match your filters</p>
+          <button onClick={clearFilters} className="text-xs font-medium text-accent hover:underline">
+            Clear filters
+          </button>
+        </div>
+      )}
+
+      {!loading && !recError && shown.length > 0 && (
         <>
+          {filtering && (
+            <p className="-mt-2 text-xs text-faint">
+              {shown.length} of {total} shown
+              <button onClick={clearFilters} className="ml-2 font-medium text-accent hover:underline">
+                Clear
+              </button>
+            </p>
+          )}
           {bands ? (
             <div className="flex flex-col gap-6">
               {bands.map((b) => (
@@ -206,7 +285,7 @@ export default function ReadingList() {
               ))}
             </div>
           ) : (
-            <ListCard items={items} onOpen={openPaper} onMarkRead={markRead} onRemove={removeFromList} />
+            <ListCard items={shown} onOpen={openPaper} onMarkRead={markRead} onRemove={removeFromList} />
           )}
         </>
       )}
