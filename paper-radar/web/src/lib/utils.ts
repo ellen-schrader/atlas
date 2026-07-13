@@ -14,6 +14,25 @@ export function slugify(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Return `url` only if it is a safe link/href target (http, https, or mailto).
+ * Guards against javascript:/data:/vbscript: URLs, which React does NOT block in
+ * href/src and would execute on click (stored XSS). Returns undefined otherwise,
+ * so the caller renders an inert (non-navigating) link.
+ */
+export function safeHref(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim();
+  try {
+    const { protocol } = new URL(trimmed, window.location.origin);
+    return protocol === "http:" || protocol === "https:" || protocol === "mailto:"
+      ? trimmed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Two-letter initials for an avatar, from a name or email. */
 export function initials(name: string): string {
   const parts = name.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);

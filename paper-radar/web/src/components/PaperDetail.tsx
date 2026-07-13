@@ -11,7 +11,7 @@ import { useMyRole } from "@/hooks/useMyRole";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost, SimilarPaper } from "@/lib/types";
-import { cn, formatDate, formatRelative } from "@/lib/utils";
+import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
 
 export function PaperDetail({
   post,
@@ -54,15 +54,15 @@ export function PaperDetail({
 
         <div className="mt-4 flex flex-wrap gap-2">
           <a
-            href={p.url}
+            href={safeHref(p.url)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 rounded-control bg-accent px-3 py-2 text-sm font-semibold text-accent-fg transition hover:brightness-110"
           >
             Read paper <ExternalLink size={13} />
           </a>
-          {p.code_url && <LinkBtn href={p.code_url}>Code</LinkBtn>}
-          {p.data_url && <LinkBtn href={p.data_url}>Data</LinkBtn>}
+          {safeHref(p.code_url) && <LinkBtn href={safeHref(p.code_url)!}>Code</LinkBtn>}
+          {safeHref(p.data_url) && <LinkBtn href={safeHref(p.data_url)!}>Data</LinkBtn>}
           <BookmarkButton
             paperId={p.id}
             teamId={teamId}

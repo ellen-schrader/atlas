@@ -262,6 +262,23 @@ def _validated_fetch_url(raw: str) -> str:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+_DANGEROUS_URL_SCHEMES = {"javascript", "data", "vbscript", "file", "blob"}
+
+
+def _reject_dangerous_url(raw: str) -> None:
+    """Block href-executable schemes before storing a URL the web client renders
+    as a link. http/https and scheme-less strings (bare DOIs, hand-typed links)
+    pass through so the by-hand post path still works; javascript:/data:/etc. do
+    not — defence-in-depth against stored XSS (the client also sanitises hrefs at
+    render time via safeHref)."""
+    if ":" not in raw:
+        return
+    head = raw.split(":", 1)[0]
+    scheme = "".join(c for c in head if c.isprintable() and not c.isspace()).lower()
+    if scheme in _DANGEROUS_URL_SCHEMES:
+        raise HTTPException(status_code=400, detail="Unsupported link scheme")
+
+
 # --- helpers ---------------------------------------------------------------
 
 
@@ -488,9 +505,10 @@ def create_post(
         # The web dialog resolved first and posts back what the user approved: we store
         # what they saw and never re-fetch (which would overwrite a hand-typed title
         # with the empty record a bot-walled publisher returns). No outbound request, so
-        # no SSRF check and no rate limit — and crucially no server-side URL validation,
-        # so a hand-entered link the resolver couldn't reach (a bare DOI, a bot-walled
-        # publisher page) still posts.
+        # no SSRF check and no rate limit. We still reject href-executable schemes
+        # (javascript:/data:/…) so a hand-entered link can't become stored XSS, while
+        # a bare DOI or a bot-walled publisher page (both scheme-less/http) still posts.
+        _reject_dangerous_url(req.url)
         url = _clean_url(req.url)
         meta = PaperMetadata(url=url, **req.fields.model_dump())
     else:
