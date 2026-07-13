@@ -94,11 +94,13 @@
   --ch-6: #f0705a;
   --ch-off: #39434c;
 
-  --year-1: #184f95;
-  --year-2: #256abf;
-  --year-3: #289690;
+  /* Monotonic in one hue: a sequential scale must read as a progression, not as
+     categories. (These were blue for two steps — leftovers from the old palette.) */
+  --year-1: #14403f;
+  --year-2: #1c6360;
+  --year-3: #248a85;
   --year-4: #2fbdb6;
-  --year-5: #5fdcd6;
+  --year-5: #7ee6e1;
 
   --rel-1: #1a222b;
   --rel-2: #1d4a4c;

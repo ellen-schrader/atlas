@@ -56,8 +56,11 @@ def search(
 def auto_k(n: int) -> int:
     """Cluster count for ``n`` papers, clamped to [4, 8].
 
-    Capped at 8 so each theme maps to one hue in the categorical map palette
-    (no color cycling); 8 themes is a readable granularity for a lab.
+    8 themes is a readable granularity for a lab. The map's categorical palette has
+    only 6 hues, so themes 6 and 7 reuse a hue — the client disambiguates them by
+    also giving each theme its own glyph, offset so the (hue, glyph) pair stays
+    unique (see ``markFor`` in web/src/lib/palette.ts). Raising this cap past 36
+    would start aliasing those pairs.
     """
     if n < 8:
         return max(1, n // 2)

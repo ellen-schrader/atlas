@@ -421,6 +421,9 @@ function Scatter({
     }
     const counts = new Map<string, number>();
     for (const p of points) if (p.venue) counts.set(p.venue, (counts.get(p.venue) ?? 0) + 1);
+    // Bounded by the palette rather than a magic number: every named venue gets its
+    // own hue, and the tail folds into "Other". (Was a hard-coded 7 against an
+    // 8-colour scale.)
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, cat.length).map(([v]) => v);
     const color = new Map(top.map((v, i) => [v, cat[i]]));
     return {

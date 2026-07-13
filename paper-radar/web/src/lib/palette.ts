@@ -11,14 +11,23 @@ import { useMemo } from "react";
 
 import { useTheme } from "@/components/ThemeProvider";
 
-/** Resolve a CSS custom property off the document root. */
-function token(name: string): string {
-  if (typeof document === "undefined") return "#888888";
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888888";
-}
+const FALLBACK = "#888888";
 
-const range = (prefix: string, n: number) =>
-  Array.from({ length: n }, (_, i) => token(`--${prefix}-${i + 1}`));
+/** Read the palette tokens in one pass — getComputedStyle is resolved once, not per token. */
+function readTokens(): { token: (name: string) => string; range: (p: string, n: number) => string[] } {
+  const style = typeof document === "undefined" ? null : getComputedStyle(document.documentElement);
+  const token = (name: string): string => {
+    const value = style?.getPropertyValue(name).trim();
+    if (!value) {
+      // A renamed or dropped token would otherwise degrade silently to grey — which
+      // is indistinguishable from --ch-off, i.e. a wrong chart rather than an error.
+      if (import.meta.env.DEV && style) console.error(`[palette] missing CSS token ${name}`);
+      return FALLBACK;
+    }
+    return value;
+  };
+  return { token, range: (p, n) => Array.from({ length: n }, (_, i) => token(`--${p}-${i + 1}`)) };
+}
 
 export interface Palette {
   /** Categorical — clusters, venues. Six fluorophore channels. */
@@ -31,28 +40,51 @@ export interface Palette {
   relevance: string[];
 }
 
-/** The data palette for the active theme. Recomputed when the theme flips. */
+/**
+ * The data palette for the active theme.
+ *
+ * Safe to resolve during render only because ThemeProvider puts the `.dark` class on
+ * <html> in the same tick as the state change — if it lagged a commit, this would
+ * cache the outgoing theme's colours.
+ */
 export function usePalette(): Palette {
   const { theme } = useTheme();
-  return useMemo<Palette>(
-    () => ({
-      categorical: range("ch", 6),
+  return useMemo<Palette>(() => {
+    const { token, range } = readTokens();
+    return {
+      categorical: range("ch", CHANNELS),
       other: token("--ch-off"),
       year: range("year", 5),
       relevance: range("rel", 7),
-    }),
+    };
     // `theme` isn't read in the body — it's the invalidation key. The values live in
     // CSS, so the only thing that changes them is the theme flipping.
-    [theme],
-  );
+  }, [theme]);
 }
 
 /** One distinct glyph per categorical series, so hue is never the only channel. */
 export type Mark = "circle" | "square" | "triangle" | "diamond" | "cross" | "hex";
 export const MARKS: Mark[] = ["circle", "square", "triangle", "diamond", "cross", "hex"];
 
+/** How many colours the categorical scale has (--ch-1..--ch-6). */
+export const CHANNELS = 6;
+
+/**
+ * The glyph for series `index`.
+ *
+ * The colour cycles with period 6 (`cat[i % 6]`), and `auto_k` can emit up to 8
+ * themes — so series 6 and 0 share a hue. If the glyph cycled on the *same*
+ * period it would repeat in lockstep and two themes would be identical in both
+ * channels, which is precisely the collision the shapes exist to prevent.
+ *
+ * Offsetting by the lap count (`i + floor(i / 6)`) makes the (colour, glyph)
+ * pair unique for the first 36 series: if i ≡ j (mod 6) then i = j + 6k, and the
+ * glyph indices differ by 7k ≡ k (mod 6), which is non-zero for 0 < k < 6.
+ */
 export function markFor(index: number): Mark {
-  return MARKS[((index % MARKS.length) + MARKS.length) % MARKS.length];
+  const i = Math.max(0, Math.trunc(index) || 0);
+  const offset = i + Math.floor(i / CHANNELS);
+  return MARKS[offset % MARKS.length];
 }
 
 /**
