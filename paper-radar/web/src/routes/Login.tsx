@@ -55,7 +55,9 @@ export default function Login() {
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h2>
       <p className="mb-5 mt-1 text-sm text-muted">
-        {mode === "login" ? "Sign in to your lab’s radar." : "Start discovering papers with your lab."}
+        {mode === "login"
+          ? "Sign in to your lab."
+          : "Create a lab, and Atlas starts learning its taste."}
       </p>
 
       <div className="mb-5 flex rounded-control bg-surface-2 p-1 text-sm">

@@ -21,11 +21,11 @@ export function AuthLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="max-w-sm">
             <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight">
-              Your lab’s paper firehose, turned into a shared radar.
+              Every lab has a taste. Atlas gives yours to Claude.
             </h1>
             <p className="mt-4 text-sm leading-relaxed text-muted">
-              Post papers, discuss them with your team, and never lose the one someone shared last
-              month.
+              The papers you save, the figures you admire, the ones you argue about — Atlas learns
+              your lab’s judgment from how you already work, then hands it to Claude.
             </p>
           </div>
         </div>

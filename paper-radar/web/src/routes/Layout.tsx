@@ -41,7 +41,7 @@ const NAV = [
   { to: "/", label: "Home", icon: LayoutGrid, end: true },
   { to: "/papers", label: "Papers", icon: LibraryBig, end: false },
   { to: "/reading", label: "Reading list", icon: BookMarked, end: false },
-  { to: "/board", label: "Mood board", icon: Images, end: false },
+  { to: "/board", label: "Your lab’s look", icon: Images, end: false },
   { to: "/map", label: "Map", icon: MapIcon, end: false },
 ];
 

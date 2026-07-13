@@ -160,14 +160,15 @@ export default function Dashboard() {
             <>
               {recs.data?.cold_start && (
                 <p className="mb-3 text-xs text-muted">
-                  Based on recent posts —{" "}
+                  Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few
+                  papers and this becomes yours, or{" "}
                   <button
                     onClick={() => navigate("/settings")}
                     className="font-medium text-accent hover:underline"
                   >
-                    add a research profile
+                    describe your research
                   </button>{" "}
-                  for personalized picks.
+                  to give it a head start.
                 </p>
               )}
               <div className="group/rec relative">

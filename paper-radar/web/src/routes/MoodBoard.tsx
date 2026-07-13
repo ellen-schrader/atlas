@@ -66,10 +66,10 @@ export default function MoodBoard() {
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-bold tracking-tight text-fg">Mood board</h1>
+          <h1 className="text-display font-bold tracking-tight text-fg">Your lab’s look</h1>
           <p className="mt-1.5 max-w-[52ch] text-sm text-muted">
-            Inspiring figures the lab wants to celebrate — great plotting styles, palettes, and
-            layouts from work worth learning from.
+            Figures your lab admires — your own and others’. Atlas derives your palette from them,
+            and hands Claude a matplotlib style sheet so it plots in your lab’s style.
           </p>
         </div>
         <Button onClick={() => setUploadOpen(true)}>
@@ -107,7 +107,9 @@ export default function MoodBoard() {
       {empty && (
         <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border bg-surface-2 py-16 text-center">
           <p className="text-sm text-muted">
-            {filter ? "No figures match this filter yet." : "No figures on the board yet."}
+            {filter
+              ? "No figures match this filter yet."
+              : "No figures yet. Add ones you admire — your own or others’ — and Atlas learns your lab’s palette from them."}
           </p>
           {!filter && (
             <Button variant="secondary" onClick={() => setUploadOpen(true)}>
