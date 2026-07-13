@@ -20,7 +20,7 @@ import json
 import logging
 from collections import Counter
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
@@ -490,32 +490,20 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
     )
 
 
-@app.get("/overview", response_model=OverviewResponse)
-def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
-    """Insights overview for a lab: 2-D layout + named clusters + stats (RLS-scoped).
+# Explicit columns for the overview: the post date + the paper's metadata and
+# embedding. Shared by the whole-lab overview and the scoped map overview.
+_OVERVIEW_COLS = (
+    "paper_id, posted_at, "
+    "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
+)
 
-    The layout (t-SNE) + clustering + cluster names are cached per team by the
-    embedded set; engagement and stats are computed fresh so they stay live.
-    """
-    if not get_user_id(token):
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    uc = user_client(token)
-    cols = (
-        "paper_id, posted_at, "
-        "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
-    )
-    rows = (
-        uc.table("paper_posts")
-        .select(cols)
-        .eq("team_id", team_id)
-        .execute()
-        .data
-        or []
-    )
+def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:
+    """Turn paper_posts rows (with joined papers) into the 2-D layout + clusters +
+    stats. `cached_layout` keys on the papers' content signature, so passing a
+    *subset* (a map's members) yields that subset's own layout and sub-themes."""
     total = len(rows)
     stats = _compute_stats(rows)
-
     papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
     if not papers:
         return OverviewResponse(points=[], clusters=[], stats=stats, total=total, embedded=0)
@@ -523,7 +511,6 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
 
     point_by_id, clusters = overview_mod.cached_layout(team_id, papers)
     eng = _engagement_counts(uc, team_id, [p["id"] for p in papers])
-
     points = [
         OverviewPoint(
             paper_id=p["id"],
@@ -547,6 +534,74 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
         stats=stats,
         total=total,
         embedded=len(papers),
+    )
+
+
+@app.get("/overview", response_model=OverviewResponse)
+def overview(team_id: str, token: str = Depends(require_token)) -> OverviewResponse:
+    """Insights overview for a lab: 2-D layout + named clusters + stats (RLS-scoped).
+
+    The layout (t-SNE) + clustering + cluster names are cached per team by the
+    embedded set; engagement and stats are computed fresh so they stay live.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+    rows = (
+        uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).execute().data or []
+    )
+    return _build_overview(uc, team_id, rows)
+
+
+class MapOverviewResponse(OverviewResponse):
+    map_id: str
+    name: str
+    seed: str
+    visibility: str
+    new_this_week: int  # members posted in the last 7 days
+
+
+@app.get("/maps/{map_id}/overview", response_model=MapOverviewResponse)
+def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOverviewResponse:
+    """The scoped map: a t-SNE + sub-themes over just the map's member papers.
+
+    Membership comes from the `map_members` RPC (seed similarity + pins − excludes);
+    RLS on `maps` means a caller who can't see the map gets a 404.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = (
+        uc.table("maps").select("id, team_id, name, seed, visibility").eq("id", map_id).limit(1)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    m = rows[0]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    member_ids = [x["paper_id"] for x in members]
+    if not member_ids:
+        base = OverviewResponse(
+            points=[], clusters=[], stats=_compute_stats([]), total=0, embedded=0
+        )
+        return MapOverviewResponse(
+            **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
+            visibility=m["visibility"], new_this_week=0,
+        )
+
+    post_rows = (
+        uc.table("paper_posts").select(_OVERVIEW_COLS)
+        .eq("team_id", m["team_id"]).in_("paper_id", member_ids)
+        .execute().data or []
+    )
+    base = _build_overview(uc, m["team_id"], post_rows)
+    cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+    new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
+    return MapOverviewResponse(
+        **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
+        visibility=m["visibility"], new_this_week=new_this_week,
     )
 
 

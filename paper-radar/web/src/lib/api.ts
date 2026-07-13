@@ -1,5 +1,11 @@
 import { supabase } from "@/lib/supabase";
-import type { OverviewData, Recommendation, SemanticHit } from "@/lib/types";
+import type {
+  MapDoc,
+  MapOverviewData,
+  OverviewData,
+  Recommendation,
+  SemanticHit,
+} from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -116,6 +122,31 @@ export async function semanticSearch(
 /** Insights overview: 2-D t-SNE layout + named clusters + stats for the lab. */
 export function fetchOverview(teamId: string): Promise<OverviewData> {
   return authedRequest<OverviewData>(`/overview?team_id=${encodeURIComponent(teamId)}`);
+}
+
+// --- topic maps ------------------------------------------------------------
+
+/** The lab's topic maps visible to the caller (RLS hides others' private maps). */
+export function fetchMaps(teamId: string): Promise<MapDoc[]> {
+  return authedRequest<MapDoc[]>(`/maps?team_id=${encodeURIComponent(teamId)}`);
+}
+
+/** Create a topic map; the seed phrase is embedded server-side for membership. */
+export function createMap(teamId: string, name: string, seed: string): Promise<MapDoc> {
+  return authedRequest<MapDoc>("/maps", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, name, seed }),
+  });
+}
+
+/** Delete a map (creator only; a 404 means it wasn't yours). */
+export function deleteMap(mapId: string): Promise<{ deleted: boolean }> {
+  return authedRequest(`/maps/${encodeURIComponent(mapId)}`, { method: "DELETE" });
+}
+
+/** A map's scoped overview: t-SNE + sub-themes over just its member papers. */
+export function fetchMapOverview(mapId: string): Promise<MapOverviewData> {
+  return authedRequest<MapOverviewData>(`/maps/${encodeURIComponent(mapId)}/overview`);
 }
 
 /** Cosine similarity of every embedded paper in the lab to a query (for the

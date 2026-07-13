@@ -135,3 +135,25 @@ export interface OverviewData {
   total: number; // posts in the lab
   embedded: number; // posts with an embedded paper (points returned)
 }
+
+/** A saved topic map (its definition + metadata; not its members). */
+export interface MapDoc {
+  id: string;
+  team_id: string;
+  created_by: string;
+  name: string;
+  seed: string;
+  visibility: "lab" | "private";
+  created_at: string;
+  updated_at: string;
+}
+
+/** The scoped overview for one map: an OverviewData over just its members, plus
+ *  the map's identity and a freshness count. */
+export interface MapOverviewData extends OverviewData {
+  map_id: string;
+  name: string;
+  seed: string;
+  visibility: string;
+  new_this_week: number;
+}
