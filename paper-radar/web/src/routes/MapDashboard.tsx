@@ -248,7 +248,7 @@ export default function MapDashboard() {
                         sizeBy="engagement"
                         showHulls
                         sims={null}
-                        labFilter={null}
+                        labFilter={labFilter}
                         tagFilter={null}
                         activeCluster={activeCluster}
                         setActiveCluster={setActiveCluster}
