@@ -32,6 +32,7 @@ from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
 from . import embeddings, enrichment, maps
+from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .config import get_api_settings
 from .deps import require_token
@@ -712,6 +713,94 @@ def map_papers(
             lab_counts[lab] += 1
     labs = [{"lab": lab, "count": n} for lab, n in lab_counts.most_common(8)]
     return MapPapersResponse(total=len(papers), papers=papers, labs=labs)
+
+
+class MapSummary(BaseModel):
+    text: str
+    cited_ids: list[str] = []
+    n_papers: int = 0
+    ai: bool = False  # true = LLM-synthesized; false = recency fallback / none
+    generated_at: str | None = None
+
+
+_SUMMARY_MAX_PAPERS = 8  # abstracts sent to the model
+_SUMMARY_MIN_PAPERS = 3  # below this a topic is too thin to summarize
+
+
+@app.get("/maps/{map_id}/summary", response_model=MapSummary)
+def get_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+    """The cached AI summary, if one has been generated. RLS 404s a hidden map."""
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    rows = (
+        user_client(token).table("maps").select("ai_summary").eq("id", map_id).limit(1)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    cached = rows[0].get("ai_summary")
+    return MapSummary(**cached) if cached else MapSummary(text="")
+
+
+@app.post("/maps/{map_id}/summary", response_model=MapSummary)
+def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSummary:
+    """Generate (and cache) a grounded, cited summary of the map's recent papers.
+
+    On demand only — never on page load — so the model cost is paid when a member
+    asks. Any member of a visible map may refresh this shared summary, so the cache
+    write uses the service client after RLS has confirmed the caller can see the map.
+    """
+    if not get_user_id(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    uc = user_client(token)
+
+    rows = (
+        uc.table("maps").select("team_id, seed").eq("id", map_id).limit(1).execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
+    team_id, seed = rows[0]["team_id"], rows[0]["seed"]
+
+    members = uc.rpc("map_members", {"p_map": map_id, "p_limit": 500}).execute().data or []
+    sim = {m["paper_id"]: m["similarity"] for m in members}
+    paper_ids = list(sim)
+    papers = (
+        uc.table("papers").select("id, title, abstract, year")
+        .in_("id", paper_ids).execute().data or []
+        if paper_ids
+        else []
+    )
+    posts = {
+        p["paper_id"]: p.get("posted_at")
+        for p in (
+            uc.table("paper_posts").select("paper_id, posted_at")
+            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+        )
+    }
+    # most recent, then most relevant — this is a "what's *new*" brief.
+    papers.sort(key=lambda p: (posts.get(p["id"]) or "", sim.get(p["id"]) or 0), reverse=True)
+    top = [
+        {
+            "paper_id": p["id"],
+            "title": p.get("title"),
+            "abstract": p.get("abstract"),
+            "year": p.get("year"),
+        }
+        for p in papers[:_SUMMARY_MAX_PAPERS]
+    ]
+
+    if len(top) < _SUMMARY_MIN_PAPERS:
+        result = {
+            "text": f"Only {len(top)} paper(s) in this map so far — too little to summarize yet.",
+            "cited_ids": [], "n_papers": len(top), "ai": False,
+        }
+    else:
+        result = map_summary_mod.generate_summary(seed, top)
+    result["generated_at"] = datetime.now(UTC).isoformat()
+
+    # Derived cache, not user content; the RLS select above already gated visibility.
+    service_client().table("maps").update({"ai_summary": result}).eq("id", map_id).execute()
+    return MapSummary(**result)
 
 
 # --- profile embedding + recommendations -----------------------------------

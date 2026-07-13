@@ -179,3 +179,13 @@ export interface MapPapersData {
   papers: MapPaper[];
   labs: { lab: string; count: number }[];
 }
+
+/** An AI (or fallback) summary of a map's recent developments. `ai` is false when
+ *  it's the no-key recency blurb; `text` is empty when none has been generated. */
+export interface MapSummary {
+  text: string;
+  cited_ids: string[];
+  n_papers: number;
+  ai: boolean;
+  generated_at: string | null;
+}

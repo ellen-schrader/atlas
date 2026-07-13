@@ -1,12 +1,18 @@
 import { type ReactNode, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, MessageSquare, Search, Smile, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, RefreshCw, Search, Smile, Sparkles, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
-import { fetchMapOverview, fetchMapPapers, isTransientApiError } from "@/lib/api";
+import {
+  fetchMapOverview,
+  fetchMapPapers,
+  fetchMapSummary,
+  generateMapSummary,
+  isTransientApiError,
+} from "@/lib/api";
 import { usePalette } from "@/lib/palette";
-import type { MapPaper } from "@/lib/types";
+import type { MapPaper, MapSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 import { Scatter } from "@/routes/Map";
@@ -40,6 +46,18 @@ export default function MapDashboard() {
     enabled: !!mapId,
     retry: (n, e) => isTransientApiError(e) && n < 5,
   });
+  const qc = useQueryClient();
+  const summary = useQuery({
+    queryKey: ["map-summary", mapId],
+    queryFn: () => fetchMapSummary(mapId!),
+    enabled: !!mapId,
+  });
+  const regen = useMutation({
+    mutationFn: () => generateMapSummary(mapId!),
+    onSuccess: (s) => qc.setQueryData(["map-summary", mapId], s),
+  });
+  const titleOf = (id: string) =>
+    papers.data?.papers.find((p) => p.paper_id === id)?.title ?? "source";
 
   const data = overview.data;
   const shown = useMemo(() => {
@@ -84,6 +102,16 @@ export default function MapDashboard() {
               <Chip>{data.visibility === "lab" ? `Shared with ${team.name}` : "Only you"}</Chip>
             </div>
           </header>
+
+          {data.total > 0 && (
+            <WhatsNew
+              summary={summary.data}
+              loading={summary.isLoading}
+              generating={regen.isPending}
+              onGenerate={() => regen.mutate()}
+              titleOf={titleOf}
+            />
+          )}
 
           {data.points.length >= 2 ? (
             <section className="rounded-card border border-border bg-surface p-5">
@@ -213,6 +241,95 @@ export default function MapDashboard() {
         </>
       )}
     </div>
+  );
+}
+
+const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function WhatsNew({
+  summary,
+  loading,
+  generating,
+  onGenerate,
+  titleOf,
+}: {
+  summary: MapSummary | undefined;
+  loading: boolean;
+  generating: boolean;
+  onGenerate: () => void;
+  titleOf: (id: string) => string;
+}) {
+  const { openPaper } = usePaperModal();
+  const has = Boolean(summary?.text);
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-1.5 font-serif text-lg font-semibold tracking-tight">
+          <Sparkles size={16} className="text-accent" /> What’s new
+        </h2>
+        {has && (
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={generating}
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline disabled:opacity-50"
+          >
+            {generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Regenerate
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-faint">Loading…</p>
+      ) : generating && !has ? (
+        <p className="flex items-center gap-2 text-sm text-muted">
+          <Loader2 size={14} className="animate-spin" /> Reading the recent papers…
+        </p>
+      ) : has && summary ? (
+        <>
+          <p className="text-sm leading-relaxed text-fg">{summary.text}</p>
+          {summary.cited_ids.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-faint">Sources:</span>
+              {summary.cited_ids.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => openPaper(id)}
+                  className="rounded-chip border border-border bg-surface-2 px-2 py-0.5 text-accent transition hover:border-accent"
+                >
+                  {truncate(titleOf(id), 40)}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-2.5 text-xs text-faint">
+            {summary.ai ? "Synthesized from" : "Based on"} {summary.n_papers} of the lab’s papers
+            {summary.ai
+              ? " · grounded in them, nothing invented"
+              : " · add an Anthropic key for an AI synthesis"}
+            .
+          </p>
+        </>
+      ) : (
+        <div className="flex flex-col items-start gap-2.5">
+          <p className="text-sm text-muted">
+            Get a short, cited brief of what’s moved in this topic recently — built only from the
+            lab’s own papers.
+          </p>
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={generating}
+            className="inline-flex items-center gap-1.5 rounded-control bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 disabled:opacity-50"
+          >
+            {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+            Summarize what’s new
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

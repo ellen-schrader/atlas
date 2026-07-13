@@ -3,6 +3,7 @@ import type {
   MapDoc,
   MapOverviewData,
   MapPapersData,
+  MapSummary,
   OverviewData,
   Recommendation,
   SemanticHit,
@@ -155,6 +156,18 @@ export function fetchMapOverview(mapId: string): Promise<MapOverviewData> {
 export function fetchMapPapers(mapId: string, sort: string): Promise<MapPapersData> {
   const p = encodeURIComponent(mapId);
   return authedRequest<MapPapersData>(`/maps/${p}/papers?sort=${encodeURIComponent(sort)}`);
+}
+
+/** The cached AI summary of a map (text is empty when none has been generated). */
+export function fetchMapSummary(mapId: string): Promise<MapSummary> {
+  return authedRequest<MapSummary>(`/maps/${encodeURIComponent(mapId)}/summary`);
+}
+
+/** Generate (and cache) the map's summary — on demand, since it costs a model call. */
+export function generateMapSummary(mapId: string): Promise<MapSummary> {
+  return authedRequest<MapSummary>(`/maps/${encodeURIComponent(mapId)}/summary`, {
+    method: "POST",
+  });
 }
 
 /** Cosine similarity of every embedded paper in the lab to a query (for the
