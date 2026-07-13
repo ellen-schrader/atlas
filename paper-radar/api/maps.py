@@ -88,10 +88,16 @@ def create_map(req: MapCreate, token: str = Depends(require_token)) -> MapOut:
             .execute()
             .data
         )
-    except Exception as exc:  # noqa: BLE001 — RLS refusal surfaces as an APIError
-        raise HTTPException(
-            status_code=403, detail="You can only create maps in labs you belong to."
-        ) from exc
+    except Exception as exc:  # noqa: BLE001 — inspect, don't blanket-403
+        # Only an RLS `with check` refusal means "not a member" (403). Anything
+        # else (Supabase down, bad payload) is a real failure and must not be
+        # disguised as a permission error.
+        detail = f"{getattr(exc, 'code', '')} {getattr(exc, 'message', '')} {exc}".lower()
+        if "row-level security" in detail or "42501" in detail or "permission denied" in detail:
+            raise HTTPException(
+                status_code=403, detail="You can only create maps in labs you belong to."
+            ) from exc
+        raise
     if not rows:
         raise HTTPException(
             status_code=403, detail="You can only create maps in labs you belong to."

@@ -126,6 +126,42 @@ def test_create_rls_refusal_is_403(stub):
     assert r.status_code == 403
 
 
+class _RaisingClient:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def table(self, _name):
+        return self
+
+    def insert(self, _payload):
+        return self
+
+    def execute(self):
+        raise self.exc
+
+
+def _stub_auth(monkeypatch):
+    monkeypatch.setattr(maps, "get_user_id", lambda _t: "u")
+    monkeypatch.setattr(maps.embeddings, "embed_query", lambda _s: [0.1] * 1024)
+
+
+def test_rls_violation_is_403(monkeypatch):
+    _stub_auth(monkeypatch)
+    err = Exception('new row violates row-level security policy for table "maps"')
+    monkeypatch.setattr(maps, "user_client", lambda _t: _RaisingClient(err))
+    r = client.post("/maps", headers=AUTH, json={"team_id": "x", "name": "n", "seed": "s"})
+    assert r.status_code == 403
+
+
+def test_unexpected_db_error_is_not_masked_as_403(monkeypatch):
+    _stub_auth(monkeypatch)
+    down = _RaisingClient(RuntimeError("connection refused"))
+    monkeypatch.setattr(maps, "user_client", lambda _t: down)
+    safe = TestClient(app, raise_server_exceptions=False)
+    r = safe.post("/maps", headers=AUTH, json={"team_id": "x", "name": "n", "seed": "s"})
+    assert r.status_code == 500  # a real failure, surfaced — not a disguised permission error
+
+
 def test_delete_missing_or_foreign_is_404(stub):
     stub([])  # RLS deleted zero rows
     r = client.delete("/maps/whatever", headers=AUTH)

@@ -38,8 +38,12 @@ create policy maps_insert on public.maps for insert
     to authenticated with check (is_team_member(team_id) and created_by = auth.uid());
 
 -- Only the creator edits or deletes a map (rename, re-seed, pin/exclude, share).
+-- WITH CHECK also re-asserts lab membership, symmetric with maps_insert, so a map
+-- can never be moved into a lab its creator doesn't belong to.
 create policy maps_update on public.maps for update
-    to authenticated using (created_by = auth.uid()) with check (created_by = auth.uid());
+    to authenticated
+    using (created_by = auth.uid())
+    with check (created_by = auth.uid() and is_team_member(team_id));
 create policy maps_delete on public.maps for delete
     to authenticated using (created_by = auth.uid());
 
@@ -55,6 +59,11 @@ grant select, insert, update, delete on public.maps to authenticated;
 -- Embeddings are unit-norm (Voyage), so `1 - (a <=> b)` is cosine similarity in
 -- [-1, 1] and the HNSW index (init migration) serves the ORDER BY. `nulls last`
 -- keeps a not-yet-embedded seed from hiding the pinned papers.
+--
+-- NOTE (M0): membership is top-N by similarity with NO relevance floor yet, so on a
+-- corpus smaller than p_limit every lab paper comes back regardless of the seed. A
+-- similarity threshold is a planned refinement (see the implementation plan); until
+-- then callers should treat the tail of the ranking as weakly-related, not "in".
 create or replace function public.map_members(p_map uuid, p_limit int default 100)
 returns table(post_id uuid, paper_id uuid, similarity real, pinned boolean)
 language sql
