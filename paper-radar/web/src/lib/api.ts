@@ -45,6 +45,35 @@ export interface PostResult {
   paper: { url: string; title: string | null };
 }
 
+/** The metadata fields a user can see and correct before a paper is added. */
+export interface PaperFields {
+  title: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  abstract: string | null;
+  keywords: string[];
+  /** "arxiv" | "crossref" | "pubmed" | "citation_meta" | "manual" | "unknown" */
+  source: string;
+}
+
+export interface ResolvedPaper extends PaperFields {
+  url: string;
+  /** Normalized dedup key — what `papers.url_norm` is matched on. */
+  url_norm: string;
+}
+
+/** Look a URL up without writing anything: the autofill behind the Add-paper
+ *  dialog. A bot-walled publisher resolves to a record with no title — that is
+ *  an expected outcome, not an error, and the caller falls back to manual entry. */
+export function resolvePaper(url: string): Promise<ResolvedPaper> {
+  return request<ResolvedPaper>("/resolve", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
 async function authToken(): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -52,16 +81,36 @@ async function authToken(): Promise<string> {
   return token;
 }
 
-/** Post a paper into a lab via the API (sends the user's Supabase JWT). */
-export async function postPaper(url: string, teamId: string): Promise<PostResult> {
-  const token = await authToken();
+/** Post a paper into a lab via the API (sends the user's Supabase JWT).
+ *
+ *  `fields` is the metadata the user approved in the Add-paper dialog. Sending it
+ *  stops the server re-resolving the URL — which is what makes a hand-typed title
+ *  survive for a bot-walled publisher that resolves to nothing. Omit it and the
+ *  server resolves the URL itself, as it always did. */
+export function postPaper(
+  url: string,
+  teamId: string,
+  fields?: PaperFields,
+  note?: string,
+): Promise<PostResult> {
+  return authedRequest<PostResult>("/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      url,
+      team_id: teamId,
+      fields: fields ?? null,
+      note: note?.trim() || null,
+    }),
+  });
+}
 
+/** Call the Atlas API; throws the API's `detail` on error. */
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/posts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ url, team_id: teamId }),
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...init.headers },
     });
   } catch {
     // fetch throws on network failure / CORS / service down — give the user
@@ -69,7 +118,7 @@ export async function postPaper(url: string, teamId: string): Promise<PostResult
     throw new ApiError("Couldn’t reach the paper service. Check your connection and try again.");
   }
   if (!res.ok) {
-    let detail = `Couldn’t post that paper (error ${res.status}).`;
+    let detail = `Request failed (error ${res.status}).`;
     try {
       detail = (await res.json()).detail ?? detail;
     } catch {
@@ -83,29 +132,10 @@ export async function postPaper(url: string, teamId: string): Promise<PostResult
 /** Call the Atlas API with the user's JWT; throws the API's detail on error. */
 async function authedRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await authToken();
-  let res: Response;
-  try {
-    res = await fetch(`${API_URL}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        ...init.headers,
-      },
-    });
-  } catch {
-    throw new ApiError("Couldn’t reach the paper service. Check your connection and try again.");
-  }
-  if (!res.ok) {
-    let detail = `Request failed (error ${res.status}).`;
-    try {
-      detail = (await res.json()).detail ?? detail;
-    } catch {
-      // non-JSON error body
-    }
-    throw new ApiError(detail, res.status);
-  }
-  return res.json();
+  return request<T>(path, {
+    ...init,
+    headers: { Authorization: `Bearer ${token}`, ...init.headers },
+  });
 }
 
 /** Rank the lab's papers against a free-text query by embedding similarity. */
