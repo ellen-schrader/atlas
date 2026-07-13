@@ -201,8 +201,6 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
                 for h in lab.search(team, title, "keyword", _clamp(limit))
                 if h["paper_id"] != paper_id
             ][: _clamp(limit)]
-    except embeddings.EmbeddingError as exc:
-        return f"Semantic similarity is unavailable ({exc})."
     except lab.LabError as exc:
         return f"Error: {exc}"
     if not hits:
@@ -224,9 +222,11 @@ def lab_digest(days: int = 7, team_id: str | None = None) -> str:
     except lab.LabError as exc:
         return f"Error: {exc}"
     papers = d["new_papers"]
+    n_papers = d["n_papers"]
     parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
-    if papers:
-        parts.append(f"{len(papers)} new paper(s):")
+    if n_papers:
+        shown = f" (showing the {len(papers)} most recent)" if n_papers > len(papers) else ""
+        parts.append(f"{n_papers} new paper(s){shown}:")
         parts.append(_render(papers, ""))
     else:
         parts.append("No new papers.")
@@ -298,22 +298,24 @@ def draft_related_work(
         team_id: Which lab, if you belong to more than one.
     """
     n = max(1, min(int(limit), 20))
+    anchor_title = None  # external (paper title) — must not enter the trusted guide
     try:
         team = lab.resolve_team(team_id)
         if paper_id:
             anchor = lab.get_post(team, paper_id)  # validate membership + get the title
-            title = anchor["paper"].get("title") or paper_id
-            subject = f"“{title}”"
+            anchor_title = anchor["paper"].get("title") or paper_id
+            subject = "the paper you selected"
             hits = lab.similar(team, paper_id, n)
             if hits is None:  # no embedding → keyword fallback on the title
                 hits = [
                     h
-                    for h in lab.search(team, title, "keyword", n)
+                    for h in lab.search(team, anchor_title, "keyword", n)
                     if h["paper_id"] != paper_id
                 ]
         elif topic and topic.strip():
-            hits = lab.search(team, topic.strip(), "semantic", n)
+            # A caller-supplied topic is the user's own input, safe to name directly.
             subject = f"“{topic.strip()}”"
+            hits = lab.search(team, topic.strip(), "semantic", n)
         else:
             return "Give me a topic or a paper_id to draft related work for."
     except embeddings.EmbeddingError as exc:
@@ -341,7 +343,12 @@ def draft_related_work(
         "group related work by theme; for each, state its contribution and how it "
         "relates. Do not introduce any reference that isn't listed here.\n\n"
     )
-    return guide + _untrusted("lab papers", "\n\n".join(sources))
+    # The anchor title is externally authored — expose it as data, never as part of
+    # the instruction above.
+    body = _untrusted("lab papers", "\n\n".join(sources))
+    if anchor_title:
+        body = _untrusted("anchor paper title", anchor_title) + "\n\n" + body
+    return guide + body
 
 
 @mcp.tool()
@@ -516,6 +523,7 @@ def check_colorblind_safety(
         palette: Or pass colours directly — hex like "#4477AA,#EE6677,#228833".
         team_id: Which lab, if you belong to more than one (only with figure_id).
     """
+    from_figure = False
     try:
         if palette:
             hexes = moodboard.normalize_hexes(palette)
@@ -525,6 +533,7 @@ def check_colorblind_safety(
             fig = moodboard.get_figure(team, figure_id)
             hexes = moodboard.palette(moodboard.download(fig), n=8)
             source = f"figure “{fig.get('title') or fig['id']}”"
+            from_figure = True  # `source` carries an external, user-authored title
         else:
             return "Give me a figure_id or a palette (e.g. \"#4477AA,#EE6677\")."
     except lab.LabError as exc:
@@ -556,7 +565,9 @@ def check_colorblind_safety(
             f"cycle (Paul Tol 'bright'): {safe}. Distinguishing lines by more than "
             "colour alone — dash style, markers, or direct labels — also helps."
         )
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    # Frame it as untrusted only when it embeds an external figure title.
+    return _untrusted("figure", result) if from_figure else result
 
 
 @mcp.tool()

@@ -338,6 +338,12 @@ def test_centroid_weights_each_paper_equally():
     assert _almost(c, [2 ** -0.5, 2 ** -0.5])
 
 
+def test_centroid_skips_mismatched_dimension_vectors():
+    # A stray vector of the wrong dimension is skipped, not a crash or corruption.
+    c = lab._centroid([[1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])  # only the two 2-D vectors count
+
+
 def test_parse_embedding_handles_json_string_and_list():
     assert lab._parse_embedding("[0.1, 0.2, 0.3]") == [0.1, 0.2, 0.3]
     assert lab._parse_embedding([0.1, 0.2]) == [0.1, 0.2]

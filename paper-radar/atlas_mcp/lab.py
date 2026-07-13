@@ -190,6 +190,23 @@ def _hydrate(client: Client, posts: list[dict]) -> list[dict]:
     return out
 
 
+def _hydrate_scored(client: Client, rows: list[dict]) -> list[dict]:
+    """Given ranking-RPC rows carrying `post_id` + `similarity` (match_papers /
+    recommend_papers), fetch and hydrate those posts, attach the score, and return
+    them most-similar first."""
+    if not rows:
+        return []
+    sim = {r["post_id"]: r["similarity"] for r in rows}
+    posts = (
+        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
+    )
+    hydrated = _hydrate(client, posts)
+    for h in hydrated:
+        h["similarity"] = sim.get(h["id"])
+    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
+    return hydrated
+
+
 @with_refresh
 def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
     """Ranked posts in `team` for `query`. mode: "keyword" | "semantic"."""
@@ -206,18 +223,7 @@ def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
             .data
             or []
         )
-        if not matches:
-            return []
-        sim = {m["post_id"]: m["similarity"] for m in matches}
-        posts = (
-            client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data
-            or []
-        )
-        hydrated = _hydrate(client, posts)
-        for h in hydrated:
-            h["similarity"] = sim.get(h["id"])
-        hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
-        return hydrated
+        return _hydrate_scored(client, matches)
 
     if mode != "keyword":
         raise LabError(f"Unknown search mode {mode!r} — use 'keyword' or 'semantic'.")
@@ -266,9 +272,11 @@ def _centroid(vectors: list[list[float]]) -> list[float] | None:
             continue
         if acc is None:
             acc = list(u)
-        else:
+        elif len(u) == len(acc):
             for i in range(len(acc)):
                 acc[i] += u[i]
+        else:
+            continue  # different dimensionality — skip rather than crash/corrupt
         n += 1
     if acc is None:
         return None
@@ -340,17 +348,7 @@ def recommend(team: dict, limit: int) -> list[dict]:
         .data
         or []
     )
-    if not rows:
-        return []
-    sim = {r["post_id"]: r["similarity"] for r in rows}
-    posts = (
-        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
-    )
-    hydrated = _hydrate(client, posts)
-    for h in hydrated:
-        h["similarity"] = sim.get(h["id"])
-    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
-    return hydrated
+    return _hydrate_scored(client, rows)
 
 
 def _match_by_vector(client: Client, team: dict, vec: list[float], limit: int) -> list[dict]:
@@ -362,17 +360,7 @@ def _match_by_vector(client: Client, team: dict, vec: list[float], limit: int) -
         .data
         or []
     )
-    if not matches:
-        return []
-    sim = {m["post_id"]: m["similarity"] for m in matches}
-    posts = (
-        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
-    )
-    hydrated = _hydrate(client, posts)
-    for h in hydrated:
-        h["similarity"] = sim.get(h["id"])
-    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
-    return hydrated
+    return _hydrate_scored(client, matches)
 
 
 def _paper_embedding(client: Client, paper_id: str) -> list[float] | None:
@@ -429,17 +417,20 @@ def digest(team: dict, days: int) -> dict:
     uid = current_user_id()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    posts = (
+    # Cap the rendered list so an active lab can't dump hundreds of papers into one
+    # tool result; the exact-count header still reports the true total.
+    post_cap = 20
+    posts_resp = (
         client.table("paper_posts")
-        .select(POST_COLUMNS + ", posted_by")
+        .select(POST_COLUMNS + ", posted_by", count="exact")
         .eq("team_id", tid)
         .gte("posted_at", cutoff)
         .order("posted_at", desc=True)
+        .limit(post_cap)
         .execute()
-        .data
-        or []
     )
-    new_papers = _hydrate(client, posts)
+    new_papers = _hydrate(client, posts_resp.data or [])
+    n_papers = posts_resp.count if posts_resp.count is not None else len(new_papers)
 
     comments = (
         client.table("comments")
@@ -470,7 +461,13 @@ def digest(team: dict, days: int) -> dict:
             by_id = {p["id"]: p.get("title") for p in papers}
             my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
 
-    return {"days": days, "new_papers": new_papers, "n_comments": n_comments, "mentions": my_mentions}
+    return {
+        "days": days,
+        "new_papers": new_papers,
+        "n_papers": n_papers,
+        "n_comments": n_comments,
+        "mentions": my_mentions,
+    }
 
 
 @with_refresh
