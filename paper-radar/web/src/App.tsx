@@ -9,6 +9,7 @@ import Layout from "@/routes/Layout";
 import Landing from "@/routes/Landing";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
+import Import from "@/routes/Import";
 import MapView from "@/routes/Map";
 import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
@@ -68,6 +69,7 @@ function AuthedApp({ session }: { session: Session }) {
       <Route element={<Layout session={session} team={team} />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/papers" element={<Papers />} />
+        <Route path="/import" element={<Import />} />
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />

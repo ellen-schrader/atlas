@@ -130,3 +130,50 @@ export function updateProfile(profileMd: string): Promise<{ ok: boolean; embedde
     body: JSON.stringify({ profile_md: profileMd }),
   });
 }
+
+// --- BibTeX import ---------------------------------------------------------
+
+export interface BibEntryPreview {
+  key: string;
+  title: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  published_at: string | null;
+  doi: string | null;
+  url: string | null;
+  /** "new" | "duplicate" | "no_doi" | "rejected" */
+  status: string;
+  reason: string | null;
+}
+
+export interface PreflightResult {
+  entries: BibEntryPreview[];
+  new: number;
+  duplicates: number;
+  no_doi: number;
+  rejected: number;
+  /** What Import will actually add: new + no_doi. "No DOI" is a warning, not a refusal. */
+  importable: number;
+}
+
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+}
+
+/** What the file *would* do. Writes nothing — the user sees it before committing. */
+export function bibtexPreflight(bibtex: string, teamId: string): Promise<PreflightResult> {
+  return authedRequest<PreflightResult>("/import/bibtex/preflight", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, bibtex }),
+  });
+}
+
+export function bibtexImport(bibtex: string, teamId: string): Promise<ImportResult> {
+  return authedRequest<ImportResult>("/import/bibtex", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, bibtex }),
+  });
+}
