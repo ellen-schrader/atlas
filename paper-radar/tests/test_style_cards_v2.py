@@ -163,6 +163,45 @@ def test_every_panel_sees_the_same_rows_in_the_same_order():
         assert dom.ordered_labels()[i] == dom.labels[src]
 
 
+@pytest.mark.parametrize("n", [2, 3, 5, 8, 12, 40])
+def test_linkage_is_a_real_tree(n):
+    """UPGMA, not a schematic comb. A dendrogram's HEIGHT is distance: a valid tree
+    has n-1 merges at non-decreasing heights, so tight clusters join early on short
+    branches and an outlier joins last on a long one. Evenly spaced merges would be
+    a perfectly balanced tree — which no real data produces, and which is exactly
+    the detail a domain reader clocks as fake."""
+    dom = _domain(n=n)
+    merges = dom.linkage
+    assert len(merges) == n - 1
+    assert sorted(dom.leaf_order) == list(range(n))  # every row is a leaf, exactly once
+    heights = [h for _, _, h in merges]
+    assert all(a <= b + 1e-9 for a, b in zip(heights, heights[1:], strict=False)), (
+        "merge heights must be non-decreasing — that is what makes it an ultrametric tree"
+    )
+    if n > 3:
+        assert max(heights) - min(heights) > 0.05, "real merge heights are not uniform"
+
+
+def test_the_tree_and_the_row_order_are_the_same_claim():
+    """The tree drawn beside the heatmap and the heatmap's row order must come from
+    ONE linkage. They were two independent algorithms that merely happened to look
+    aligned — so the tree could bracket rows the ordering never grouped."""
+    dom = _domain(order="clustered", n=12)
+    assert list(dom.order) == list(dom.leaf_order)
+
+    # …and the leaf order is planar: each merge joins two blocks that are already
+    # contiguous in the row order, so no branch has to cross another to reach a leaf.
+    pos = {int(r): i for i, r in enumerate(dom.order)}
+    members = {i: [i] for i in range(dom.n)}
+    for k, (a, b, _h) in enumerate(dom.linkage):
+        block = members[a] + members[b]
+        spread = sorted(pos[i] for i in block)
+        assert spread == list(range(spread[0], spread[0] + len(spread))), (
+            "a merged cluster must be contiguous in the row order, or the tree crosses itself"
+        )
+        members[dom.n + k] = block
+
+
 def test_order_rules_actually_order():
     by_value = _domain(order="by_value")
     vals = by_value.ordered(by_value.abundance)

@@ -194,6 +194,16 @@ Also true of the implementation:
 - The expression matrix is built from a few latent programmes, so the rows
   genuinely cluster — otherwise `order: clustered` and the dendrogram would be
   decoration over noise.
+- **One UPGMA linkage produces BOTH the clustered row order and the tree drawn
+  beside it.** They are the same claim about the same data, so they must not be
+  two algorithms that merely happen to agree (they were, and the tree could
+  bracket rows the ordering never grouped). A dendrogram's height *is* distance:
+  tight clusters join early on short branches, an outlier joins last on a long
+  one. Evenly-spaced merges make a perfectly balanced comb, which no real data
+  produces — it is the detail a domain reader clocks as fake. Tests pin that the
+  tree is a valid ultrametric (n-1 merges, non-decreasing heights) and that its
+  leaf order is planar, i.e. every merged cluster is contiguous in the row order,
+  so no branch has to cross another.
 - Row panels are aligned by pinning identical limits, NOT by matplotlib's
   `sharey`: shared axes share one tick locator, so the panel that hides its row
   ticks would wipe the labels off the panel that shows them.

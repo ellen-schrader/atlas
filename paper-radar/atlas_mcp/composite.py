@@ -73,6 +73,10 @@ class _Domain:
         programmes = rng.normal(0, 1, (3, cols))
         self.matrix = loadings @ programmes + rng.normal(0, 0.35, (self.n, cols))
 
+        # ONE linkage produces BOTH the clustered row order and the tree drawn
+        # beside it. They are the same claim about the same data, so they must not
+        # be two algorithms that merely happen to agree — see :meth:`_linkage`.
+        self.linkage, self.leaf_order = self._linkage()
         self.order = self._order(cfg["order"])
 
     def _order(self, rule: str) -> np.ndarray:
@@ -80,25 +84,57 @@ class _Domain:
             return np.arange(self.n)
         if rule == "by_value":
             return np.argsort(-self.abundance)
-        return self._seriate()
+        return np.array(self.leaf_order)
 
-    def _seriate(self) -> np.ndarray:
-        """A cheap agglomerative ordering: repeatedly append the unused row most
-        similar to the last one. Enough to make neighbouring rows look related,
-        which is all a *style* card needs to claim — we are recreating the LOOK of
-        a clustered heatmap, not its clustering."""
+    def _linkage(self) -> tuple[list, list]:
+        """UPGMA (average-linkage) agglomerative clustering of the rows.
+
+        Returns ``(merges, leaf_order)`` where each merge is
+        ``(left_id, right_id, height)`` and ids below ``n`` are leaves.
+
+        Why a real linkage and not a schematic tree: a dendrogram's HEIGHT *is*
+        distance — tight clusters merge low and early, an outlier joins late on a
+        long branch. A tree with evenly-spaced merges is a perfectly balanced comb,
+        which no real data produces; it is the detail a domain reader would clock
+        as fake. Deriving the leaf order from the same tree also makes the heatmap's
+        row order and the tree structurally consistent, instead of two independent
+        computations that can quietly disagree about which rows group together.
+        """
+        n = self.n
+        if n < 2:
+            return [], list(range(n))
         m = self.matrix
-        norm = m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
-        sim = norm @ norm.T
-        left = set(range(self.n))
-        cur = int(np.argmax(self.abundance))
-        left.remove(cur)
-        out = [cur]
-        while left:
-            cur = max(left, key=lambda j: sim[cur, j])
-            left.remove(cur)
-            out.append(cur)
-        return np.array(out)
+        unit = m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
+        d = 1.0 - unit @ unit.T  # cosine distance
+
+        members = {i: [i] for i in range(n)}
+        height = dict.fromkeys(range(n), 0.0)  # a leaf sits at distance 0
+        pairs = {(i, j): float(d[i, j]) for i in range(n) for j in range(i + 1, n)}
+        merges: list[tuple[int, int, float]] = []
+        nid = n
+
+        while len(members) > 1:
+            # Tie-break on the ids as well as the distance: a bare min() over a dict
+            # would depend on insertion order, and renders must be reproducible.
+            (a, b), h = min(pairs.items(), key=lambda kv: (kv[1], kv[0]))
+            na, nb = len(members[a]), len(members[b])
+            for c in members:
+                if c in (a, b):
+                    continue
+                dac = pairs[(min(a, c), max(a, c))]
+                dbc = pairs[(min(b, c), max(b, c))]
+                pairs[(min(nid, c), max(nid, c))] = (na * dac + nb * dbc) / (na + nb)  # UPGMA
+            for key in [k for k in pairs if a in k or b in k]:
+                del pairs[key]
+            members[nid] = members[a] + members[b]  # left then right → planar leaves
+            height[nid] = h
+            del members[a], members[b]
+            merges.append((a, b, h))
+            nid += 1
+
+        self._height = height
+        self._members = members  # only the root survives
+        return merges, members[nid - 1]
 
     def ordered(self, arr):
         return np.asarray(arr)[self.order]
@@ -270,28 +306,41 @@ def _p_annotation_track(fig, ax, panel, dom, palettes, rng, base_size):
 
 
 def _p_dendrogram(fig, ax, panel, dom, palettes, rng, base_size):
-    """A tree stub that explains the row order. Deliberately schematic: it shows
-    THAT the rows are clustered (which is the style fact), not a real linkage."""
+    """The tree that explains the row order — drawn from the SAME UPGMA linkage
+    that produced it (``_Domain._linkage``), so the branches and the heatmap's rows
+    cannot disagree, and the merge heights are real distances: tight clusters join
+    early on short branches, an outlier joins last on a long one."""
     n = dom.n
+    if n < 2 or not dom.linkage:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for side in ("top", "right", "bottom", "left"):
+            ax.spines[side].set_visible(False)
+        return
+
+    # Where each row sits on the shared axis (the tree's leaves are the heatmap's
+    # rows, by construction — dom.order IS the linkage's leaf order when the domain
+    # is clustered, and a row still maps to its own y otherwise).
+    pos_of_row = {int(r): i for i, r in enumerate(dom.order)}
+    ypos = {i: float(pos_of_row[i]) for i in range(n)}  # leaves
+    hmax = max(h for _, _, h in dom.linkage) or 1.0
+
+    def x_at(cid: int) -> float:
+        # Leaves sit against the heatmap (x=1) and the root is furthest from it —
+        # the conventional orientation for a row dendrogram on the left.
+        return 1.0 - 0.95 * (dom._height[cid] / hmax)
+
+    for k, (a, b, h) in enumerate(dom.linkage):
+        node = n + k  # ids are handed out in merge order, so this is the new cluster
+        ya, yb = ypos[a], ypos[b]
+        x = 1.0 - 0.95 * (h / hmax)
+        # each child's own branch out to the join, then the connector between them
+        ax.plot([x_at(a), x], [ya, ya], color=_INK, linewidth=0.8)
+        ax.plot([x_at(b), x], [yb, yb], color=_INK, linewidth=0.8)
+        ax.plot([x, x], [ya, yb], color=_INK, linewidth=0.8, solid_capstyle="butt")
+        ypos[node] = (ya + yb) / 2.0
+
     ax.set_xlim(0, 1)
-    levels = max(int(np.ceil(np.log2(n))), 1) if n > 1 else 1
-    heights = np.linspace(0.15, 0.95, levels)
-    rows = np.arange(n, dtype=float)
-    step = 0
-    while len(rows) > 1 and step < len(heights):  # ceil(log2(n)) levels always suffice
-        x = heights[step]
-        nxt = []
-        for i in range(0, len(rows) - 1, 2):
-            a, b = rows[i], rows[i + 1]
-            ax.plot([x, x], [a, b], color=_INK, linewidth=0.8, solid_capstyle="butt")
-            prev = heights[step - 1] if step else 0.0
-            ax.plot([prev, x], [a, a], color=_INK, linewidth=0.8)
-            ax.plot([prev, x], [b, b], color=_INK, linewidth=0.8)
-            nxt.append((a + b) / 2)
-        if len(rows) % 2:
-            nxt.append(rows[-1])
-        rows = np.array(nxt)
-        step += 1
     ax.set_xticks([])
     ax.grid(False)
     for side in ("top", "right", "bottom", "left"):
