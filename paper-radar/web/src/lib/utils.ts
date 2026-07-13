@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Turn a lab name into a URL-safe slug used as its join code. */
+/** Turn a lab name into a URL-safe display slug (NOT the join code). */
 export function slugify(text: string): string {
   return text
     .toLowerCase()
