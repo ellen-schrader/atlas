@@ -555,26 +555,6 @@ def _l2norm(v: np.ndarray) -> np.ndarray:
     return v / n if n > 0 else v
 
 
-def _seen_paper_ids(uc, user_id: str, team_id: str) -> set[str]:
-    """Papers this user has already engaged with in the lab — reacted to,
-    commented on, or has any read/reading/saved status. The set the discover feed
-    excludes (the SQL RPC does this server-side; we need it for cold-start too)."""
-    seen: set[str] = set()
-    for row in (
-        uc.table("reactions").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    for row in (
-        uc.table("comments").select("paper_id").eq("team_id", team_id).eq("author_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    for row in (
-        uc.table("paper_status").select("paper_id").eq("team_id", team_id).eq("user_id", user_id).execute().data or []
-    ):
-        seen.add(row["paper_id"])
-    return seen
-
-
 # Engagement weights for the taste centroid. Not all engagement is endorsement:
 # an explicit save or a reaction is a strong "I want more like this"; a plain
 # `read` only means "consumed" (preference unknown), so it barely nudges taste; a
@@ -634,9 +614,10 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
     return weights
 
 
-def _taste_vector(uc, user_id: str, team_id: str) -> list[float] | None:
+def _taste_vector(uc, user_id: str, weights: dict[str, float]) -> list[float] | None:
     """Per-user taste vector: a confidence-weighted blend of the profile embedding
-    and a recency-/strength-weighted engagement centroid.
+    and a recency-/strength-weighted engagement centroid over ``weights``
+    (the caller's `_engagement_weights`, computed once per request).
 
     The engagement side's weight grows with how many papers the user has actually
     engaged with, so a single incidental interaction can't hijack the feed while
@@ -652,7 +633,6 @@ def _taste_vector(uc, user_id: str, team_id: str) -> list[float] | None:
 
     centroid_np = None
     n_engaged = 0
-    weights = _engagement_weights(uc, user_id, team_id)
     if weights:
         rows = (
             uc.table("papers").select("id, embedding").in_("id", list(weights)).execute().data or []
@@ -734,7 +714,9 @@ class RecommendationsResponse(BaseModel):
     cold_start: bool  # true when there was no taste signal (recency fallback used)
 
 
-def _hydrate(uc, order_ids: list[str], sims: dict[str, float], cold: bool) -> RecommendationsResponse:
+def _hydrate(
+    uc, order_ids: list[str], sims: dict[str, float], cold: bool
+) -> RecommendationsResponse:
     """Fetch POST_COLUMNS for the given post ids and return them in order."""
     if not order_ids:
         return RecommendationsResponse(results=[], cold_start=cold)
@@ -750,7 +732,9 @@ def _hydrate(uc, order_ids: list[str], sims: dict[str, float], cold: bool) -> Re
     )
 
 
-def _reading_list_ranked(uc, user_id: str, team_id: str, taste, limit: int) -> RecommendationsResponse:
+def _reading_list_ranked(
+    uc, user_id: str, team_id: str, taste, limit: int
+) -> RecommendationsResponse:
     """The user's saved (to_read) papers, ranked by taste similarity."""
     saved = (
         uc.table("paper_status")
@@ -796,9 +780,12 @@ def _reading_list_ranked(uc, user_id: str, team_id: str, taste, limit: int) -> R
     return _hydrate(uc, order, sims, cold=False)
 
 
-def _recency_fallback(uc, team_id: str, user_id: str, limit: int) -> RecommendationsResponse:
-    """Cold start (no profile, no engagement): recent unseen posts, newest first."""
-    seen = _seen_paper_ids(uc, user_id, team_id)
+def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> RecommendationsResponse:
+    """Cold start (no profile, no engagement): recent unseen posts, newest first.
+
+    ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
+    this server-side; here it comes from the request's `_engagement_weights` keys —
+    every engagement row gets a nonzero weight, so the keys are exactly the seen set)."""
     rows = (
         uc.table("paper_posts")
         .select("id, paper_id, posted_at")
@@ -833,13 +820,14 @@ def recommendations(
     limit = max(1, min(limit, 50))
 
     uc = user_client(token)
-    taste = _taste_vector(uc, user_id, team_id)
+    weights = _engagement_weights(uc, user_id, team_id)
+    taste = _taste_vector(uc, user_id, weights)
 
     if scope == "reading_list":
         return _reading_list_ranked(uc, user_id, team_id, taste, limit)
 
     if taste is None:
-        return _recency_fallback(uc, team_id, user_id, limit)
+        return _recency_fallback(uc, team_id, set(weights), limit)
 
     matches = (
         uc.rpc("recommend_papers", {"p_team": team_id, "p_query": taste, "p_limit": limit})

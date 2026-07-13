@@ -48,7 +48,7 @@ Everything is wired together by the `paper-radar` Typer CLI (`ingest`, `enrich`,
 ```bash
 # 1. Install (uv creates the venv and resolves everything)
 cd paper-radar
-uv sync --extra dev
+uv sync --extra dev --extra legacy   # `legacy` = Streamlit app + local embeddings
 
 # 2. Configure secrets
 cp .env.example .env
@@ -72,7 +72,9 @@ If `uv` is not available, fall back to a plain venv:
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,legacy]"
+# Note: pip skips the [tool.uv] constraints in pyproject.toml; on linux/aarch64
+# also `pip install "cryptography<47"` (newer wheels SIGILL under Docker Desktop).
 ```
 
 ## Project layout
