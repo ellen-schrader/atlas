@@ -386,3 +386,32 @@ def test_citation_key_author_year():
     assert server._citation_key({"authors": [], "year": None}) == "Unknown, n.d."
     # a single-token name still yields a usable surname
     assert server._citation_key({"authors": ["Aristotle"], "year": -350}) == "Aristotle, -350"
+
+
+def test_citation_key_surname_initial_format():
+    """PubMed-style "Surname AB" must not cite the initial as the surname.
+
+    Regression: these two produced "A et al., 2026" and "M et al., 2025".
+    """
+    pytest.importorskip("mcp")
+    from atlas_mcp import server
+
+    assert (
+        server._citation_key({"authors": ["Poissonnier A", "Guo H"], "year": 2026})
+        == "Poissonnier et al., 2026"
+    )
+    assert (
+        server._citation_key({"authors": ["Chaib M", "Makowski L"], "year": 2025})
+        == "Chaib et al., 2025"
+    )
+    # multi-letter and dotted initials, and a compound family name
+    assert server._citation_key({"authors": ["van den Berg JW"], "year": 2024}) == "Berg, 2024"
+    assert server._citation_key({"authors": ["Doe J.R."], "year": 2024}) == "Doe, 2024"
+    # BibTeX "Family, Given" keeps the full family name
+    assert (
+        server._citation_key({"authors": ["van der Berg, J.W.", "Li, Bo"], "year": 2024})
+        == "van der Berg et al., 2024"
+    )
+    # a real two-letter surname is not mistaken for an initial
+    assert server._citation_key({"authors": ["Li B"], "year": 2023}) == "Li, 2023"
+    assert server._citation_key({"authors": ["Bo Li", "Wu X"], "year": 2023}) == "Li et al., 2023"

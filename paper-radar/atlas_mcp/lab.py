@@ -8,8 +8,8 @@ user is chosen by environment:
   * ``ATLAS_EMAIL`` + ``ATLAS_PASSWORD`` — email/password we sign in with.
 
 Optional: ``ATLAS_TEAM_ID`` (default lab when the user is in more than one) and
-``ATLAS_WEB_URL`` (base for the ``?paper=`` deep links; defaults to the Vite dev
-server).
+``ATLAS_WEB_URL`` (base for the ``?paper=`` deep links; defaults to the hosted
+app, so cited links are shareable — override it to point at your own deployment).
 """
 
 from __future__ import annotations
