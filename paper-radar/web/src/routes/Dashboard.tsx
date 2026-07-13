@@ -13,7 +13,7 @@ import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { useRecommendations } from "@/hooks/useRecommendations";
+import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { supabase } from "@/lib/supabase";
 import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -41,6 +41,7 @@ export default function Dashboard() {
   const { data: toRead } = useReadingList(userId, team.id);
   const { data: readIds } = useReadPapers(userId, team.id);
   const recs = useRecommendations(team.id, "discover", 6);
+  const recsWaking = isWakingRecommendations(recs);
   const recResults = recs.data?.results ?? [];
   const { data: recCounts } = useEngagementCounts(
     team.id,
@@ -158,7 +159,7 @@ export default function Dashboard() {
               brand-new lab is exactly the case it explains, and that lab often has no
               recommendations to show yet. Nesting it under `recResults.length > 0` hid
               it from the only people who needed it. */}
-          {recs.data?.cold_start && (
+          {recs.data?.cold_start && !recs.isError && (
             <p className="mb-3 text-xs text-muted">
               Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
               and this becomes yours, or{" "}
@@ -202,12 +203,18 @@ export default function Dashboard() {
             <div className="flex flex-col items-start gap-2 rounded-card border border-dashed border-border bg-surface-2 p-5">
               <span className="inline-flex items-center gap-2 text-sm font-medium">
                 <Sparkles size={15} className="text-accent" />
-                {recs.isError ? "Recommendations are unavailable right now." : "No new papers to recommend yet."}
+                {recsWaking
+                  ? "Waking the paper service…"
+                  : recs.isError
+                    ? "Recommendations are unavailable right now."
+                    : "No new papers to recommend yet."}
               </span>
               <p className="text-xs text-muted">
-                {recs.isError
-                  ? "The recommendation service isn’t reachable — try again shortly."
-                  : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
+                {recsWaking
+                  ? "It sleeps when nobody’s around — recommendations will appear here shortly."
+                  : recs.isError
+                    ? "The recommendation service isn’t reachable — try again shortly."
+                    : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
               </p>
               {!recs.isError && (
                 <button

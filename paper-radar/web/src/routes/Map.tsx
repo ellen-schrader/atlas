@@ -1,10 +1,10 @@
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Search, X } from "lucide-react";
+import { ChevronRight, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
 import { Input } from "@/components/ui/input";
-import { fetchOverview, fetchSimilarity } from "@/lib/api";
+import { fetchOverview, fetchSimilarity, isTransientApiError } from "@/lib/api";
 import { markFor, markPath, usePalette } from "@/lib/palette";
 import type { Cluster, OverviewData, OverviewPoint } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -18,12 +18,68 @@ type ColorMode = "cluster" | "year" | "venue" | "relevance";
 type SizeMode = "uniform" | "engagement";
 type BarHover = { kind: "year" | "venue" | "lab"; value: string } | null;
 
+// Fixed pseudo-scatter for the loading skeleton (percent coordinates).
+const LOADING_DOTS = [
+  [18, 32], [27, 61], [36, 22], [42, 74], [48, 45], [55, 28],
+  [61, 66], [70, 38], [78, 57], [85, 27], [64, 82], [24, 44],
+] as const;
+
+// The layout computes in a couple of seconds when the API is warm, but the
+// first request after an idle spell also pays the machine's cold boot
+// (~half a minute). Advance the message so a long wait reads as progress.
+const LOADING_STAGES = [
+  "Computing the map of your lab’s papers…",
+  "Waking the paper service — it sleeps when nobody’s around…",
+  "Still working. The first load after a quiet spell can take up to a minute.",
+];
+
+function MapLoadingSkeleton() {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    const timers = [setTimeout(() => setStage(1), 6_000), setTimeout(() => setStage(2), 20_000)];
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  return (
+    <>
+      {/* Mirror the loaded page (KPI strip → header → map card) so the panel
+          barely moves when data lands. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-hidden>
+        {Array.from({ length: 6 }, (_, i) => (
+          <div
+            key={i}
+            className="h-[68px] animate-pulse rounded-card border border-border bg-surface-2"
+          />
+        ))}
+      </div>
+      <div className="h-5 w-16 animate-pulse rounded bg-surface-2" aria-hidden />
+      <div className="rounded-card border border-border bg-surface p-4">
+        <div className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }} role="status">
+          {LOADING_DOTS.map(([x, y], i) => (
+            <span
+              key={i}
+              className="absolute h-2.5 w-2.5 animate-pulse rounded-full bg-fg/10"
+              style={{ left: `${x}%`, top: `${y}%`, animationDelay: `${(i % 4) * 350}ms` }}
+              aria-hidden
+            />
+          ))}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="animate-spin text-muted" size={22} aria-hidden />
+            <p className="max-w-sm px-6 text-center text-sm text-muted">{LOADING_STAGES[stage]}</p>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function MapView() {
   const { team } = useAppContext();
   const { data, isLoading, error } = useQuery({
     queryKey: ["overview", team.id],
     queryFn: () => fetchOverview(team.id),
     staleTime: 5 * 60 * 1000,
+    // Cold-boot-aware retry comes from the QueryClient default (main.tsx).
   });
 
   const [colorBy, setColorBy] = useState<ColorMode>("cluster");
@@ -33,6 +89,7 @@ export default function MapView() {
   const [topic, setTopic] = useState(""); // the submitted query, for the filter chip
   const [sims, setSims] = useState<Record<string, number> | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [labFilter, setLabFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
@@ -47,10 +104,21 @@ export default function MapView() {
       return;
     }
     setSearching(true);
+    setSearchError(null);
     try {
       setSims(await fetchSimilarity(q, team.id));
       setTopic(q);
       setColorBy("relevance"); // show the relevance heatmap immediately
+    } catch (err) {
+      // One attempt, no retry (imperative call): tell the user what happened
+      // instead of a silently un-spinning search box.
+      setSearchError(
+        isTransientApiError(err)
+          ? "The paper service is waking up — try the search again in a few seconds."
+          : err instanceof Error
+            ? err.message
+            : "Search failed.",
+      );
     } finally {
       setSearching(false);
     }
@@ -60,6 +128,7 @@ export default function MapView() {
     setRawQuery("");
     setTopic("");
     setSims(null);
+    setSearchError(null);
     if (colorBy === "relevance") setColorBy("cluster");
   }
 
@@ -85,8 +154,15 @@ export default function MapView() {
         </p>
       </div>
 
-      {isLoading && <p className="text-sm text-muted">Computing the overview… (first load can take a moment)</p>}
-      {error && <p className="text-sm text-danger">Couldn’t load the overview.</p>}
+      {isLoading && <MapLoadingSkeleton />}
+      {error && !data && (
+        <p className="text-sm text-danger">
+          {isTransientApiError(error)
+            ? "Couldn’t load the overview — give it a moment and reload the page."
+            : "Couldn’t load the overview."}{" "}
+          {error instanceof Error && !isTransientApiError(error) ? error.message : null}
+        </p>
+      )}
 
       {data && points.length === 0 && (
         <p className="text-sm text-muted">
@@ -161,6 +237,8 @@ export default function MapView() {
               />
             </form>
           </div>
+
+          {searchError && <p className="-mt-2 text-xs text-danger">{searchError}</p>}
 
           {/* active filters — one place to see and clear everything */}
           {anyFilter && (
