@@ -49,7 +49,7 @@ export default function App() {
 }
 
 function AuthedApp({ session }: { session: Session }) {
-  const memberships = useMemberships(true);
+  const memberships = useMemberships(true, session.user.id);
 
   if (memberships.isLoading) return <Center>Loading…</Center>;
 
