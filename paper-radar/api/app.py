@@ -1030,8 +1030,13 @@ def make_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSum
         result = map_summary_mod.generate_summary(seed, top)
     result["generated_at"] = datetime.now(UTC).isoformat()
 
-    # Derived cache, not user content; the RLS select above already gated visibility.
-    service_client().table("maps").update({"ai_summary": result}).eq("id", map_id).execute()
+    # Cache is best-effort: the summary is already computed, so a write failure (e.g.
+    # a missing service_role grant) must not 500 the request — return it uncached and
+    # log. Derived data, not user content; the RLS select above already gated access.
+    try:
+        service_client().table("maps").update({"ai_summary": result}).eq("id", map_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not cache map summary for %s: %s", map_id, exc)
     return MapSummary(**result)
 
 
