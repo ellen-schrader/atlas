@@ -103,42 +103,55 @@ export default function MapDashboard() {
             </div>
           </header>
 
-          {data.total > 0 && (
-            <WhatsNew
-              summary={summary.data}
-              loading={summary.isLoading}
-              generating={regen.isPending}
-              onGenerate={() => regen.mutate()}
-              titleOf={titleOf}
-            />
-          )}
-
-          {data.points.length >= 2 ? (
-            <section className="rounded-card border border-border bg-surface p-5">
-              <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">The map</h2>
-              <p className="mb-3 text-xs text-faint">
-                {data.embedded} papers · {data.clusters.length} sub-theme
-                {data.clusters.length === 1 ? "" : "s"} · t-SNE of embeddings
-              </p>
-              <Scatter
-                points={data.points}
-                clusters={data.clusters}
-                colorBy="cluster"
-                sizeBy="engagement"
-                showHulls
-                sims={null}
-                labFilter={null}
-                tagFilter={null}
-                activeCluster={activeCluster}
-                setActiveCluster={setActiveCluster}
-                barHover={null}
-              />
-            </section>
-          ) : (
+          {data.total === 0 ? (
             <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
-              {data.total === 0
-                ? "No papers match this topic yet. As the lab posts more, they’ll appear here."
-                : "Only a paper or two here so far — too few to map. Broaden the seed, or add more papers to the lab."}
+              No papers match this topic yet. As the lab posts more, they’ll appear here.
+            </div>
+          ) : (
+            // Brief + map as one band: the scatter is the hero (left on desktop),
+            // the summary sits beside it — and leads on mobile, where "what's new?"
+            // matters more than the spatial view.
+            <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+              <div className="lg:order-2">
+                <WhatsNew
+                  summary={summary.data}
+                  loading={summary.isLoading}
+                  generating={regen.isPending}
+                  onGenerate={() => regen.mutate()}
+                  titleOf={titleOf}
+                />
+              </div>
+              <div className="lg:order-1">
+                {data.points.length >= 2 ? (
+                  <section className="h-full rounded-card border border-border bg-surface p-5">
+                    <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
+                      The map
+                    </h2>
+                    <p className="mb-3 text-xs text-faint">
+                      {data.embedded} papers · {data.clusters.length} sub-theme
+                      {data.clusters.length === 1 ? "" : "s"} · t-SNE of embeddings
+                    </p>
+                    <Scatter
+                      points={data.points}
+                      clusters={data.clusters}
+                      colorBy="cluster"
+                      sizeBy="engagement"
+                      showHulls
+                      sims={null}
+                      labFilter={null}
+                      tagFilter={null}
+                      activeCluster={activeCluster}
+                      setActiveCluster={setActiveCluster}
+                      barHover={null}
+                    />
+                  </section>
+                ) : (
+                  <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
+                    Only a paper or two here so far — too few to map. Broaden the seed, or add more
+                    papers to the lab.
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -193,6 +206,12 @@ export default function MapDashboard() {
                       </button>
                     </span>
                   )}
+                  {/* key for the read-state dot, so it isn't colour/shape alone */}
+                  <span className="ml-auto flex items-center gap-2.5 self-center text-[0.7rem] text-faint">
+                    <ReadKey cls="border-accent" label="unread" />
+                    <ReadKey cls="bg-accent border-accent" label="reading" />
+                    <ReadKey cls="bg-faint border-faint" label="read" />
+                  </span>
                 </div>
 
                 {papers.isLoading ? (
@@ -220,14 +239,19 @@ export default function MapDashboard() {
 
               {/* rail: labs + sub-themes */}
               <aside className="flex flex-col gap-4">
-                <RankPanel title="Labs driving this topic">
-                  <RankBars
-                    items={(papers.data?.labs ?? []).map((l) => ({ label: l.lab, count: l.count }))}
-                    activeLabel={labFilter}
-                    onPick={(label) => setLabFilter((cur) => (cur === label ? null : label))}
-                    empty="No author information yet."
-                  />
-                </RankPanel>
+                {(papers.data?.labs.length ?? 0) > 0 && (
+                  <RankPanel title="Labs driving this topic">
+                    <RankBars
+                      items={(papers.data?.labs ?? []).map((l) => ({
+                        label: l.lab,
+                        count: l.count,
+                      }))}
+                      activeLabel={labFilter}
+                      onPick={(label) => setLabFilter((cur) => (cur === label ? null : label))}
+                      empty=""
+                    />
+                  </RankPanel>
+                )}
                 <RankPanel title="Sub-themes">
                   <RankBars
                     items={data.clusters.map((c) => ({ label: c.label, count: c.size, tone: c.id }))}
@@ -253,6 +277,15 @@ export default function MapDashboard() {
 }
 
 const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function ReadKey({ cls, label }: { cls: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={cn("h-2 w-2 rounded-full border", cls)} />
+      {label}
+    </span>
+  );
+}
 
 function WhatsNew({
   summary,
