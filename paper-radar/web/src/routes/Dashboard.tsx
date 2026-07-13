@@ -108,7 +108,7 @@ export default function Dashboard() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-10 p-8">
       <header>
-        <h1 className="text-display font-bold tracking-tight">
+        <h1 className="text-display font-serif font-semibold tracking-tight">
           {greeting()}, {firstName}
         </h1>
         <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
@@ -154,23 +154,27 @@ export default function Dashboard() {
           title="Recommended for you"
           action={{ label: "Reading list", onClick: () => navigate("/reading") }}
         >
+          {/* The cold-start notice sits OUTSIDE the has-results branch on purpose: a
+              brand-new lab is exactly the case it explains, and that lab often has no
+              recommendations to show yet. Nesting it under `recResults.length > 0` hid
+              it from the only people who needed it. */}
+          {recs.data?.cold_start && (
+            <p className="mb-3 text-xs text-muted">
+              Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
+              and this becomes yours, or{" "}
+              <button
+                onClick={() => navigate("/settings")}
+                className="font-medium text-accent hover:underline"
+              >
+                describe your research
+              </button>{" "}
+              to give it a head start.
+            </p>
+          )}
           {recs.isLoading ? (
             <CardSkeleton />
           ) : recResults.length > 0 ? (
             <>
-              {recs.data?.cold_start && (
-                <p className="mb-3 text-xs text-muted">
-                  Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few
-                  papers and this becomes yours, or{" "}
-                  <button
-                    onClick={() => navigate("/settings")}
-                    className="font-medium text-accent hover:underline"
-                  >
-                    describe your research
-                  </button>{" "}
-                  to give it a head start.
-                </p>
-              )}
               <div className="group/rec relative">
                 <ScrollArrow side="left" rowRef={recRowRef} />
                 <div

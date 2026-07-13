@@ -1,7 +1,10 @@
 // Deterministic, theme-aware cover art for a paper — a placeholder until a real
-// thumbnail is available. Light theme evokes H&E histology (deep magenta/purple
-// pigment on a warm ground); dark evokes immunofluorescence (glowing cyan/
-// magenta/violet on near-black). Same seed → same image, so covers are stable.
+// thumbnail is available. Both themes evoke a multiplexed immunofluorescence panel:
+// glowing fluorophore channels (cyan / magenta / violet / green / amber) over the
+// app's ground. Same seed → same image, so covers are stable.
+//
+// The hues are pulled toward the app's channel palette (--ch-1..6 in index.css) —
+// the old set was a warm H&E magenta/purple, which now clashes with the cyan accent.
 
 function hashStr(s: string): number {
   let h = 2166136261;
@@ -30,8 +33,9 @@ export function drawCover(canvas: HTMLCanvasElement, seed: string, dark: boolean
   const rnd = mulberry32(hashStr(seed));
 
   ctx.clearRect(0, 0, w, h);
-  const hues = dark ? [188, 314, 266, 150, 332] : [325, 300, 265, 340, 285];
-  ctx.fillStyle = dark ? "#080b11" : "#ebe4ec";
+  // Channel hues: cyan, magenta, violet, green, amber.
+  const hues = dark ? [178, 316, 262, 148, 40] : [186, 320, 268, 158, 34];
+  ctx.fillStyle = dark ? "#080b11" : "#e7ecec";
   ctx.fillRect(0, 0, w, h);
 
   ctx.globalCompositeOperation = dark ? "lighter" : "multiply";
@@ -47,8 +51,10 @@ export function drawCover(canvas: HTMLCanvasElement, seed: string, dark: boolean
       g.addColorStop(0.6, `hsla(${hue},88%,55%,0.14)`);
       g.addColorStop(1, `hsla(${hue},88%,55%,0)`);
     } else {
-      g.addColorStop(0, `hsla(${hue},58%,63%,0.9)`);
-      g.addColorStop(1, `hsla(${hue},58%,63%,0)`);
+      // Lighter and less saturated on the slide-glass ground, so covers read as a
+      // stained section rather than as a colour field competing with the UI.
+      g.addColorStop(0, `hsla(${hue},46%,62%,0.85)`);
+      g.addColorStop(1, `hsla(${hue},46%,62%,0)`);
     }
     ctx.fillStyle = g;
     ctx.beginPath();
@@ -66,7 +72,7 @@ export function drawCover(canvas: HTMLCanvasElement, seed: string, dark: boolean
     Math.max(w, h) * 0.72,
   );
   vg.addColorStop(0, "rgba(0,0,0,0)");
-  vg.addColorStop(1, dark ? "rgba(0,0,0,0.5)" : "rgba(45,20,45,0.08)");
+  vg.addColorStop(1, dark ? "rgba(0,0,0,0.5)" : "rgba(20,45,45,0.09)");
   ctx.fillStyle = vg;
   ctx.fillRect(0, 0, w, h);
 }

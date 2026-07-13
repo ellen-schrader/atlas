@@ -3,23 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
-import { useTheme } from "@/components/ThemeProvider";
 import { Input } from "@/components/ui/input";
 import { fetchOverview, fetchSimilarity } from "@/lib/api";
+import { markFor, markPath, usePalette } from "@/lib/palette";
 import type { Cluster, OverviewData, OverviewPoint } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
-
-/* Validated categorical palette (clusters/venues) + sequential ramps (year,
- * relevance), stepped separately for light/dark surfaces (dataviz palette). */
-const CATEGORICAL_LIGHT = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"];
-const CATEGORICAL_DARK = ["#3987e5", "#199e70", "#c98500", "#008300", "#9085e9", "#e66767", "#d55181", "#d95926"];
-const YEAR_RAMP_LIGHT = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"];
-const YEAR_RAMP_DARK = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"];
-const REL_RAMP_LIGHT = ["#dfe6ef", "#b7d3f6", "#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"];
-const REL_RAMP_DARK = ["#2c3340", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cfe2fb"];
-const OTHER_LIGHT = "#c4c8d0";
-const OTHER_DARK = "#4b5160";
 
 const W = 760;
 const H = 520;
@@ -48,7 +37,7 @@ export default function MapView() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
   const [barHover, setBarHover] = useState<BarHover>(null);
-  const { theme } = useTheme();
+  const { categorical: cat } = usePalette();
 
   async function runFilter(e: FormEvent) {
     e.preventDefault();
@@ -81,7 +70,6 @@ export default function MapView() {
     setActiveCluster(null);
   }
 
-  const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
   const anyFilter = Boolean(sims || labFilter || tagFilter || activeCluster !== null);
 
   const points = data?.points ?? [];
@@ -91,7 +79,7 @@ export default function MapView() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <div>
-        <h1 className="text-display font-bold tracking-tight text-fg">Overview</h1>
+        <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Overview</h1>
         <p className="mt-1.5 text-sm text-muted">
           Your lab’s papers by meaning, plus themes and trends across what you’ve shared.
         </p>
@@ -380,14 +368,10 @@ function Scatter({
   setActiveCluster: (c: number | null) => void;
   barHover: BarHover;
 }) {
-  const { theme } = useTheme();
   const { openPaper } = usePaperModal();
+  const { categorical: cat, other, year: yearRamp, relevance: relRamp } = usePalette();
   const [hover, setHover] = useState<OverviewPoint | null>(null);
 
-  const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
-  const yearRamp = theme === "dark" ? YEAR_RAMP_DARK : YEAR_RAMP_LIGHT;
-  const relRamp = theme === "dark" ? REL_RAMP_DARK : REL_RAMP_LIGHT;
-  const other = theme === "dark" ? OTHER_DARK : OTHER_LIGHT;
 
   // Rank-fraction of each paper's similarity (0..1), so the relevance ramp has
   // visible contrast even when raw cosine values sit in a narrow band.
@@ -437,7 +421,7 @@ function Scatter({
     }
     const counts = new Map<string, number>();
     for (const p of points) if (p.venue) counts.set(p.venue, (counts.get(p.venue) ?? 0) + 1);
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([v]) => v);
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, cat.length).map(([v]) => v);
     const color = new Map(top.map((v, i) => [v, cat[i]]));
     return {
       colorOf: (p: OverviewPoint) => (p.venue && color.has(p.venue) ? color.get(p.venue)! : other),
@@ -461,6 +445,12 @@ function Scatter({
     if (inRelevance) return 0.15 + 0.8 * (relRank![p.paper_id] ?? 0);
     return 0.92;
   };
+  // Theme is the only categorical encoding, and six hues is at the limit of what's
+  // distinguishable — under deuteranopia our cyan and magenta converge. So in theme
+  // mode each cluster also gets its own glyph. The other modes are sequential (year,
+  // relevance) or top-N (venue), where a shape would imply a grouping that isn't
+  // there, so they stay circles.
+  const markOf = (p: OverviewPoint) => (colorBy === "cluster" ? markFor(p.cluster) : "circle");
 
   const scaled: Scaled[] = useMemo(() => {
     const xs = points.map((p) => p.x);
@@ -509,7 +499,18 @@ function Scatter({
               activeCluster !== null && colorBy === "cluster" && activeCluster !== Number(l.key) && "opacity-40",
             )}
           >
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: l.color }} />
+            {/* the legend carries the glyph too, or the shape encoding is unreadable */}
+            <svg viewBox="0 0 12 12" width={11} height={11} className="shrink-0" aria-hidden>
+              <path
+                d={markPath(
+                  colorBy === "cluster" ? markFor(Number(l.key)) : "circle",
+                  6,
+                  6,
+                  4.4,
+                )}
+                fill={l.color}
+              />
+            </svg>
             {l.label}
             {l.sub && <span className="font-mono text-faint">{l.sub}</span>}
           </button>
@@ -537,11 +538,14 @@ function Scatter({
               />
             ))}
           {scaled.map((p) => (
-            <circle
+            <path
               key={p.paper_id}
-              cx={p.px}
-              cy={p.py}
-              r={hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p)}
+              d={markPath(
+                markOf(p),
+                p.px,
+                p.py,
+                hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p),
+              )}
               fill={colorOf(p)}
               fillOpacity={alphaOf(p)}
               stroke="var(--surface)"
@@ -775,10 +779,9 @@ function ThemeBars({
               active === c.id && "bg-surface-2",
             )}
           >
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ background: cat[c.id % cat.length] }}
-            />
+            <svg viewBox="0 0 12 12" width={11} height={11} className="shrink-0" aria-hidden>
+              <path d={markPath(markFor(c.id), 6, 6, 4.4)} fill={cat[c.id % cat.length]} />
+            </svg>
             <span className="w-32 shrink-0 truncate text-fg" title={c.label}>
               {c.label}
             </span>

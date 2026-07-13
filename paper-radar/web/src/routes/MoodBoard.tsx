@@ -66,7 +66,7 @@ export default function MoodBoard() {
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-bold tracking-tight text-fg">Your lab’s look</h1>
+          <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Your lab’s look</h1>
           <p className="mt-1.5 max-w-[52ch] text-sm text-muted">
             Figures your lab admires — your own and others’. Atlas derives your palette from them,
             and hands Claude a matplotlib style sheet so it plots in your lab’s style.

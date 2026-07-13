@@ -49,7 +49,7 @@ export default function Login() {
         <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
       </div>
 
-      <h2 className="text-xl font-bold tracking-tight">
+      <h2 className="font-serif text-xl font-semibold tracking-tight">
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h2>
       <p className="mb-5 mt-1 text-sm text-muted">

@@ -41,8 +41,8 @@ export function usePalette(): Palette {
       year: range("year", 5),
       relevance: range("rel", 7),
     }),
-    // `theme` is not read directly — it's the signal that the tokens changed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `theme` isn't read in the body — it's the invalidation key. The values live in
+    // CSS, so the only thing that changes them is the theme flipping.
     [theme],
   );
 }

@@ -127,7 +127,7 @@ export default function Papers() {
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-bold tracking-tight text-fg">Papers</h1>
+          <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Papers</h1>
           <p className="mt-1.5 text-sm text-muted">
             Everything shared in {team.name} — search, filter, and open to discuss.
           </p>

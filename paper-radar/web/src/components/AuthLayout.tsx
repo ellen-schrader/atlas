@@ -18,7 +18,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
             <span className="font-serif text-xl font-semibold tracking-tight">Atlas</span>
           </div>
           <div className="max-w-sm">
-            <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight">
+            <h1 className="text-balance font-serif text-3xl font-semibold leading-tight tracking-tight">
               Every lab has a taste. Atlas gives yours to Claude.
             </h1>
             <p className="mt-4 text-sm leading-relaxed text-muted">

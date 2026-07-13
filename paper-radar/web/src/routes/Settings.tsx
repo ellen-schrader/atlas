@@ -21,7 +21,7 @@ export default function Settings() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
       <header>
-        <h1 className="text-display font-bold tracking-tight">Settings</h1>
+        <h1 className="text-display font-serif font-semibold tracking-tight">Settings</h1>
         <p className="mt-1.5 text-sm text-muted">Your account, profile, and lab.</p>
       </header>
 
