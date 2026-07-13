@@ -39,8 +39,11 @@ update public.papers
 -- `source` records how a post got here. 'bibtex' lets the feed treat a 400-paper
 -- import as one event rather than 400, and lets us find them again if an import
 -- turns out to be wrong.
+-- `if exists`: the constraint name is the Postgres default here, but a database
+-- restored from a dump can carry a different generated name, and a bare drop would
+-- abort the whole migration — including the published_at column the rest depends on.
 alter table public.paper_posts
-    drop constraint paper_posts_source_check;
+    drop constraint if exists paper_posts_source_check;
 
 alter table public.paper_posts
     add constraint paper_posts_source_check

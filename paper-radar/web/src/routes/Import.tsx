@@ -1,4 +1,4 @@
-import { type DragEvent, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, FileUp, Info, X } from "lucide-react";
@@ -245,7 +245,7 @@ function Row({
 }: {
   kind: "ok" | "muted" | "warn" | "bad";
   n: number;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   if (n === 0) return null;
   const icon = {
@@ -313,7 +313,7 @@ function HowTo() {
   );
 }
 
-function Step({ app, children }: { app: string; children: React.ReactNode }) {
+function Step({ app, children }: { app: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
       <dt className="w-40 shrink-0 font-semibold text-fg">{app}</dt>

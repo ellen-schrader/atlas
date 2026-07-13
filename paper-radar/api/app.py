@@ -878,9 +878,14 @@ class BibEntryPreview(BaseModel):
     reason: str | None = None
 
 
+#: Far beyond any real library (a 500-entry Zotero export is well under 1 MB), and
+#: small enough that a hostile body can't exhaust the process.
+MAX_BIBTEX_BYTES = 8_000_000
+
+
 class PreflightRequest(BaseModel):
     team_id: str
-    bibtex: str
+    bibtex: str = Field(max_length=MAX_BIBTEX_BYTES)
 
 
 class PreflightResponse(BaseModel):
@@ -896,13 +901,48 @@ class PreflightResponse(BaseModel):
 
 class ImportRequest(BaseModel):
     team_id: str
-    bibtex: str
+    bibtex: str = Field(max_length=MAX_BIBTEX_BYTES)
 
 
 class ImportResponse(BaseModel):
     imported: int
     skipped: int
     failed: int
+
+
+def _require_member(token: str, team_id: str) -> str:
+    """The caller's id, or 403 — enforced before we read or write anything.
+
+    The import path reads with the service role (it has to: it needs to see papers
+    posted by *other* members to dedupe against them), which bypasses RLS. Without
+    this check, `team_id` is attacker-controlled and the pre-flight becomes an oracle:
+    post a one-entry .bib with a DOI at someone else's lab and a "duplicate" verdict
+    tells you they have that paper. Every other write in this file goes through
+    `user_client`, where RLS does this job for us; here it has to be explicit.
+    """
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    member = (
+        user_client(token)      # as the caller, so RLS answers the question honestly
+        .table("team_members")
+        .select("user_id")
+        .eq("team_id", team_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not member.data:
+        raise HTTPException(status_code=403, detail="You are not a member of this lab.")
+    return user_id
+
+
+def _chunked(items: list[str], size: int = 100) -> list[list[str]]:
+    """PostgREST sends `in.(...)` as a query string. A 438-entry library would produce a
+    filter tens of kilobytes long — long enough to be rejected or, worse, truncated,
+    which would silently classify duplicates as new."""
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def _preview(e: bib.BibEntry, status: str, reason: str | None = None) -> BibEntryPreview:
@@ -935,26 +975,24 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
 
     by_norm: dict[str, str] = {}
     by_doi: dict[str, str] = {}
-    if norms:
+    for batch in _chunked(list(set(norms.values()))):
         rows = (
-            svc.table("papers").select("id, url_norm, doi")
-            .in_("url_norm", list(norms.values())).execute().data or []
+            svc.table("papers").select("id, url_norm").in_("url_norm", batch).execute().data
+            or []
         )
-        by_norm = {r["url_norm"]: r["id"] for r in rows}
-    if dois:
-        rows = (
-            svc.table("papers").select("id, doi").in_("doi", dois).execute().data or []
-        )
-        by_doi = {r["doi"]: r["id"] for r in rows if r.get("doi")}
+        by_norm |= {r["url_norm"]: r["id"] for r in rows}
+    for batch in _chunked(list(set(dois))):
+        rows = svc.table("papers").select("id, doi").in_("doi", batch).execute().data or []
+        by_doi |= {r["doi"]: r["id"] for r in rows if r.get("doi")}
 
-    known_ids = set(by_norm.values()) | set(by_doi.values())
+    known_ids = list(set(by_norm.values()) | set(by_doi.values()))
     posted: set[str] = set()
-    if known_ids:
+    for batch in _chunked(known_ids):
         rows = (
             svc.table("paper_posts").select("paper_id")
-            .eq("team_id", team_id).in_("paper_id", list(known_ids)).execute().data or []
+            .eq("team_id", team_id).in_("paper_id", batch).execute().data or []
         )
-        posted = {r["paper_id"] for r in rows}
+        posted |= {r["paper_id"] for r in rows}
 
     out: list[BibEntryPreview] = []
     seen: set[str] = set()   # within-file dedupe key (doi, else normalised url)
@@ -986,8 +1024,7 @@ def bibtex_preflight(
     req: PreflightRequest, token: str = Depends(require_token)
 ) -> PreflightResponse:
     """What *would* happen. Writes nothing."""
-    if not get_user_id(token):
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    _require_member(token, req.team_id)
 
     parsed = bib.parse_bibtex(req.bibtex)
     previews = _classify(parsed.entries, req.team_id)
@@ -1015,14 +1052,16 @@ def bibtex_import(
     req: ImportRequest, background: BackgroundTasks, token: str = Depends(require_token)
 ) -> ImportResponse:
     """Commit the import. Papers already in the lab are skipped, not duplicated."""
-    user_id = get_user_id(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    # Before anything is written: `_upsert_paper` runs as the service role and would
+    # otherwise insert rows into the global `papers` table for a non-member, only for
+    # the post itself to be refused by RLS and swallowed as a generic "failed".
+    user_id = _require_member(token, req.team_id)
 
     parsed = bib.parse_bibtex(req.bibtex)
     svc = service_client()
     imported = skipped = failed = 0
     seen: set[str] = set()  # same within-file dedupe the pre-flight reported
+    to_embed: list[tuple[str, str | None, str | None]] = []
 
     for e in parsed.entries:
         ident = e.identifier
@@ -1068,10 +1107,43 @@ def bibtex_import(
                 continue
             imported += 1
 
-            if needs_embedding and get_api_settings().voyage_api_key:
-                background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
+            if needs_embedding:
+                to_embed.append((paper_id, meta.title, meta.abstract))
         except Exception as exc:  # noqa: BLE001 — one bad entry must not fail the import
             log.warning("bibtex import: %s failed: %s", e.key, exc)
             failed += 1
 
+    # One batched call per chunk, not one Voyage request per paper: a 400-paper import
+    # would otherwise fire 400 separate embedding requests.
+    if to_embed and get_api_settings().voyage_api_key:
+        background.add_task(_embed_batch, to_embed)
+
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
+
+
+def _embed_batch(papers: list[tuple[str, str | None, str | None]]) -> None:
+    """Embed an imported batch. Failures are logged; the backfill retries anything
+    still missing `embedded_at`."""
+    svc = service_client()
+    for chunk in [papers[i : i + 64] for i in range(0, len(papers), 64)]:
+        texts, ids = [], []
+        for paper_id, title, abstract in chunk:
+            text = embeddings.paper_text(title, abstract)
+            if text:
+                texts.append(text)
+                ids.append(paper_id)
+        if not texts:
+            continue
+        try:
+            vectors = embeddings.embed_texts(texts)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bibtex import: embedding a batch of %d failed: %s", len(texts), exc)
+            continue
+        now = datetime.now(UTC).isoformat()
+        for paper_id, vector in zip(ids, vectors, strict=True):
+            try:
+                svc.table("papers").update({"embedding": vector, "embedded_at": now}).eq(
+                    "id", paper_id
+                ).is_("embedded_at", "null").execute()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("bibtex import: storing embedding for %s failed: %s", paper_id, exc)
