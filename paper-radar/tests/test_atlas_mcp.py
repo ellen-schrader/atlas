@@ -214,3 +214,57 @@ def test_post_paper_degrades_when_elicit_unsupported(monkeypatch):
     out, n = _drive_post_paper(monkeypatch, confirm=True, ctx=_FakeCtx(raise_exc=True))
     assert "Shared to Lab A" in out
     assert n == 1
+
+
+# --- mood-board style extraction (the black-and-white fix) ------------------
+
+
+def _chroma(hexv: str) -> int:
+    r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)
+    return max(r, g, b) - min(r, g, b)
+
+
+def _scientific_figure(colors):
+    """A plot-like PNG: white bg, black axes, gray gridlines, hairline colour lines."""
+    pytest.importorskip("PIL")
+    import io
+
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGB", (320, 220), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    d.rectangle([20, 10, 300, 200], outline=(15, 15, 15), width=2)  # black axes
+    for gy in range(40, 200, 28):
+        d.line([20, gy, 300, gy], fill=(221, 221, 221))  # gray gridlines
+    for k, c in enumerate(colors):
+        d.line([20, 180 - k * 20, 300, 40 - k * 20], fill=c, width=1)  # HAIRLINE data lines
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_palette_recovers_data_colours_not_background():
+    from atlas_mcp import moodboard
+
+    png = _scientific_figure([(31, 119, 180), (214, 39, 40), (44, 160, 44)])  # blue/red/green
+    pal = moodboard.palette(png, n=6)
+    assert pal, "should recover the data-series colours, not white/gray"
+    assert all(_chroma(h) > 40 for h in pal), f"every colour should be chromatic, got {pal}"
+    assert len(pal) >= 2  # found multiple distinct hues
+
+
+def test_palette_empty_for_monochrome_figure():
+    from atlas_mcp import moodboard
+
+    bw = _scientific_figure([(0, 0, 0), (30, 30, 30)])  # only black/gray "data"
+    assert moodboard.palette(bw) == []  # nothing chromatic → empty, not gray
+
+
+def test_mplstyle_falls_back_and_ships_thin_lines():
+    from atlas_mcp import moodboard
+
+    s = moodboard.mplstyle([], "Lab X")  # monochrome mood board → default cycle
+    assert "lines.linewidth" in s and "axes.linewidth" in s  # scientific line defaults
+    cycle = s.split("prop_cycle")[1].lower()
+    assert "ffffff" not in cycle  # never an all-white cycle
+    assert "4477aa" in cycle  # the CVD-safe fallback palette
