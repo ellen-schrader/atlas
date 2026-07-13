@@ -4,7 +4,7 @@ import { ChevronRight, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
 import { Input } from "@/components/ui/input";
-import { fetchOverview, fetchSimilarity } from "@/lib/api";
+import { fetchOverview, fetchSimilarity, isTransientApiError } from "@/lib/api";
 import { markFor, markPath, usePalette } from "@/lib/palette";
 import type { Cluster, OverviewData, OverviewPoint } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -89,6 +89,7 @@ export default function MapView() {
   const [topic, setTopic] = useState(""); // the submitted query, for the filter chip
   const [sims, setSims] = useState<Record<string, number> | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [labFilter, setLabFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
@@ -103,10 +104,21 @@ export default function MapView() {
       return;
     }
     setSearching(true);
+    setSearchError(null);
     try {
       setSims(await fetchSimilarity(q, team.id));
       setTopic(q);
       setColorBy("relevance"); // show the relevance heatmap immediately
+    } catch (err) {
+      // One attempt, no retry (imperative call): tell the user what happened
+      // instead of a silently un-spinning search box.
+      setSearchError(
+        isTransientApiError(err)
+          ? "The paper service is waking up — try the search again in a few seconds."
+          : err instanceof Error
+            ? err.message
+            : "Search failed.",
+      );
     } finally {
       setSearching(false);
     }
@@ -116,6 +128,7 @@ export default function MapView() {
     setRawQuery("");
     setTopic("");
     setSims(null);
+    setSearchError(null);
     if (colorBy === "relevance") setColorBy("cluster");
   }
 
@@ -144,7 +157,10 @@ export default function MapView() {
       {isLoading && <MapLoadingSkeleton />}
       {error && !data && (
         <p className="text-sm text-danger">
-          Couldn’t load the overview — give it a moment and reload the page.
+          {isTransientApiError(error)
+            ? "Couldn’t load the overview — give it a moment and reload the page."
+            : "Couldn’t load the overview."}{" "}
+          {error instanceof Error && !isTransientApiError(error) ? error.message : null}
         </p>
       )}
 
@@ -221,6 +237,8 @@ export default function MapView() {
               />
             </form>
           </div>
+
+          {searchError && <p className="-mt-2 text-xs text-danger">{searchError}</p>}
 
           {/* active filters — one place to see and clear everything */}
           {anyFilter && (

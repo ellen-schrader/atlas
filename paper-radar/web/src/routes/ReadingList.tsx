@@ -6,7 +6,7 @@ import { BookmarkButton } from "@/components/BookmarkButton";
 import { Cover } from "@/components/Cover";
 import { usePaperModal } from "@/components/PaperModal";
 import { useReadingList } from "@/hooks/useReadingList";
-import { useRecommendations } from "@/hooks/useRecommendations";
+import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -30,7 +30,9 @@ export default function ReadingList() {
   const [sort, setSort] = useState<Sort>("added");
 
   const byDate = useReadingList(userId, team.id);
-  const byRec = useRecommendations(team.id, "reading_list", 100);
+  // Only fetch (and, during a cold boot, poll) the ranked view when it's shown.
+  const byRec = useRecommendations(team.id, "reading_list", 100, sort === "recommended");
+  const recWaking = isWakingRecommendations(byRec);
 
   const meta = (venue: string | null | undefined, year: number | null | undefined) =>
     [venue, year].filter(Boolean).join(" · ");
@@ -96,9 +98,15 @@ export default function ReadingList() {
 
       {recError && (
         <div className="rounded-card border border-dashed border-border bg-surface-2 p-5 text-sm">
-          <p className="font-medium">Couldn’t rank by recommendation right now.</p>
+          <p className="font-medium">
+            {recWaking ? "Waking the paper service…" : "Couldn’t rank by recommendation right now."}
+          </p>
           <p className="mt-1 text-xs text-muted">
-            The recommendation service isn’t reachable —{" "}
+            {recWaking ? (
+              <>The ranking will appear here shortly, or </>
+            ) : (
+              <>The recommendation service isn’t reachable — </>
+            )}
             <button onClick={() => setSort("added")} className="font-medium text-accent hover:underline">
               sort by date added
             </button>{" "}

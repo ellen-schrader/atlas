@@ -4,7 +4,11 @@ import type { OverviewData, Recommendation, SemanticHit } from "@/lib/types";
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 /** Error from the Atlas API. `status` is the HTTP code; undefined means the
- *  service was unreachable (network failure / CORS / machine cold-booting). */
+ *  service was unreachable (network failure / CORS / machine cold-booting).
+ *
+ *  Retry/cold-boot policy for these errors lives in the QueryClient defaults
+ *  (main.tsx) and applies to useQuery reads only — imperative callers get a
+ *  single attempt and should surface the message themselves. */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -14,10 +18,16 @@ export class ApiError extends Error {
   }
 }
 
-/** Worth retrying: unreachable or 5xx — the shapes a cold-booting machine
- *  produces (connection refused, proxy 502s). 4xx never heals on retry. */
+/** Worth retrying: only the shapes a cold-booting machine produces —
+ *  unreachable (fetch rejected) or the Fly proxy's 502/504. App-generated
+ *  statuses are deterministic here: 4xx never heals, and the API uses 503
+ *  ("Embeddings unavailable") and 500 as real answers from a running
+ *  service, so retrying them just delays the truth. */
 export function isTransientApiError(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === undefined || error.status >= 500);
+  return (
+    error instanceof ApiError &&
+    (error.status === undefined || error.status === 502 || error.status === 504)
+  );
 }
 
 export interface PostResult {

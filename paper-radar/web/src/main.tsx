@@ -12,10 +12,10 @@ import "@/index.css";
 
 // The API machine cold-boots after an idle spell (~30 s of connection
 // failures / proxy 502s). Ride those out with a long backoff for every query
-// that hits it; deterministic API failures (4xx — auth, validation) never
-// heal on retry, so surface them immediately. Non-API queries (Supabase)
-// keep the library's default count. Per-query `retry` overrides still win
-// (e.g. useRecommendations opts out entirely).
+// that hits it; deterministic API answers (4xx, and app-level 500/503 like
+// "Embeddings unavailable") never heal on retry, so surface them
+// immediately. Non-API queries (Supabase) keep the library's default count.
+// Per-query `retry` overrides still win (e.g. useRecommendations opts out).
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
