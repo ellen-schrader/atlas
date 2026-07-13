@@ -23,7 +23,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 
 import numpy as np
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -31,9 +31,10 @@ from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
-from . import embeddings, enrichment
+from . import embeddings, enrichment, maps
 from . import overview as overview_mod
 from .config import get_api_settings
+from .deps import require_token
 from .supa import get_user_id, service_client, user_client
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(maps.router)
 
 
 # --- schemas ---------------------------------------------------------------
@@ -152,14 +155,9 @@ class OverviewResponse(BaseModel):
     embedded: int  # posts whose paper has an embedding (points returned)
 
 
-# --- auth dependency -------------------------------------------------------
-
-
-def require_token(authorization: str | None = Header(default=None)) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    return authorization.split(" ", 1)[1]
-
+# The token dependency lives in `deps.py` (imported above) so routers can share it
+# without importing this module; `require_token` is re-exported here for the many
+# endpoints below that depend on it.
 
 # --- helpers ---------------------------------------------------------------
 
