@@ -301,15 +301,16 @@ def draft_related_work(
     try:
         team = lab.resolve_team(team_id)
         if paper_id:
+            anchor = lab.get_post(team, paper_id)  # validate membership + get the title
+            title = anchor["paper"].get("title") or paper_id
+            subject = f"“{title}”"
             hits = lab.similar(team, paper_id, n)
             if hits is None:  # no embedding → keyword fallback on the title
-                anchor = lab.get_post(team, paper_id)
                 hits = [
                     h
-                    for h in lab.search(team, anchor["paper"].get("title") or "", "keyword", n)
+                    for h in lab.search(team, title, "keyword", n)
                     if h["paper_id"] != paper_id
                 ]
-            subject = f"“{lab.get_post(team, paper_id)['paper'].get('title') or paper_id}”"
         elif topic and topic.strip():
             hits = lab.search(team, topic.strip(), "semantic", n)
             subject = f"“{topic.strip()}”"
