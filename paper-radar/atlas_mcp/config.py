@@ -22,8 +22,11 @@ class AtlasSettings(BaseSettings):
     atlas_password: str = ""
     # Default lab when the user is in more than one.
     atlas_team_id: str = ""
-    # Base for the ?paper= deep links.
-    atlas_web_url: str = "http://localhost:5173"
+    # Base for the ?paper= deep links. Defaults to the hosted app, not a dev
+    # server: these links get pasted into drafts and shared with collaborators,
+    # and a localhost URL is silently useless to everyone but the person who
+    # generated it. Point it at your own deployment (or a dev server) to override.
+    atlas_web_url: str = "https://atlas-papers.vercel.app"
 
 
 @lru_cache

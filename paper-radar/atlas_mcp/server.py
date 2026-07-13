@@ -20,6 +20,7 @@ import functools
 import inspect
 import json
 import logging
+import re
 import sys
 from collections.abc import Callable
 
@@ -162,10 +163,38 @@ def _format_hit(h: dict) -> str:
     return "\n".join(lines)
 
 
+# An initials run: "A", "AB", "A.B.", "X-Y". Requires every letter to be capital,
+# so a genuine two-letter surname ("Li", "Ng", "Wu") is never mistaken for one.
+_INITIALS_RE = re.compile(r"^[A-Z](?:[.\-]?[A-Z]){0,2}\.?$")
+
+
+def _surname(name: str) -> str:
+    """The family name from any of the formats our sources emit.
+
+    Crossref gives "Jane Doe", PubMed gives "Poissonnier A", and BibTeX gives
+    "Doe, Jane" — so neither the first nor the last token is reliably the
+    surname. Taking the last token (the old rule) turned "Poissonnier A" into
+    the citation key "A et al.".
+    """
+    name = name.strip()
+    if "," in name:  # "Doe, Jane" / "van der Berg, J.W." — family name leads
+        family = name.split(",", 1)[0].strip()
+        if family:
+            return family
+    tokens = name.split()
+    if not tokens:
+        return "Unknown"
+    # Drop trailing initials ("Poissonnier A", "Chaib M", "van den Berg JW").
+    kept = list(tokens)
+    while len(kept) > 1 and _INITIALS_RE.match(kept[-1]):
+        kept.pop()
+    return kept[-1]
+
+
 def _citation_key(p: dict) -> str:
     """An author-year citation key like "Chen et al., 2021" (surname of first author)."""
     authors = [a for a in (p.get("authors") or []) if a and a.strip()]
-    surname = authors[0].strip().split()[-1] if authors else "Unknown"
+    surname = _surname(authors[0]) if authors else "Unknown"
     year = p.get("year") or "n.d."
     return f"{surname} et al., {year}" if len(authors) > 1 else f"{surname}, {year}"
 

@@ -570,3 +570,25 @@ def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
     # A row that already has a title is left alone.
     assert app_mod._repair_untitled({"id": "p2", "title": "Real title"}, typed) is False
     assert len(patches) == 1
+
+
+def test_norm_doi_casefolds_and_strips_resolver_prefix():
+    """DOIs are case-insensitive (ISO 26324) — the dedup key must fold case.
+
+    Regression: AACR registers "...CD-25-1745" and PubMed reports "...cd-25-1745",
+    so the same paper posted from both sources landed as two rows.
+    """
+    from api.app import _norm_doi
+
+    upper = "10.1158/2159-8290.CD-25-1745"
+    lower = "10.1158/2159-8290.cd-25-1745"
+    assert _norm_doi(upper) == _norm_doi(lower) == lower
+
+    # the resolver prefix is not part of the DOI
+    assert _norm_doi("https://doi.org/10.1038/S41586-024-1") == "10.1038/s41586-024-1"
+    assert _norm_doi("doi:10.1038/s41586-024-1") == "10.1038/s41586-024-1"
+
+    # empty-ish input stays None rather than becoming a key that matches everything
+    assert _norm_doi(None) is None
+    assert _norm_doi("") is None
+    assert _norm_doi("   ") is None
