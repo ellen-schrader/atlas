@@ -110,12 +110,18 @@ def test_compute_stats_aggregates_posts():
     from api.app import _compute_stats
 
     rows = [
-        {"posted_at": "2026-03-09T12:00:00Z", "papers": {"venue": "Nature", "year": 2025,
-                                                          "authors": ["A. One", "B. Last"]}},
-        {"posted_at": "2026-03-20T12:00:00Z", "papers": {"venue": "Nature", "year": 2026,
-                                                          "authors": ["C. Only"]}},
-        {"posted_at": "2026-04-01T12:00:00Z", "papers": {"venue": "bioRxiv", "year": 2026,
-                                                          "authors": []}},
+        {
+            "posted_at": "2026-03-09T12:00:00Z",
+            "papers": {"venue": "Nature", "year": 2025, "authors": ["A. One", "B. Last"]},
+        },
+        {
+            "posted_at": "2026-03-20T12:00:00Z",
+            "papers": {"venue": "Nature", "year": 2026, "authors": ["C. Only"]},
+        },
+        {
+            "posted_at": "2026-04-01T12:00:00Z",
+            "papers": {"venue": "bioRxiv", "year": 2026, "authors": []},
+        },
     ]
     stats = _compute_stats(rows)
     assert stats.over_time == [{"month": "2026-03", "count": 2}, {"month": "2026-04", "count": 1}]
@@ -199,3 +205,199 @@ def app_mod_max() -> int:
     from api.app import MAX_BIBTEX_BYTES
 
     return MAX_BIBTEX_BYTES
+
+
+# --- posting reviewed / hand-typed metadata --------------------------------
+
+
+def _stub_post(monkeypatch, seen: dict):
+    """Wire /posts up to nothing: capture the metadata it would store, write nothing."""
+    import api.app as app_mod
+
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(
+        app_mod,
+        "_upsert_paper",
+        lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
+    )
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+
+    def _boom(*_a, **_k):
+        raise AssertionError("fetch_metadata must not run when the client sent fields")
+
+    monkeypatch.setattr(app_mod, "fetch_metadata", _boom)
+
+
+def test_posting_reviewed_fields_stores_them_without_refetching(monkeypatch):
+    """The whole point of the Add-paper dialog: a bot-walled publisher resolves to an
+    empty record, so the user types the title in. If the server re-fetched the URL it
+    would overwrite that title with the same nothing it got the first time."""
+    seen: dict = {}
+    _stub_post(monkeypatch, seen)  # fetch_metadata now raises if called
+
+    resp = client.post(
+        "/posts",
+        json={
+            "url": "https://www.cell.com/cell/fulltext/S0092-8674(23)00001-0",
+            "team_id": "team-1",
+            "fields": {
+                "title": "Hallmarks of cancer: the next generation",
+                "authors": ["Douglas Hanahan", "Robert A. Weinberg"],
+                "venue": "Cell",
+                "year": 2023,
+                "source": "manual",
+            },
+        },
+        headers={"Authorization": "Bearer good"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    meta = seen["meta"]
+    assert meta.title == "Hallmarks of cancer: the next generation"
+    assert meta.authors == ["Douglas Hanahan", "Robert A. Weinberg"]
+    assert meta.venue == "Cell"
+    assert meta.year == 2023
+    # Don't credit a resolver for what a human typed.
+    assert meta.source == "manual"
+
+
+def test_posting_without_fields_still_resolves_server_side(monkeypatch):
+    """The CLI and older clients send a bare URL and rely on the server to resolve it."""
+    import api.app as app_mod
+    from paper_radar.ingest.metadata import PaperMetadata
+
+    seen: dict = {}
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(
+        app_mod,
+        "_upsert_paper",
+        lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
+    )
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+    monkeypatch.setattr(
+        app_mod,
+        "fetch_metadata",
+        lambda url: PaperMetadata(url=url, title="Resolved by the server", source="arxiv"),
+    )
+
+    resp = client.post(
+        "/posts",
+        json={"url": "https://arxiv.org/abs/2401.01234", "team_id": "team-1"},
+        headers={"Authorization": "Bearer good"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert seen["meta"].title == "Resolved by the server"
+
+
+def test_posting_to_a_lab_you_are_not_in_writes_nothing(monkeypatch):
+    """`_upsert_paper` runs with the service role and can now *repair* an existing
+    `papers` row, not just insert one. If membership were left to RLS on the paper_post
+    insert (which happens after), a non-member's hand-typed metadata would already be
+    on a row every other lab sharing that paper can see by the time the 403 lands."""
+    import api.app as app_mod
+
+    def _no_writes(*_a, **_k):
+        raise AssertionError("nothing may be written before membership is checked")
+
+    monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "attacker")
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_writes)
+    monkeypatch.setattr(app_mod, "_create_post", _no_writes)
+    monkeypatch.setattr(app_mod, "fetch_metadata", _no_writes)
+
+    class _NoMembership:
+        def table(self, _n):
+            return self
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": []})()  # not a member of anything
+
+    monkeypatch.setattr(app_mod, "user_client", lambda _t: _NoMembership())
+
+    resp = client.post(
+        "/posts",
+        json={
+            "url": "https://arxiv.org/abs/2401.01234",
+            "team_id": "someone-elses-lab",
+            "fields": {"title": "spam", "source": "manual"},
+        },
+        headers={"Authorization": "Bearer forged"},
+    )
+    assert resp.status_code == 403
+    assert "not a member" in resp.json()["detail"].lower()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"title": "x" * 2_001},
+        {"abstract": "x" * 100_001},
+        {"authors": ["a" * 301]},  # one oversized item, not just too many
+        {"authors": ["a"] * 1_001},
+        {"year": 99_999_999_999},  # papers.year is int4 — would 500 on insert
+        {"source": "crossref-but-i-typed-it"},  # provenance is an enum, not free text
+    ],
+)
+def test_paper_fields_are_bounded(monkeypatch, fields):
+    """These land in `papers` verbatim, so an unbounded field is an unbounded write —
+    the same hazard MAX_BIBTEX_BYTES already guards on the import path."""
+    import api.app as app_mod
+
+    def _no_writes(*_a, **_k):
+        raise AssertionError("a rejected payload must not reach the database")
+
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(app_mod, "_upsert_paper", _no_writes)
+
+    resp = client.post(
+        "/posts",
+        json={"url": "https://arxiv.org/abs/2401.01234", "team_id": "t", "fields": fields},
+        headers={"Authorization": "Bearer good"},
+    )
+    assert resp.status_code == 422, f"{fields} was accepted"
+
+
+def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
+    """The manual path is useless if a URL someone already posted (titleless, because it
+    was bot-walled) can't adopt the title now typed for it — but a row that already has
+    a title must not be rewritten by whatever the next person types."""
+    import api.app as app_mod
+    from paper_radar.ingest.metadata import PaperMetadata
+
+    patches: list[dict] = []
+
+    class _Svc:
+        def table(self, _n):
+            return self
+
+        def update(self, patch):
+            patches.append(patch)
+            return self
+
+        def eq(self, *_a):
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": []})()
+
+    monkeypatch.setattr(app_mod, "service_client", lambda: _Svc())
+
+    typed = PaperMetadata(url="u", title="Typed by hand", authors=["A"], source="manual")
+
+    # A titleless row adopts it, and is marked for embedding (it now has text).
+    assert app_mod._repair_untitled({"id": "p1", "title": None}, typed) is True
+    assert patches[0]["title"] == "Typed by hand"
+    assert patches[0]["embedded_at"] is None
+
+    # A row that already has a title is left alone.
+    assert app_mod._repair_untitled({"id": "p2", "title": "Real title"}, typed) is False
+    assert len(patches) == 1
