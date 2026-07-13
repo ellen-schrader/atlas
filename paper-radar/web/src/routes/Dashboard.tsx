@@ -31,7 +31,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const recRowRef = useRef<HTMLDivElement>(null);
 
-  const search = usePaperSearch(team.id, "", null);
+  const search = usePaperSearch(team.id, "");
   const posts = (search.data?.pages ?? []).flat();
   const { data: counts } = useEngagementCounts(
     team.id,
@@ -257,6 +257,9 @@ export default function Dashboard() {
                   reactions={counts?.[post.papers.id]?.reactions ?? 0}
                   comments={counts?.[post.papers.id]?.comments ?? 0}
                   read={readIds?.has(post.papers.id)}
+                  teamId={team.id}
+                  userId={userId}
+                  bookmarked={bookmarkedIds.has(post.papers.id)}
                   onOpen={() => openPaper(post.papers.id)}
                 />
               ))}
