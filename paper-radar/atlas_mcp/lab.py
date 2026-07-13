@@ -15,6 +15,7 @@ server).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import socket
 import time
@@ -274,6 +275,23 @@ def _hydrate(client: Client, posts: list[dict]) -> list[dict]:
     return out
 
 
+def _hydrate_scored(client: Client, rows: list[dict]) -> list[dict]:
+    """Given ranking-RPC rows carrying `post_id` + `similarity` (match_papers /
+    recommend_papers), fetch and hydrate those posts, attach the score, and return
+    them most-similar first."""
+    if not rows:
+        return []
+    sim = {r["post_id"]: r["similarity"] for r in rows}
+    posts = (
+        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
+    )
+    hydrated = _hydrate(client, posts)
+    for h in hydrated:
+        h["similarity"] = sim.get(h["id"])
+    hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
+    return hydrated
+
+
 @with_refresh
 def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
     """Ranked posts in `team` for `query`. mode: "keyword" | "semantic"."""
@@ -290,18 +308,7 @@ def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
             .data
             or []
         )
-        if not matches:
-            return []
-        sim = {m["post_id"]: m["similarity"] for m in matches}
-        posts = (
-            client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data
-            or []
-        )
-        hydrated = _hydrate(client, posts)
-        for h in hydrated:
-            h["similarity"] = sim.get(h["id"])
-        hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
-        return hydrated
+        return _hydrate_scored(client, matches)
 
     if mode != "keyword":
         raise LabError(f"Unknown search mode {mode!r} — use 'keyword' or 'semantic'.")
@@ -325,6 +332,227 @@ def recent(team: dict, limit: int) -> list[dict]:
         or []
     )
     return _hydrate(client, posts)
+
+
+# === similarity + recommendations (read-only, embedding-based) =============
+# All numpy-free: the MCP server runs under the lean `mcp` extra (no numpy), so
+# vector math here is plain Python over `list[float]`. The nearest-neighbour work
+# stays in Postgres (match_papers / recommend_papers over the HNSW index).
+
+
+def _unit(v: list[float]) -> list[float] | None:
+    """L2-normalise a vector; None if it has no magnitude."""
+    s = sum(x * x for x in v) ** 0.5
+    return [x / s for x in v] if s > 0 else None
+
+
+def _centroid(vectors: list[list[float]]) -> list[float] | None:
+    """The L2-normalised mean of unit-normalised vectors (equal weight each), so a
+    few papers define a taste direction. None when nothing usable was passed."""
+    acc: list[float] | None = None
+    n = 0
+    for v in vectors:
+        u = _unit(v)
+        if u is None:
+            continue
+        if acc is None:
+            acc = list(u)
+        elif len(u) == len(acc):
+            for i in range(len(acc)):
+                acc[i] += u[i]
+        else:
+            continue  # different dimensionality — skip rather than crash/corrupt
+        n += 1
+    if acc is None:
+        return None
+    return _unit([x / n for x in acc])
+
+
+def _parse_embedding(raw) -> list[float] | None:
+    """PostgREST returns a pgvector column as a JSON string — normalise to a list."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    return raw
+
+
+def taste_vector(team: dict) -> list[float] | None:
+    """A taste centroid for the signed-in user: the mean embedding of the papers
+    they've read/are reading or reacted to in this lab. None on cold start (no
+    such engagement). RLS scopes every read to the caller."""
+    client = get_client()
+    uid = current_user_id()
+    if not uid:
+        return None
+    tid = team["id"]
+    ids: set[str] = set()
+    status = (
+        client.table("paper_status")
+        .select("paper_id")
+        .eq("team_id", tid)
+        .eq("user_id", uid)
+        .in_("status", ["read", "reading"])
+        .execute()
+        .data
+        or []
+    )
+    ids.update(r["paper_id"] for r in status)
+    reacted = (
+        client.table("reactions")
+        .select("paper_id")
+        .eq("team_id", tid)
+        .eq("user_id", uid)
+        .execute()
+        .data
+        or []
+    )
+    ids.update(r["paper_id"] for r in reacted)
+    if not ids:
+        return None
+    rows = client.table("papers").select("id, embedding").in_("id", list(ids)).execute().data or []
+    vectors = [v for v in (_parse_embedding(r.get("embedding")) for r in rows) if v]
+    return _centroid(vectors)
+
+
+@with_refresh
+def recommend(team: dict, limit: int) -> list[dict]:
+    """Papers to read next, ranked by the user's taste (recommend_papers RPC, which
+    already drops self-posted / already-engaged papers and re-ranks for freshness).
+    Empty list when there's no taste signal — the caller handles cold start."""
+    client = get_client()
+    vec = taste_vector(team)
+    if vec is None:
+        return []
+    rows = (
+        client.rpc("recommend_papers", {"p_team": team["id"], "p_query": vec, "p_limit": limit})
+        .execute()
+        .data
+        or []
+    )
+    return _hydrate_scored(client, rows)
+
+
+def _match_by_vector(client: Client, team: dict, vec: list[float], limit: int) -> list[dict]:
+    """Hydrated posts in `team` nearest to `vec` (match_papers RPC), most-similar
+    first. Shared by the semantic search / similar / novelty paths."""
+    matches = (
+        client.rpc("match_papers", {"p_team": team["id"], "p_query": vec, "p_limit": limit})
+        .execute()
+        .data
+        or []
+    )
+    return _hydrate_scored(client, matches)
+
+
+def _paper_embedding(client: Client, paper_id: str) -> list[float] | None:
+    rows = (
+        client.table("papers").select("embedding").eq("id", paper_id).limit(1).execute().data or []
+    )
+    return _parse_embedding(rows[0]["embedding"]) if rows else None
+
+
+@with_refresh
+def similar(team: dict, paper_id: str, limit: int) -> list[dict] | None:
+    """Papers in `team` most similar to `paper_id` (by its stored embedding), the
+    anchor itself excluded. None when the anchor has no embedding (caller falls
+    back to keyword search). match_papers is team-scoped, so results stay in-lab;
+    the caller validates the anchor belongs to the lab (for a clean error + title)."""
+    client = get_client()
+    vec = _paper_embedding(client, paper_id)
+    if vec is None:
+        return None
+    hits = _match_by_vector(client, team, vec, limit + 1)  # +1 to absorb the anchor
+    return [h for h in hits if h["paper_id"] != paper_id][:limit]
+
+
+@with_refresh
+def novelty(
+    team: dict, *, text: str | None = None, paper_id: str | None = None, limit: int = 5
+) -> list[dict]:
+    """The lab papers closest to `text` (embedded) or to `paper_id` (its embedding),
+    most-similar first, for a 'have we covered this?' check. Anchor excluded."""
+    client = get_client()
+    if paper_id:
+        get_post(team, paper_id)
+        vec = _paper_embedding(client, paper_id)
+        if vec is None:
+            raise LabError("That paper has no embedding to compare against.")
+    elif text and text.strip():
+        vec = embeddings.embed_query(text.strip())
+    else:
+        raise LabError("Give me some text or a paper_id to check.")
+    hits = _match_by_vector(client, team, vec, limit + (1 if paper_id else 0))
+    if paper_id:
+        hits = [h for h in hits if h["paper_id"] != paper_id]
+    return hits[:limit]
+
+
+@with_refresh
+def digest(team: dict, days: int) -> dict:
+    """Lab activity in the last `days`: new posts (hydrated), new-comment count, and
+    the papers the caller was @-mentioned on. All RLS-scoped to the lab."""
+    from datetime import datetime, timedelta, timezone
+
+    client = get_client()
+    tid = team["id"]
+    uid = current_user_id()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    # Cap the rendered list so an active lab can't dump hundreds of papers into one
+    # tool result; the exact-count header still reports the true total.
+    post_cap = 20
+    posts_resp = (
+        client.table("paper_posts")
+        .select(POST_COLUMNS + ", posted_by", count="exact")
+        .eq("team_id", tid)
+        .gte("posted_at", cutoff)
+        .order("posted_at", desc=True)
+        .limit(post_cap)
+        .execute()
+    )
+    new_papers = _hydrate(client, posts_resp.data or [])
+    n_papers = posts_resp.count if posts_resp.count is not None else len(new_papers)
+
+    comments = (
+        client.table("comments")
+        .select("id", count="exact")
+        .eq("team_id", tid)
+        .gte("created_at", cutoff)
+        .execute()
+    )
+    n_comments = comments.count or 0
+
+    my_mentions: list[dict] = []
+    if uid:
+        rows = (
+            client.table("mentions")
+            .select("paper_id, created_at")
+            .eq("team_id", tid)
+            .eq("mentioned_user", uid)
+            .gte("created_at", cutoff)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            ids = list({r["paper_id"] for r in rows})
+            papers = (
+                client.table("papers").select("id, title").in_("id", ids).execute().data or []
+            )
+            by_id = {p["id"]: p.get("title") for p in papers}
+            my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
+
+    return {
+        "days": days,
+        "new_papers": new_papers,
+        "n_papers": n_papers,
+        "n_comments": n_comments,
+        "mentions": my_mentions,
+    }
 
 
 @with_refresh

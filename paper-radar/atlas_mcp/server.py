@@ -128,6 +128,14 @@ def _format_hit(h: dict) -> str:
     return "\n".join(lines)
 
 
+def _citation_key(p: dict) -> str:
+    """An author-year citation key like "Chen et al., 2021" (surname of first author)."""
+    authors = [a for a in (p.get("authors") or []) if a and a.strip()]
+    surname = authors[0].strip().split()[-1] if authors else "Unknown"
+    year = p.get("year") or "n.d."
+    return f"{surname} et al., {year}" if len(authors) > 1 else f"{surname}, {year}"
+
+
 def _render(hits: list[dict], empty: str) -> str:
     if not hits:
         return empty
@@ -195,6 +203,222 @@ def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
     except lab.LabError as exc:
         return f"Error: {exc}"
     return _papers_result(hits, f"No papers posted in {team['name']} yet.")
+
+
+@mcp.tool()
+@audited
+def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
+    """Recommend papers for you to read next, based on your reading history.
+
+    Builds a taste profile from the papers you've read/reacted to in the lab and
+    ranks unseen papers by similarity (with a mild freshness boost). Falls back to
+    the most recent papers when you have no reading history yet.
+
+    Args:
+        limit: Maximum number of recommendations (1-50).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        hits = lab.recommend(team, _clamp(limit))
+        if hits:
+            return _untrusted(
+                "lab papers",
+                f"Recommended for you in {team['name']} (by your reading history):\n\n"
+                + _render(hits, ""),
+            )
+        # No recommendations — either no reading history yet, or nothing unseen is
+        # left (e.g. you posted everything). Fall back to recency, said plainly.
+        recent = lab.recent(team, _clamp(limit))
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not recent:
+        return f"No papers in {team['name']} yet to recommend from."
+    return _untrusted(
+        "lab papers",
+        f"No personalised recommendations in {team['name']} right now (no reading "
+        "history yet, or you've already seen every paper) — here are the most recent "
+        "instead:\n\n" + _render(recent, ""),
+    )
+
+
+@mcp.tool()
+@audited
+def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) -> str:
+    """Find papers in your lab similar to a given one ("more like this").
+
+    Uses the anchor paper's embedding to rank the lab's other papers by semantic
+    similarity; falls back to a title keyword search if it has no embedding.
+
+    Args:
+        paper_id: The anchor paper (from search_lab_papers / list_recent_papers).
+        limit: Maximum number of similar papers (1-50).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        anchor = lab.get_post(team, paper_id)  # validates membership + gives the title
+        title = anchor["paper"].get("title") or paper_id
+        hits = lab.similar(team, paper_id, _clamp(limit))
+        note = ""
+        if hits is None:  # no embedding on the anchor → keyword fallback
+            note = " (matched on title keywords — the paper has no embedding)"
+            hits = [
+                h
+                for h in lab.search(team, title, "keyword", _clamp(limit))
+                if h["paper_id"] != paper_id
+            ][: _clamp(limit)]
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return f"No other papers similar to “{title}” in {team['name']} yet."
+    return _untrusted("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
+
+
+@mcp.tool()
+@audited
+def lab_digest(days: int = 7, team_id: str | None = None) -> str:
+    """Summarise recent activity in your lab: new papers, comments, and mentions.
+
+    Args:
+        days: How many days back to look (1-90).
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        d = lab.digest(team, max(1, min(int(days), 90)))
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    papers = d["new_papers"]
+    n_papers = d["n_papers"]
+    parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
+    if n_papers:
+        shown = f" (showing the {len(papers)} most recent)" if n_papers > len(papers) else ""
+        parts.append(f"{n_papers} new paper(s){shown}:")
+        parts.append(_render(papers, ""))
+    else:
+        parts.append("No new papers.")
+    parts.append("")
+    parts.append(f"{d['n_comments']} new comment(s) across the lab.")
+    if d["mentions"]:
+        titles = "; ".join(m["title"] for m in d["mentions"])
+        parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
+    return _untrusted("lab activity", "\n".join(parts))
+
+
+@mcp.tool()
+@audited
+def novelty_check(
+    text: str | None = None, paper_id: str | None = None, team_id: str | None = None
+) -> str:
+    """Check whether your lab has already covered an idea, abstract, or paper.
+
+    Embeds the text (or reuses a paper's embedding), finds the closest existing
+    lab papers, and gives a novelty verdict. Scope is your lab's corpus only.
+
+    Args:
+        text: The idea or abstract to check (a sentence or paragraph).
+        paper_id: Or check an existing paper against the rest of the lab.
+        team_id: Which lab, if you belong to more than one.
+    """
+    try:
+        team = lab.resolve_team(team_id)
+        hits = lab.novelty(team, text=text, paper_id=paper_id, limit=5)
+    except embeddings.EmbeddingError as exc:
+        return f"A novelty check needs the embedding service ({exc})."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return (
+            f"Nothing comparable in {team['name']} — this looks novel to your lab "
+            "(note: its corpus may simply be small or lack embeddings)."
+        )
+    top = hits[0].get("similarity") or 0.0
+    if top >= 0.75:
+        verdict = "Closely related work already exists in your lab — likely NOT novel here."
+    elif top >= 0.6:
+        verdict = "Adjacent work exists in your lab — partially covered."
+    else:
+        verdict = "Only loosely related work found — this looks novel to your lab."
+    return _untrusted(
+        "lab papers",
+        f"{verdict} (closest similarity {top:.2f}, lab corpus only)\n\n"
+        "Closest existing papers:\n\n" + _render(hits, ""),
+    )
+
+
+@mcp.tool()
+@audited
+def draft_related_work(
+    topic: str | None = None,
+    paper_id: str | None = None,
+    limit: int = 8,
+    team_id: str | None = None,
+) -> str:
+    """Gather your lab's relevant papers as sourced material for a Related Work section.
+
+    Returns a numbered, citation-keyed source list (title, authors, year, abstract,
+    deep link) drawn ONLY from your lab, plus guidance to synthesise prose that cites
+    each one. Write the section only from these sources — never invent citations.
+
+    Args:
+        topic: The subject to survey (semantic search over the lab).
+        paper_id: Or anchor on a specific paper (finds related lab work).
+        limit: Maximum number of sources (1-20).
+        team_id: Which lab, if you belong to more than one.
+    """
+    n = max(1, min(int(limit), 20))
+    anchor_title = None  # external (paper title) — must not enter the trusted guide
+    try:
+        team = lab.resolve_team(team_id)
+        if paper_id:
+            anchor = lab.get_post(team, paper_id)  # validate membership + get the title
+            anchor_title = anchor["paper"].get("title") or paper_id
+            subject = "the paper you selected"
+            hits = lab.similar(team, paper_id, n)
+            if hits is None:  # no embedding → keyword fallback on the title
+                hits = [
+                    h
+                    for h in lab.search(team, anchor_title, "keyword", n)
+                    if h["paper_id"] != paper_id
+                ]
+        elif topic and topic.strip():
+            # A caller-supplied topic is the user's own input, safe to name directly.
+            subject = f"“{topic.strip()}”"
+            hits = lab.search(team, topic.strip(), "semantic", n)
+        else:
+            return "Give me a topic or a paper_id to draft related work for."
+    except embeddings.EmbeddingError as exc:
+        return f"Semantic gathering needs the embedding service ({exc}). Try a paper_id or keywords."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+    if not hits:
+        return f"No lab papers matched {subject} — nothing to cite from {team['name']}."
+
+    sources = []
+    for i, h in enumerate(hits, 1):
+        p = h["paper"]
+        block = [f"[{i}] ({_citation_key(p)}) {p.get('title') or p.get('url')}"]
+        authors = ", ".join(p.get("authors") or [])
+        if authors:
+            block.append(authors)
+        if p.get("abstract"):
+            block.append(f"Abstract: {p['abstract']}")
+        block.append(lab.paper_link(p["id"]))
+        sources.append("\n".join(block))
+
+    guide = (
+        f"Draft a Related Work section on {subject} for {team['name']} using ONLY the "
+        f"{len(sources)} sources below. Cite each as (Author, Year) with its deep link; "
+        "group related work by theme; for each, state its contribution and how it "
+        "relates. Do not introduce any reference that isn't listed here.\n\n"
+    )
+    # The anchor title is externally authored — expose it as data, never as part of
+    # the instruction above.
+    body = _untrusted("lab papers", "\n\n".join(sources))
+    if anchor_title:
+        body = _untrusted("anchor paper title", anchor_title) + "\n\n" + body
+    return guide + body
 
 
 @mcp.tool()
@@ -356,6 +580,70 @@ def get_figure_palette(figure_id: str, n: int = 6, team_id: str | None = None) -
     # The hex list is derived (safe); the figure title is user-authored, so frame it.
     body = ", ".join(hexes) if hexes else "(monochrome — no distinct data colours)"
     return _untrusted("figure", f"Palette for “{fig.get('title') or fig['id']}”: " + body)
+
+
+@mcp.tool()
+@audited
+def check_colorblind_safety(
+    figure_id: str | None = None,
+    palette: str | None = None,
+    team_id: str | None = None,
+) -> str:
+    """Check whether a palette is distinguishable to colourblind readers (CVD).
+
+    Simulates deuteranopia, protanopia, and tritanopia and reports any colour
+    pairs that become hard to tell apart, with a colourblind-safe alternative.
+
+    Args:
+        figure_id: A mood-board figure to pull the palette from (from list_moodboard).
+        palette: Or pass colours directly — hex like "#4477AA,#EE6677,#228833".
+        team_id: Which lab, if you belong to more than one (only with figure_id).
+    """
+    from_figure = False
+    try:
+        if palette:
+            hexes = moodboard.normalize_hexes(palette)
+            source = "the supplied palette"
+        elif figure_id:
+            team = lab.resolve_team(team_id)
+            fig = moodboard.get_figure(team, figure_id)
+            hexes = moodboard.palette(moodboard.download(fig), n=8)
+            source = f"figure “{fig.get('title') or fig['id']}”"
+            from_figure = True  # `source` carries an external, user-authored title
+        else:
+            return "Give me a figure_id or a palette (e.g. \"#4477AA,#EE6677\")."
+    except lab.LabError as exc:
+        return f"Error: {exc}"
+
+    if len(hexes) < 2:
+        return (
+            f"Only {len(hexes)} usable colour(s) in {source} — need at least two to "
+            "check whether they're distinguishable."
+        )
+
+    report = moodboard.cvd_report(hexes)
+    lines = [f"Colourblind-safety check for {source}: {', '.join(hexes)}", ""]
+    all_safe = True
+    for kind, res in report.items():
+        if res["safe"]:
+            lines.append(f"• {kind}: safe — all colours stay distinct.")
+        else:
+            all_safe = False
+            collisions = "; ".join(f"{a}≈{b} (ΔE {de})" for a, b, de in res["pairs"])
+            lines.append(f"• {kind}: {len(res['pairs'])} risky pair(s) — {collisions}")
+    lines.append("")
+    if all_safe:
+        lines.append("Verdict: this palette is colourblind-safe. 👍")
+    else:
+        safe = ", ".join(moodboard.SAFE_CYCLE[: max(2, min(len(hexes), 6))])
+        lines.append(
+            "Verdict: not fully colourblind-safe. Consider a CVD-safe qualitative "
+            f"cycle (Paul Tol 'bright'): {safe}. Distinguishing lines by more than "
+            "colour alone — dash style, markers, or direct labels — also helps."
+        )
+    result = "\n".join(lines)
+    # Frame it as untrusted only when it embeds an external figure title.
+    return _untrusted("figure", result) if from_figure else result
 
 
 @mcp.tool()

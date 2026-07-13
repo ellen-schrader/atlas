@@ -268,3 +268,98 @@ def test_mplstyle_falls_back_and_ships_thin_lines():
     cycle = s.split("prop_cycle")[1].lower()
     assert "ffffff" not in cycle  # never an all-white cycle
     assert "4477aa" in cycle  # the CVD-safe fallback palette
+
+
+# --- colourblind-safety check ----------------------------------------------
+
+
+def test_normalize_hexes_parses_and_dedupes():
+    from atlas_mcp import moodboard
+
+    assert moodboard.normalize_hexes("#4477AA, EE6677 228833") == [
+        "#4477aa", "#ee6677", "#228833",
+    ]
+    assert moodboard.normalize_hexes(["#4477AA", "#4477aa", "nothex"]) == ["#4477aa"]
+    assert moodboard.normalize_hexes("") == []
+
+
+def test_cvd_report_flags_red_green_confusion():
+    from atlas_mcp import moodboard
+
+    # matplotlib's default red/green — the textbook deuteranopia collision (a
+    # protanope separates them by lightness, so we assert on the deutan case).
+    report = moodboard.cvd_report(["#d62728", "#2ca02c"])
+    assert not report["deuteranopia"]["safe"]
+    # the collision is reported as the actual pair
+    a, b, de = report["deuteranopia"]["pairs"][0]
+    assert {a, b} == {"#d62728", "#2ca02c"}
+
+
+def test_cvd_report_passes_paul_tol_bright():
+    from atlas_mcp import moodboard
+
+    report = moodboard.cvd_report(moodboard.SAFE_CYCLE)
+    assert all(res["safe"] for res in report.values()), report
+
+
+def test_cvd_simulation_leaves_gray_unchanged():
+    from atlas_mcp import moodboard
+
+    # A neutral gray carries no chromatic signal to lose, so simulation is ~identity.
+    for kind in ("deuteranopia", "protanopia", "tritanopia"):
+        r, g, b = moodboard._simulate_cvd((128, 128, 128), kind)
+        assert abs(r - 128) <= 3 and abs(g - 128) <= 3 and abs(b - 128) <= 3
+
+
+# --- taste vector / recommendations (numpy-free vector math) ----------------
+
+
+def _almost(a, b, tol=1e-9):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def test_unit_normalises_and_rejects_zero():
+    assert _almost(lab._unit([3.0, 4.0]), [0.6, 0.8])
+    assert lab._unit([0.0, 0.0]) is None
+
+
+def test_centroid_is_mean_of_unit_vectors():
+    # Two opposite unit vectors cancel; orthogonal ones average to the diagonal.
+    assert lab._centroid([[1.0, 0.0], [-1.0, 0.0]]) is None  # zero mean → no direction
+    c = lab._centroid([[1.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+    assert lab._centroid([]) is None
+    assert lab._centroid([[0.0, 0.0]]) is None  # only unusable vectors
+
+
+def test_centroid_weights_each_paper_equally():
+    # A long vector must not dominate a short one — both are unit-normalised first.
+    c = lab._centroid([[100.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])
+
+
+def test_centroid_skips_mismatched_dimension_vectors():
+    # A stray vector of the wrong dimension is skipped, not a crash or corruption.
+    c = lab._centroid([[1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0]])
+    assert _almost(c, [2 ** -0.5, 2 ** -0.5])  # only the two 2-D vectors count
+
+
+def test_parse_embedding_handles_json_string_and_list():
+    assert lab._parse_embedding("[0.1, 0.2, 0.3]") == [0.1, 0.2, 0.3]
+    assert lab._parse_embedding([0.1, 0.2]) == [0.1, 0.2]
+    assert lab._parse_embedding(None) is None
+    assert lab._parse_embedding("not-json") is None
+
+
+# --- citation key (for draft_related_work) ----------------------------------
+
+
+def test_citation_key_author_year():
+    pytest.importorskip("mcp")
+    from atlas_mcp import server
+
+    assert server._citation_key({"authors": ["Jane Doe", "Bo Li"], "year": 2021}) == "Doe et al., 2021"
+    assert server._citation_key({"authors": ["Alan Turing"], "year": 1950}) == "Turing, 1950"
+    assert server._citation_key({"authors": [], "year": None}) == "Unknown, n.d."
+    # a single-token name still yields a usable surname
+    assert server._citation_key({"authors": ["Aristotle"], "year": -350}) == "Aristotle, -350"
