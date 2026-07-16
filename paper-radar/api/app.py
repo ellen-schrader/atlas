@@ -35,7 +35,7 @@ from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.urls import _clean_url, _normalize_key
 
-from . import embeddings, enrichment, maps, teams_integration
+from . import embeddings, enrichment, integrations, maps, teams_integration
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .config import get_api_settings
@@ -60,6 +60,7 @@ app.add_middleware(
 )
 
 app.include_router(maps.router)
+app.include_router(integrations.router)
 
 
 # --- schemas ---------------------------------------------------------------
