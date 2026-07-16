@@ -60,15 +60,20 @@ whenever a paper is posted from the web app.
 Lab owners connect it themselves in **Settings → Post to Teams**: create a flow
 in Teams from the **"Send webhook alerts to a channel"** template (trigger:
 "When a Teams webhook request is received"), pick the channel, and paste the
-generated webhook URL. The row lives in `team_integrations` (owner-only RLS);
-`TEAMS_WEBHOOK_URLS={"<team uuid>": "<url>"}` in the env remains as an
-operator-level fallback for unmapped teams.
+generated webhook URL. It's stored in `team_integrations` (owner-only RLS, one
+row per lab) — the single source of truth; there is no env-var config, so
+disconnecting in the UI actually stops posting.
 
-Security: the webhook URL is a URL the *server* POSTs to, i.e. an SSRF sink.
-It is validated on save and re-validated on send (`url_guard` screen + https +
-default port + no credentials + `*.logic.azure.com` / `*.api.powerplatform.com`
-allowlist), a DB CHECK enforces the same shape against direct writes, and the
-POST never follows redirects.
+Security posture (the webhook URL is a bearer capability the *server* POSTs to —
+both a secret and an SSRF sink):
+- **Never leaves the server after save.** The API returns only the host; the
+  browser never sees the full URL. Pause/resume is a URL-free `PATCH`.
+- **Validated on save and again on send:** `url_guard` SSRF screen + https +
+  default port + no credentials + `*.logic.azure.com` / `*.api.powerplatform.com`
+  host allowlist. The save-time validator is strictly stronger than the DB CHECK
+  constraint, which independently guards direct PostgREST writes.
+- **The POST never follows redirects** — a webhook that 3xx's at internal infra
+  fails instead of being fetched.
 
 Posting is fire-and-forget from `create_post` background tasks — an unreachable
 webhook is logged and never fails the in-app post.
