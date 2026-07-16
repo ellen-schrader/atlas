@@ -5,10 +5,16 @@ build an Adaptive Card and POST it to the lab's Power Automate "Workflows"
 webhook URL ("When a Teams webhook request is received" trigger — the
 sanctioned replacement for the retired O365 incoming webhooks).
 
-Configured via TEAMS_WEBHOOK_URLS, a JSON map of team uuid → webhook URL.
-Unconfigured labs are a silent no-op, and nothing in this module ever raises:
-posting to Teams must never break, slow, or roll back an in-app post, so
-every entry point catches and logs.
+Configured per lab in the team_integrations table (Settings → Lab management,
+owner-only). Unconfigured or disabled labs are a silent no-op, and nothing in
+the notify path ever raises: posting to Teams must never break, slow, or roll
+back an in-app post, so every entry point catches and logs.
+
+Security: the webhook URL is attacker-influencable data that the SERVER posts
+to — an SSRF sink. It is validated on save (the API endpoint), on write (a DB
+CHECK constraint), and again on send (`validate_webhook_url` below), and the
+POST itself never follows redirects, so a webhook that 302s at internal infra
+fails instead of being fetched.
 """
 
 from __future__ import annotations
@@ -16,8 +22,10 @@ from __future__ import annotations
 import json
 import logging
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 
-from .config import get_api_settings
+from paper_radar.ingest import url_guard
+
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -25,26 +33,78 @@ log = logging.getLogger(__name__)
 _TIMEOUT = 10  # seconds; the card is fire-and-forget, never worth waiting longer
 _MAX_AUTHORS = 3
 
+# Only Microsoft Power Automate endpoints. The suffixes are dot-prefixed so
+# "evillogic.azure.com" can't match, and the base domains are Microsoft-owned,
+# which also neutralizes DNS games — an attacker can't point *.logic.azure.com
+# at internal infra.
+_ALLOWED_WEBHOOK_SUFFIXES = (".logic.azure.com", ".api.powerplatform.com")
+
+
+def validate_webhook_url(url: str) -> str:
+    """The normalized webhook URL, or raise ValueError with a user-facing reason.
+
+    Layered checks (matches the team_integrations DB CHECK, plus what a regex
+    can't see): url_guard's SSRF screen (scheme, length, internal names and IP
+    literals), then https-only, no embedded credentials, default port only, and
+    the Power Automate host allowlist. DNS resolution is deliberately skipped —
+    the allowlisted domains are Microsoft's, so resolving them adds flakiness,
+    not safety.
+    """
+    try:
+        url_guard.validate_public_url(url, resolve=False)
+    except url_guard.BlockedUrl as exc:
+        raise ValueError(str(exc)) from exc
+    parts = urlsplit(url.strip())
+    if parts.scheme != "https":
+        raise ValueError("The webhook URL must use https.")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("The webhook URL must not contain credentials.")
+    try:
+        port_ok = parts.port in (None, 443)
+    except ValueError:  # non-numeric port
+        port_ok = False
+    if not port_ok:
+        raise ValueError("The webhook URL must use the default https port.")
+    # No rstrip('.'): a trailing-dot host is deliberately rejected here (it
+    # would also fail the DB CHECK) instead of being silently normalized.
+    host = parts.hostname or ""
+    if not host.endswith(_ALLOWED_WEBHOOK_SUFFIXES):
+        raise ValueError(
+            "That doesn't look like a Power Automate webhook URL "
+            "(expected a *.logic.azure.com or *.api.powerplatform.com address)."
+        )
+    # Keep this validator strictly stronger than the team_integrations DB CHECK
+    # so a value it accepts can never be rejected by the constraint (which would
+    # surface as an opaque write error): the host must start alphanumeric and
+    # there must be a path. Power Automate URLs always satisfy both.
+    if not host[0].isalnum():
+        raise ValueError("That webhook host isn't valid.")
+    if not parts.path or parts.path == "/":
+        raise ValueError("That webhook URL is missing its path — copy the whole URL from Teams.")
+    # Normalize: lowercase the host so the stored value satisfies the DB CHECK
+    # (no userinfo is present — rejected above — so lowercasing netloc is safe).
+    return urlunsplit(parts._replace(netloc=parts.netloc.lower()))
+
 
 def webhook_url_for_team(team_id: str) -> str | None:
-    """The team's Workflows webhook URL, or None if not configured.
+    """The lab's Workflows webhook URL, or None if not configured or disabled.
 
-    TEAMS_WEBHOOK_URLS is keyed by team uuid — not slug, because slugs double
-    as the lab invite code and regenerate_team_code rewrites them, which would
-    silently kill a slug-keyed mapping.
+    Single source of truth: the owner-managed team_integrations row. A disabled
+    row is OFF, and deleting it (Settings → Disconnect) stops posting — there is
+    deliberately no env-map fallback that could keep a "disconnected" lab live.
     """
-    raw = get_api_settings().teams_webhook_urls
-    if not raw:
+    found = (
+        service_client()
+        .table("team_integrations")
+        .select("webhook_url, enabled")
+        .eq("team_id", team_id)
+        .limit(1)
+        .execute()
+    )
+    if not found.data:
         return None
-    try:
-        urls = json.loads(raw)
-    except ValueError:
-        log.warning("TEAMS_WEBHOOK_URLS is not valid JSON; Teams posting disabled")
-        return None
-    if not isinstance(urls, dict):
-        log.warning("TEAMS_WEBHOOK_URLS must be a JSON object; Teams posting disabled")
-        return None
-    return urls.get(team_id) or None
+    row = found.data[0]
+    return row["webhook_url"] if row["enabled"] else None
 
 
 # TextBlock text renders a CommonMark subset (emphasis, links, lists), so any
@@ -120,8 +180,57 @@ def build_paper_card(
     }
 
 
+def build_test_card(team_name: str | None) -> dict:
+    """The card the Settings "Send test card" button fires."""
+    where = f" for {_md_escape(team_name)}" if team_name else ""
+    return {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "msteams": {"width": "Full"},
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "Atlas is connected ✅",
+                "weight": "Bolder",
+                "size": "Medium",
+                "wrap": True,
+            },
+            {
+                "type": "TextBlock",
+                "text": (
+                    f"Papers posted{where} will appear in this channel. "
+                    "This is a test card sent from Settings."
+                ),
+                "isSubtle": True,
+                "wrap": True,
+            },
+        ],
+    }
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect from a webhook.
+
+    The URL was validated against the Power Automate allowlist, but a redirect
+    is a fresh, unvalidated target — following it would let a (mis)configured
+    endpoint bounce the server's POST anywhere, including internal addresses.
+    A webhook has no business redirecting; treat 3xx as failure.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # urllib turns this into an HTTPError -> logged as failure
+
+
+_webhook_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def post_to_teams(webhook_url: str, card: dict) -> bool:
-    """POST one Adaptive Card to a Workflows webhook. Logs and returns False on failure."""
+    """POST one Adaptive Card to a Workflows webhook. Logs and returns False on failure.
+
+    The URL must already be validated (validate_webhook_url) — callers in this
+    module do so at send time, not just at save time.
+    """
     payload = {
         "type": "message",
         "attachments": [
@@ -135,9 +244,9 @@ def post_to_teams(webhook_url: str, card: dict) -> bool:
         method="POST",
     )
     try:
-        # urlopen raises (HTTPError) for any non-2xx status, so success needs
-        # no status check.
-        with urllib.request.urlopen(req, timeout=_TIMEOUT):  # noqa: S310 (operator-configured URL)
+        # urlopen raises (HTTPError) for any non-2xx status — including the
+        # redirects _NoRedirect refuses — so success needs no status check.
+        with _webhook_opener.open(req, timeout=_TIMEOUT):  # noqa: S310 (validated above)
             pass
     except Exception as exc:
         log.warning("posting card to Teams failed: %s", exc)
@@ -178,6 +287,14 @@ def notify_paper_posted(
     try:
         webhook_url = webhook_url_for_team(team_id)
         if not webhook_url:
+            return
+        try:
+            # Re-validate at send time: the stored value may predate (or have
+            # dodged) save-time checks, and this is the last line before the
+            # server actually connects to it.
+            webhook_url = validate_webhook_url(webhook_url)
+        except ValueError as exc:
+            log.warning("refusing configured Teams webhook for team %s: %s", team_id, exc)
             return
         card = build_paper_card(
             url=url,

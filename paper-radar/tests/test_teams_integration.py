@@ -13,18 +13,18 @@ pytest.importorskip("supabase")
 from api import teams_integration  # noqa: E402
 
 
-def _settings(value: str):
-    return lambda: types.SimpleNamespace(teams_webhook_urls=value)
-
-
 class _FakeQuery:
-    def __init__(self, data):
+    """Records .eq() filters so tests can assert the query is team-scoped."""
+
+    def __init__(self, data, eqs: dict):
         self._data = data
+        self._eqs = eqs
 
     def select(self, *a, **k):
         return self
 
-    def eq(self, *a, **k):
+    def eq(self, col, val):
+        self._eqs[col] = val
         return self
 
     def limit(self, *a, **k):
@@ -35,61 +35,109 @@ class _FakeQuery:
 
 
 class _FakeClient:
-    """Returns canned rows for one expected table; any other table is an error."""
+    """Canned rows per table; querying any table not in the map is an error.
 
-    def __init__(self, expect_table: str, data):
-        self._expect_table = expect_table
-        self._data = data
+    Records the last .eq() filters per table in `.eqs` for scoping assertions.
+    """
+
+    def __init__(self, tables: dict):
+        self._tables = tables
+        self.eqs: dict = {}
 
     def table(self, name):
-        assert name == self._expect_table, f"unexpected query on table {name!r}"
-        return _FakeQuery(self._data)
+        assert name in self._tables, f"unexpected query on table {name!r}"
+        self.eqs[name] = {}
+        return _FakeQuery(self._tables[name], self.eqs[name])
 
 
-def _no_service_client():
-    raise AssertionError("service_client must not be called")
+def _client_without_row():
+    return _FakeClient({"team_integrations": []})
+
+
+# --- validate_webhook_url (SSRF / allowlist) ----------------------------------
+
+GOOD_URL = "https://prod-27.westeurope.logic.azure.com:443/workflows/abc/triggers/manual?sig=x"
+
+
+def test_validate_accepts_power_automate_urls():
+    assert teams_integration.validate_webhook_url(GOOD_URL) == GOOD_URL
+    assert (
+        teams_integration.validate_webhook_url(
+            "https://x.westeurope.environment.api.powerplatform.com/powerautomate/x"
+        )
+        == "https://x.westeurope.environment.api.powerplatform.com/powerautomate/x"
+    )
+
+
+def test_validate_lowercases_the_host():
+    out = teams_integration.validate_webhook_url("https://PROD-27.LOGIC.AZURE.COM/workflows/x")
+    assert out == "https://prod-27.logic.azure.com/workflows/x"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://prod-27.logic.azure.com/workflows/x",  # not https
+        "https://evil.example/workflows/x",  # host not allowlisted
+        "https://logic.azure.com.evil.example/x",  # allowlisted suffix in the middle
+        "https://evillogic.azure.com/x",  # missing the dot boundary
+        "https://logic.azure.com/x",  # bare apex, no subdomain
+        "https://prod.logic.azure.com./x",  # trailing-dot host
+        "https://user@prod.logic.azure.com/x",  # embedded credentials
+        "https://user:pw@prod.logic.azure.com/x",  # embedded credentials
+        "https://evil.com\\@prod.logic.azure.com/x",  # backslash parser-confusion
+        "https://prod.logic.azure.com:8443/x",  # non-default port
+        "https://prod.logic.azure.com",  # no path (DB CHECK requires one)
+        "https://prod.logic.azure.com/",  # bare-slash path only
+        "https://127.0.0.1/workflows/x",  # IP literal (also not allowlisted)
+        "https://[::1]/workflows/x",  # IPv6 loopback literal
+        "https://localhost/workflows/x",  # internal name (url_guard)
+        "https://prod.logic.azure.cоm/x",  # Cyrillic 'о' homoglyph — not the real TLD
+        "file:///etc/passwd",  # scheme (url_guard)
+        "",  # empty (url_guard)
+        "https://" + "a" * 2100 + ".logic.azure.com/x",  # over-long (url_guard)
+    ],
+)
+def test_validate_rejects_unsafe_urls(url):
+    with pytest.raises(ValueError):
+        teams_integration.validate_webhook_url(url)
+
+
+def test_redirects_are_never_followed():
+    handler = teams_integration._NoRedirect()
+    assert (
+        handler.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/") is None
+    )
 
 
 # --- webhook_url_for_team ----------------------------------------------------
 
 
-def test_webhook_url_unconfigured_is_none_without_db_call(monkeypatch):
-    monkeypatch.setattr(teams_integration, "get_api_settings", _settings(""))
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
+def test_webhook_url_unconfigured_is_none(monkeypatch):
+    monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
     assert teams_integration.webhook_url_for_team("t1") is None
 
 
-def test_webhook_url_invalid_json_is_none(monkeypatch):
-    monkeypatch.setattr(teams_integration, "get_api_settings", _settings("{not json"))
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
-    assert teams_integration.webhook_url_for_team("t1") is None
-
-
-def test_webhook_url_non_object_json_is_none(monkeypatch):
-    monkeypatch.setattr(teams_integration, "get_api_settings", _settings('["url"]'))
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
-    assert teams_integration.webhook_url_for_team("t1") is None
-
-
-def test_webhook_url_by_team_id(monkeypatch):
-    monkeypatch.setattr(
-        teams_integration, "get_api_settings", _settings('{"t1": "https://hook.example/x"}')
+def test_webhook_url_returns_enabled_row_scoped_to_team(monkeypatch):
+    client = _FakeClient(
+        {"team_integrations": [{"webhook_url": "https://db.example/hook", "enabled": True}]}
     )
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
-    assert teams_integration.webhook_url_for_team("t1") == "https://hook.example/x"
+    monkeypatch.setattr(teams_integration, "service_client", lambda: client)
+    assert teams_integration.webhook_url_for_team("t1") == "https://db.example/hook"
+    # The lookup must be filtered to the requested team — else it's a
+    # cross-tenant leak (any lab's webhook for any team_id).
+    assert client.eqs["team_integrations"] == {"team_id": "t1"}
 
 
-def test_webhook_url_unmapped_team_is_none_without_db_call(monkeypatch):
+def test_webhook_url_disabled_row_is_none(monkeypatch):
+    # An owner who paused the connection must stay off.
     monkeypatch.setattr(
-        teams_integration, "get_api_settings", _settings('{"other": "https://hook.example/z"}')
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient(
+            {"team_integrations": [{"webhook_url": "https://db.example/hook", "enabled": False}]}
+        ),
     )
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
-    assert teams_integration.webhook_url_for_team("t1") is None
-
-
-def test_webhook_url_empty_mapping_is_none_without_db_call(monkeypatch):
-    monkeypatch.setattr(teams_integration, "get_api_settings", _settings('{"t1": ""}'))
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
     assert teams_integration.webhook_url_for_team("t1") is None
 
 
@@ -164,46 +212,54 @@ def test_card_escapes_markdown_in_byline():
 # --- post_to_teams -----------------------------------------------------------
 
 
-def test_post_to_teams_sends_adaptive_card_attachment(monkeypatch):
-    captured = {}
+class _FakeOpener:
+    """Stands in for _webhook_opener; records the request or raises."""
 
-    class _Resp:
-        def __enter__(self):
-            return self
+    def __init__(self, raises: Exception | None = None):
+        self.captured: dict = {}
+        self._raises = raises
 
-        def __exit__(self, *a):
-            return False
+    def open(self, req, timeout=None):
+        if self._raises is not None:
+            raise self._raises
+        self.captured["url"] = req.full_url
+        self.captured["body"] = json.loads(req.data.decode("utf-8"))
+        self.captured["content_type"] = req.get_header("Content-type")
 
-    def fake_urlopen(req, timeout=None):
-        captured["url"] = req.full_url
-        captured["body"] = json.loads(req.data.decode("utf-8"))
-        captured["content_type"] = req.get_header("Content-type")
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
         return _Resp()
 
-    monkeypatch.setattr(teams_integration.urllib.request, "urlopen", fake_urlopen)
+
+def test_post_to_teams_sends_adaptive_card_attachment(monkeypatch):
+    opener = _FakeOpener()
+    monkeypatch.setattr(teams_integration, "_webhook_opener", opener)
     card = {"type": "AdaptiveCard", "body": []}
     assert teams_integration.post_to_teams("https://hook.example/x", card) is True
-    assert captured["url"] == "https://hook.example/x"
-    assert captured["content_type"] == "application/json"
-    (attachment,) = captured["body"]["attachments"]
+    assert opener.captured["url"] == "https://hook.example/x"
+    assert opener.captured["content_type"] == "application/json"
+    (attachment,) = opener.captured["body"]["attachments"]
     assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
     assert attachment["content"] == card
 
 
 def test_post_to_teams_swallows_network_errors(monkeypatch):
-    def fake_urlopen(req, timeout=None):
-        raise urllib.error.URLError("boom")
-
-    monkeypatch.setattr(teams_integration.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        teams_integration, "_webhook_opener", _FakeOpener(raises=urllib.error.URLError("boom"))
+    )
     assert teams_integration.post_to_teams("https://hook.example/x", {}) is False
 
 
 def test_post_to_teams_treats_http_error_as_failure(monkeypatch):
-    # urlopen raises HTTPError for non-2xx responses; it must be swallowed too.
-    def fake_urlopen(req, timeout=None):
-        raise urllib.error.HTTPError("https://hook.example/x", 400, "Bad Request", None, None)
-
-    monkeypatch.setattr(teams_integration.urllib.request, "urlopen", fake_urlopen)
+    # The opener raises HTTPError for non-2xx (and for refused redirects); it
+    # must be swallowed, not propagated.
+    err = urllib.error.HTTPError("https://hook.example/x", 400, "Bad Request", None, None)
+    monkeypatch.setattr(teams_integration, "_webhook_opener", _FakeOpener(raises=err))
     assert teams_integration.post_to_teams("https://hook.example/x", {}) is False
 
 
@@ -211,8 +267,7 @@ def test_post_to_teams_treats_http_error_as_failure(monkeypatch):
 
 
 def test_notify_is_noop_when_unconfigured(monkeypatch):
-    monkeypatch.setattr(teams_integration, "get_api_settings", _settings(""))
-    monkeypatch.setattr(teams_integration, "service_client", _no_service_client)
+    monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
     monkeypatch.setattr(
         teams_integration,
         "post_to_teams",
@@ -223,12 +278,14 @@ def test_notify_is_noop_when_unconfigured(monkeypatch):
 
 def test_notify_posts_card_with_display_name(monkeypatch):
     monkeypatch.setattr(
-        teams_integration, "get_api_settings", _settings('{"t1": "https://hook.example/x"}')
-    )
-    monkeypatch.setattr(
         teams_integration,
         "service_client",
-        lambda: _FakeClient("profiles", [{"display_name": "Ellen"}]),
+        lambda: _FakeClient(
+            {
+                "team_integrations": [{"webhook_url": GOOD_URL, "enabled": True}],
+                "profiles": [{"display_name": "Ellen"}],
+            }
+        ),
     )
     sent = {}
 
@@ -241,13 +298,31 @@ def test_notify_posts_card_with_display_name(monkeypatch):
     teams_integration.notify_paper_posted(
         "t1", url="https://example.org/p", title="A Paper", posted_by_id="u1"
     )
-    assert sent["webhook_url"] == "https://hook.example/x"
+    assert sent["webhook_url"] == GOOD_URL
     assert sent["card"]["body"][-1]["text"] == "Posted by Ellen via Atlas"
 
 
-def test_notify_never_raises(monkeypatch):
-    def boom():
-        raise RuntimeError("settings unavailable")
+def test_notify_refuses_invalid_stored_webhook(monkeypatch):
+    # Send-time validation: a stored URL that isn't a Power Automate endpoint
+    # (however it got there) must never be connected to.
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient(
+            {"team_integrations": [{"webhook_url": "https://internal.example/x", "enabled": True}]}
+        ),
+    )
+    monkeypatch.setattr(
+        teams_integration,
+        "post_to_teams",
+        lambda *a, **k: pytest.fail("must not post to a non-allowlisted URL"),
+    )
+    teams_integration.notify_paper_posted("t1", url="https://example.org/p")
 
-    monkeypatch.setattr(teams_integration, "get_api_settings", boom)
+
+def test_notify_never_raises(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(teams_integration, "service_client", boom)
     teams_integration.notify_paper_posted("t1", url="https://example.org/p")
