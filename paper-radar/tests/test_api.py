@@ -262,7 +262,7 @@ def test_posts_with_fields_does_not_validate_or_fetch_url(monkeypatch):
         "_upsert_paper",
         lambda meta, _u, _n: (seen.update(meta=meta), ("paper-1", False))[1],
     )
-    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
 
     def _no_fetch(*_a, **_k):
         raise AssertionError("the fields path must not fetch or validate for a fetch")
@@ -389,7 +389,7 @@ def _stub_post(monkeypatch, seen: dict):
         "_upsert_paper",
         lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
     )
-    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
 
     def _boom(*_a, **_k):
         raise AssertionError("fetch_metadata must not run when the client sent fields")
@@ -442,7 +442,7 @@ def test_posting_without_fields_still_resolves_server_side(monkeypatch):
         "_upsert_paper",
         lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
     )
-    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False))
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
     monkeypatch.setattr(
         app_mod,
         "fetch_metadata",

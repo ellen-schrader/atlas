@@ -35,7 +35,7 @@ from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.urls import _clean_url, _normalize_key
 
-from . import embeddings, enrichment, maps
+from . import embeddings, enrichment, maps, teams_integration
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .config import get_api_settings
@@ -444,23 +444,25 @@ def _create_post(
     note: str | None,
     source: str = "web",
 ):
-    """Insert the paper_post as the user (RLS enforces membership). Returns (id, already).
+    """Insert the paper_post as the user (RLS enforces membership).
 
     `source` records how the paper got here ("web" | "bibtex" | "teams_pdf"), so a
-    400-paper import can be told apart from 400 people posting.
+    400-paper import can be told apart from 400 people posting. Returns
+    ``(id, already, source)`` — the row's actual value, so callers can gate side
+    effects on it (the Teams mirror fires only for 'web' posts).
     """
     uc = user_client(token)
 
     existing = (
         uc.table("paper_posts")
-        .select("id")
+        .select("id, source")
         .eq("paper_id", paper_id)
         .eq("team_id", team_id)
         .limit(1)
         .execute()
     )
     if existing.data:
-        return existing.data[0]["id"], True
+        return existing.data[0]["id"], True, existing.data[0]["source"]
 
     row = {
         "paper_id": paper_id,
@@ -476,7 +478,7 @@ def _create_post(
         if getattr(exc, "code", None) == "42501":
             raise HTTPException(status_code=403, detail="You are not a member of this lab") from exc
         raise HTTPException(status_code=400, detail=f"Could not post paper: {exc}") from exc
-    return inserted.data[0]["id"], False
+    return inserted.data[0]["id"], False, row["source"]
 
 
 # --- routes ----------------------------------------------------------------
@@ -549,7 +551,7 @@ def create_post(
         meta = fetch_metadata(url)
     url_norm = _normalize_key(url)
     paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
-    post_id, already = _create_post(token, req.team_id, paper_id, user_id, req.note)
+    post_id, already, post_source = _create_post(token, req.team_id, paper_id, user_id, req.note)
 
     # Embed + tag after responding so posting stays fast; each no-ops without
     # its key, and the backfill scripts cover anything skipped.
@@ -557,6 +559,23 @@ def create_post(
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
     if needs_embedding:
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
+
+    # Mirror new web posts to the lab's Teams channel (no-op for unmapped labs;
+    # failures are logged inside, never surfaced). Loop guard: only source='web'
+    # posts mirror, so Teams-ingested posts (source='teams', M2) can never echo
+    # back into the channel they came from.
+    if not already and post_source == "web":
+        background.add_task(
+            teams_integration.notify_paper_posted,
+            req.team_id,
+            url=url,
+            title=meta.title,
+            authors=meta.authors,
+            venue=meta.venue,
+            year=meta.year,
+            note=req.note,
+            posted_by_id=user_id,
+        )
 
     return PostResponse(
         post_id=post_id,
@@ -1706,7 +1725,7 @@ def bibtex_import(
                     "id", paper_id
                 ).is_("published_at", "null").execute()
 
-            _post_id, already = _create_post(
+            _post_id, already, _source = _create_post(
                 token, req.team_id, paper_id, user_id, None, source="bibtex"
             )
             if already:
