@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.pdf_extract import _clean_url, _normalize_key
 
-from . import embeddings, enrichment
+from . import embeddings, enrichment, teams_integration
 from . import overview as overview_mod
 from .config import get_api_settings
 from .supa import get_user_id, service_client, user_client
@@ -315,6 +315,23 @@ def create_post(
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
     if needs_embedding:
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
+
+    # Mirror new web posts to the lab's Teams channel (no-op for unmapped labs;
+    # failures are logged inside, never surfaced). Loop guard: Teams-ingested
+    # posts (source='teams') don't go through this endpoint, so nothing can
+    # echo back and forth.
+    if not already:
+        background.add_task(
+            teams_integration.notify_paper_posted,
+            req.team_id,
+            url=url,
+            title=meta.title,
+            authors=meta.authors,
+            venue=meta.venue,
+            year=meta.year,
+            note=req.note,
+            posted_by_id=user_id,
+        )
 
     return PostResponse(
         post_id=post_id,

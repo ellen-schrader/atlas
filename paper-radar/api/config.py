@@ -27,6 +27,12 @@ class ApiSettings(BaseSettings):
     # Must match the vector(N) columns in the schema (init migration).
     embedding_dim: int = 1024
 
+    # --- Teams integration (docs/teams-integration-plan.md) ---
+    # JSON map of team id (or slug) → Power Automate "Workflows" webhook URL.
+    # When a lab is mapped, papers posted from the web app are mirrored to its
+    # Teams channel as an Adaptive Card. Empty = disabled.
+    teams_webhook_urls: str = ""
+
     @property
     def configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_anon_key and self.supabase_service_role_key)
