@@ -5,13 +5,32 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** Turn a lab name into a URL-safe slug used as its join code. */
+/** Turn a lab name into a URL-safe display slug (NOT the join code). */
 export function slugify(text: string): string {
   return text
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Return `url` only if it is a safe link/href target (http, https, or mailto).
+ * Guards against javascript:/data:/vbscript: URLs, which React does NOT block in
+ * href/src and would execute on click (stored XSS). Returns undefined otherwise,
+ * so the caller renders an inert (non-navigating) link.
+ */
+export function safeHref(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim();
+  try {
+    const { protocol } = new URL(trimmed, window.location.origin);
+    return protocol === "http:" || protocol === "https:" || protocol === "mailto:"
+      ? trimmed
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Two-letter initials for an avatar, from a name or email. */

@@ -5,11 +5,14 @@ import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { SourceLabel } from "@/components/SourceLabel";
 import type { PaperPost } from "@/lib/types";
-import { cn, formatAuthors, formatDate } from "@/lib/utils";
+import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 
-/** A paper in the lab's collection: cover, source, title, authors, tags, and a
- *  footer with engagement + who posted. Opens the detail view on click. When
- *  `teamId`/`userId` are given, a bookmark overlays the cover. */
+/** A paper in the lab's collection: source, title, authors, tags, and a footer with
+ *  engagement + who posted. Opens the detail view on click.
+ *
+ *  The generative cover used to be a 132px block — nearly half the card, and it
+ *  encodes nothing but the paper's id. It's kept as a spine, so the lab's palette
+ *  still runs down the grid, but the words get the space. */
 export function PaperCard({
   post,
   reactions = 0,
@@ -18,6 +21,7 @@ export function PaperCard({
   teamId,
   userId,
   bookmarked = false,
+  read,
 }: {
   post: PaperPost;
   reactions?: number;
@@ -26,6 +30,10 @@ export function PaperCard({
   teamId?: string;
   userId?: string;
   bookmarked?: boolean;
+  /** Read by *you*. Shown as a dot, so an unread paper is findable at a glance.
+   *  Leave undefined where read state isn't loaded (the dashboard) — an "unread"
+   *  dot on every card would be a claim we haven't checked. */
+  read?: boolean;
 }) {
   const p = post.papers;
   const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
@@ -50,26 +58,31 @@ export function PaperCard({
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
       )}
     >
-      <div className="relative h-[132px] w-full">
+      {/* The cover is a 600×340 canvas squashed into a 6px strip, so its fluorophore
+          blobs average out into a far more saturated band than they read as at full
+          size. Knock it back, or every card in the grid shouts a different colour. */}
+      <div className="relative h-1.5 w-full shrink-0 opacity-[0.35]">
         <Cover seed={p.id} />
-        {teamId && userId && (
-          <BookmarkButton
-            paperId={p.id}
-            teamId={teamId}
-            userId={userId}
-            bookmarked={bookmarked}
-            className={cn(
-              "absolute right-2.5 top-2.5 h-8 w-8 justify-center rounded-control text-white",
-              "bg-black/40 backdrop-blur-sm hover:bg-black/60",
-              "aria-pressed:bg-accent aria-pressed:text-white",
-            )}
-          />
-        )}
       </div>
+
       <div className="flex flex-1 flex-col gap-2.5 p-4">
-        <SourceLabel venue={p.venue} year={p.year} />
+        <div className="flex items-start justify-between gap-2">
+          <SourceLabel venue={p.venue} year={p.year} />
+          {read === false && (
+            <span
+              aria-label="Unread"
+              title="Unread"
+              className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            />
+          )}
+        </div>
+
         <h3 className="text-card font-semibold tracking-snug text-fg">{p.title ?? p.url}</h3>
-        {p.authors.length > 0 && <div className="text-meta text-muted">{formatAuthors(p.authors)}</div>}
+
+        {p.authors.length > 0 && (
+          <div className="text-meta text-muted">{formatAuthors(p.authors)}</div>
+        )}
+
         {shown.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {shown.map((t) => (
@@ -78,11 +91,28 @@ export function PaperCard({
             {extra > 0 && <Chip className="text-faint">+{extra}</Chip>}
           </div>
         )}
-        <div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3">
+
+        <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-3">
           <EngagementSummary reactions={reactions} comments={comments} />
           <span className="text-meta inline-flex items-center gap-2 text-muted">
             {posterName && <Avatar name={posterName} size={20} />}
-            <span className="tabular-nums">{formatDate(post.posted_at)}</span>
+            {/* Relative reads better in a feed, and the exact date is a hover away. */}
+            <span className="tabular-nums" title={formatDate(post.posted_at)}>
+              {formatRelative(post.posted_at)}
+            </span>
+            {/* With the cover gone there's nothing to overlay, so the bookmark lives
+                in the footer — where it's always visible, not just on a hover. */}
+            {teamId && userId && (
+              <span onClick={(e) => e.stopPropagation()}>
+                <BookmarkButton
+                  paperId={p.id}
+                  teamId={teamId}
+                  userId={userId}
+                  bookmarked={bookmarked}
+                  className="-mr-1 text-faint hover:text-accent aria-pressed:text-accent"
+                />
+              </span>
+            )}
           </span>
         </div>
       </div>

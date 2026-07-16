@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     data_dir: Path = REPO_ROOT / "data"
     db_path: Path = REPO_ROOT / "data" / "paper_radar.sqlite"
     faiss_index_path: Path = REPO_ROOT / "data" / "faiss.index"
-    umap_coords_path: Path = REPO_ROOT / "data" / "umap.npy"
     fixtures_dir: Path = REPO_ROOT / "data" / "fixtures"
 
     @property

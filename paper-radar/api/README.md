@@ -19,9 +19,11 @@ The **service-role key is server-side only** — it bypasses RLS. Never put it i
 ## Endpoints (phase 4)
 
 - `GET  /health` → `{"status": "ok"}`
-- `POST /resolve` `{ "url": "..." }` → resolved metadata (title, authors,
-  abstract, DOI, venue, year, keywords, source) + `url_norm`, the dedup key.
-  Reuses `ingest/metadata.py` and `ingest/pdf_extract.py` unchanged.
+- `POST /resolve` `{ "url": "..." }`, `Authorization: Bearer <jwt>` → resolved
+  metadata (title, authors, abstract, DOI, venue, year, keywords, source) +
+  `url_norm`, the dedup key. Reuses `ingest/metadata.py` and `ingest/pdf_extract.py`.
+  Makes the server fetch the URL, so it's authenticated, rate-limited, and
+  SSRF-guarded (`ingest/url_guard.py`); a non-public target is a `400`.
 - `POST /posts` `{ "url", "team_id", "note?" }`, `Authorization: Bearer <jwt>` →
   verifies the caller's Supabase token, upserts the global `papers` row
   (service role, dedup on DOI/`url_norm`), and inserts the `paper_post` **as the
@@ -43,9 +45,10 @@ uv run python -m api.backfill_embeddings --all    # re-embed (model change)
   embeds the query and ranks the lab's posts by cosine similarity via the
   `match_papers` RPC **as the user** (RLS scopes results). Returns
   `{ results: [{ similarity, post }] }`.
-- `GET /map?team_id=...`, Bearer JWT → 2-D UMAP layout of the lab's embedded
-  papers: `{ points: [{ paper_id, x, y, title, venue, year, tags }], total,
-  embedded }`. Layouts are cached per team until the embedded set changes.
+- `GET /overview?team_id=...`, Bearer JWT → 2-D t-SNE layout of the lab's
+  embedded papers: `{ points: [{ paper_id, x, y, title, venue, year, tags }],
+  total, embedded }`. Layouts are cached per team until the embedded set
+  changes.
 - "Find similar" needs no server round-trip through this service — the web app
   calls the `similar_papers` RPC directly on Supabase.
 

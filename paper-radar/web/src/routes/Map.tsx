@@ -1,25 +1,14 @@
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Search, X } from "lucide-react";
+import { ChevronRight, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
-import { useTheme } from "@/components/ThemeProvider";
 import { Input } from "@/components/ui/input";
-import { fetchOverview, fetchSimilarity } from "@/lib/api";
+import { fetchOverview, fetchSimilarity, isTransientApiError } from "@/lib/api";
+import { markFor, markPath, usePalette } from "@/lib/palette";
 import type { Cluster, OverviewData, OverviewPoint } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
-
-/* Validated categorical palette (clusters/venues) + sequential ramps (year,
- * relevance), stepped separately for light/dark surfaces (dataviz palette). */
-const CATEGORICAL_LIGHT = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"];
-const CATEGORICAL_DARK = ["#3987e5", "#199e70", "#c98500", "#008300", "#9085e9", "#e66767", "#d55181", "#d95926"];
-const YEAR_RAMP_LIGHT = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"];
-const YEAR_RAMP_DARK = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"];
-const REL_RAMP_LIGHT = ["#dfe6ef", "#b7d3f6", "#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"];
-const REL_RAMP_DARK = ["#2c3340", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cfe2fb"];
-const OTHER_LIGHT = "#c4c8d0";
-const OTHER_DARK = "#4b5160";
 
 const W = 760;
 const H = 520;
@@ -29,12 +18,68 @@ type ColorMode = "cluster" | "year" | "venue" | "relevance";
 type SizeMode = "uniform" | "engagement";
 type BarHover = { kind: "year" | "venue" | "lab"; value: string } | null;
 
+// Fixed pseudo-scatter for the loading skeleton (percent coordinates).
+const LOADING_DOTS = [
+  [18, 32], [27, 61], [36, 22], [42, 74], [48, 45], [55, 28],
+  [61, 66], [70, 38], [78, 57], [85, 27], [64, 82], [24, 44],
+] as const;
+
+// The layout computes in a couple of seconds when the API is warm, but the
+// first request after an idle spell also pays the machine's cold boot
+// (~half a minute). Advance the message so a long wait reads as progress.
+const LOADING_STAGES = [
+  "Computing the map of your lab’s papers…",
+  "Waking the paper service — it sleeps when nobody’s around…",
+  "Still working. The first load after a quiet spell can take up to a minute.",
+];
+
+function MapLoadingSkeleton() {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    const timers = [setTimeout(() => setStage(1), 6_000), setTimeout(() => setStage(2), 20_000)];
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  return (
+    <>
+      {/* Mirror the loaded page (KPI strip → header → map card) so the panel
+          barely moves when data lands. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-hidden>
+        {Array.from({ length: 6 }, (_, i) => (
+          <div
+            key={i}
+            className="h-[68px] animate-pulse rounded-card border border-border bg-surface-2"
+          />
+        ))}
+      </div>
+      <div className="h-5 w-16 animate-pulse rounded bg-surface-2" aria-hidden />
+      <div className="rounded-card border border-border bg-surface p-4">
+        <div className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }} role="status">
+          {LOADING_DOTS.map(([x, y], i) => (
+            <span
+              key={i}
+              className="absolute h-2.5 w-2.5 animate-pulse rounded-full bg-fg/10"
+              style={{ left: `${x}%`, top: `${y}%`, animationDelay: `${(i % 4) * 350}ms` }}
+              aria-hidden
+            />
+          ))}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="animate-spin text-muted" size={22} aria-hidden />
+            <p className="max-w-sm px-6 text-center text-sm text-muted">{LOADING_STAGES[stage]}</p>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function MapView() {
   const { team } = useAppContext();
   const { data, isLoading, error } = useQuery({
     queryKey: ["overview", team.id],
     queryFn: () => fetchOverview(team.id),
     staleTime: 5 * 60 * 1000,
+    // Cold-boot-aware retry comes from the QueryClient default (main.tsx).
   });
 
   const [colorBy, setColorBy] = useState<ColorMode>("cluster");
@@ -44,11 +89,12 @@ export default function MapView() {
   const [topic, setTopic] = useState(""); // the submitted query, for the filter chip
   const [sims, setSims] = useState<Record<string, number> | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [labFilter, setLabFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [activeCluster, setActiveCluster] = useState<number | null>(null);
   const [barHover, setBarHover] = useState<BarHover>(null);
-  const { theme } = useTheme();
+  const { categorical: cat } = usePalette();
 
   async function runFilter(e: FormEvent) {
     e.preventDefault();
@@ -58,10 +104,21 @@ export default function MapView() {
       return;
     }
     setSearching(true);
+    setSearchError(null);
     try {
       setSims(await fetchSimilarity(q, team.id));
       setTopic(q);
       setColorBy("relevance"); // show the relevance heatmap immediately
+    } catch (err) {
+      // One attempt, no retry (imperative call): tell the user what happened
+      // instead of a silently un-spinning search box.
+      setSearchError(
+        isTransientApiError(err)
+          ? "The paper service is waking up — try the search again in a few seconds."
+          : err instanceof Error
+            ? err.message
+            : "Search failed.",
+      );
     } finally {
       setSearching(false);
     }
@@ -71,6 +128,7 @@ export default function MapView() {
     setRawQuery("");
     setTopic("");
     setSims(null);
+    setSearchError(null);
     if (colorBy === "relevance") setColorBy("cluster");
   }
 
@@ -81,7 +139,6 @@ export default function MapView() {
     setActiveCluster(null);
   }
 
-  const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
   const anyFilter = Boolean(sims || labFilter || tagFilter || activeCluster !== null);
 
   const points = data?.points ?? [];
@@ -91,14 +148,21 @@ export default function MapView() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <div>
-        <h1 className="text-display font-bold tracking-tight text-fg">Overview</h1>
+        <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Overview</h1>
         <p className="mt-1.5 text-sm text-muted">
           Your lab’s papers by meaning, plus themes and trends across what you’ve shared.
         </p>
       </div>
 
-      {isLoading && <p className="text-sm text-muted">Computing the overview… (first load can take a moment)</p>}
-      {error && <p className="text-sm text-danger">Couldn’t load the overview.</p>}
+      {isLoading && <MapLoadingSkeleton />}
+      {error && !data && (
+        <p className="text-sm text-danger">
+          {isTransientApiError(error)
+            ? "Couldn’t load the overview — give it a moment and reload the page."
+            : "Couldn’t load the overview."}{" "}
+          {error instanceof Error && !isTransientApiError(error) ? error.message : null}
+        </p>
+      )}
 
       {data && points.length === 0 && (
         <p className="text-sm text-muted">
@@ -173,6 +237,8 @@ export default function MapView() {
               />
             </form>
           </div>
+
+          {searchError && <p className="-mt-2 text-xs text-danger">{searchError}</p>}
 
           {/* active filters — one place to see and clear everything */}
           {anyFilter && (
@@ -355,7 +421,9 @@ interface Scaled extends OverviewPoint {
   py: number;
 }
 
-function Scatter({
+// Exported so the scoped map dashboard (/maps/:id) can reuse the exact same
+// scatter — points, cluster hulls, legend with glyphs, hover, and click-to-open.
+export function Scatter({
   points,
   clusters,
   colorBy,
@@ -367,6 +435,7 @@ function Scatter({
   activeCluster,
   setActiveCluster,
   barHover,
+  pinnedIds,
 }: {
   points: OverviewPoint[];
   clusters: Cluster[];
@@ -378,16 +447,14 @@ function Scatter({
   tagFilter: string | null;
   activeCluster: number | null;
   setActiveCluster: (c: number | null) => void;
+  /** Papers pinned into a map — drawn with a ring so curation is visible spatially. */
+  pinnedIds?: Set<string>;
   barHover: BarHover;
 }) {
-  const { theme } = useTheme();
   const { openPaper } = usePaperModal();
+  const { categorical: cat, other, year: yearRamp, relevance: relRamp } = usePalette();
   const [hover, setHover] = useState<OverviewPoint | null>(null);
 
-  const cat = theme === "dark" ? CATEGORICAL_DARK : CATEGORICAL_LIGHT;
-  const yearRamp = theme === "dark" ? YEAR_RAMP_DARK : YEAR_RAMP_LIGHT;
-  const relRamp = theme === "dark" ? REL_RAMP_DARK : REL_RAMP_LIGHT;
-  const other = theme === "dark" ? OTHER_DARK : OTHER_LIGHT;
 
   // Rank-fraction of each paper's similarity (0..1), so the relevance ramp has
   // visible contrast even when raw cosine values sit in a narrow band.
@@ -437,7 +504,10 @@ function Scatter({
     }
     const counts = new Map<string, number>();
     for (const p of points) if (p.venue) counts.set(p.venue, (counts.get(p.venue) ?? 0) + 1);
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 7).map(([v]) => v);
+    // Bounded by the palette rather than a magic number: every named venue gets its
+    // own hue, and the tail folds into "Other". (Was a hard-coded 7 against an
+    // 8-colour scale.)
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, cat.length).map(([v]) => v);
     const color = new Map(top.map((v, i) => [v, cat[i]]));
     return {
       colorOf: (p: OverviewPoint) => (p.venue && color.has(p.venue) ? color.get(p.venue)! : other),
@@ -461,6 +531,12 @@ function Scatter({
     if (inRelevance) return 0.15 + 0.8 * (relRank![p.paper_id] ?? 0);
     return 0.92;
   };
+  // Theme is the only categorical encoding, and six hues is at the limit of what's
+  // distinguishable — under deuteranopia our cyan and magenta converge. So in theme
+  // mode each cluster also gets its own glyph. The other modes are sequential (year,
+  // relevance) or top-N (venue), where a shape would imply a grouping that isn't
+  // there, so they stay circles.
+  const markOf = (p: OverviewPoint) => (colorBy === "cluster" ? markFor(p.cluster) : "circle");
 
   const scaled: Scaled[] = useMemo(() => {
     const xs = points.map((p) => p.x);
@@ -509,7 +585,18 @@ function Scatter({
               activeCluster !== null && colorBy === "cluster" && activeCluster !== Number(l.key) && "opacity-40",
             )}
           >
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: l.color }} />
+            {/* the legend carries the glyph too, or the shape encoding is unreadable */}
+            <svg viewBox="0 0 12 12" width={11} height={11} className="shrink-0" aria-hidden>
+              <path
+                d={markPath(
+                  colorBy === "cluster" ? markFor(Number(l.key)) : "circle",
+                  6,
+                  6,
+                  4.4,
+                )}
+                fill={l.color}
+              />
+            </svg>
             {l.label}
             {l.sub && <span className="font-mono text-faint">{l.sub}</span>}
           </button>
@@ -526,30 +613,47 @@ function Scatter({
         >
           {showHulls &&
             hulls.map(({ cid, hull }) => (
+              // Outline-forward (barely-there fill) so overlapping themes read as
+              // distinct regions rather than muddying into one another.
               <polygon
                 key={cid}
                 points={hull.map((pt) => `${pt.x},${pt.y}`).join(" ")}
                 fill={cat[cid % cat.length]}
-                fillOpacity={0.05}
+                fillOpacity={0.03}
                 stroke={cat[cid % cat.length]}
-                strokeOpacity={0.18}
-                strokeWidth={1}
+                strokeOpacity={0.35}
+                strokeWidth={1.25}
               />
             ))}
           {scaled.map((p) => (
-            <circle
-              key={p.paper_id}
-              cx={p.px}
-              cy={p.py}
-              r={hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p)}
-              fill={colorOf(p)}
-              fillOpacity={alphaOf(p)}
-              stroke="var(--surface)"
-              strokeWidth={1.25}
-              className="cursor-pointer"
-              onMouseEnter={() => setHover(p)}
-              onClick={() => openPaper(p.paper_id)}
-            />
+            <g key={p.paper_id}>
+              {pinnedIds?.has(p.paper_id) && (
+                <circle
+                  cx={p.px}
+                  cy={p.py}
+                  r={radiusOf(p) + 3}
+                  fill="none"
+                  stroke={colorOf(p)}
+                  strokeOpacity={0.9}
+                  strokeWidth={1.25}
+                />
+              )}
+              <path
+                d={markPath(
+                  markOf(p),
+                  p.px,
+                  p.py,
+                  hover?.paper_id === p.paper_id ? radiusOf(p) + 2 : radiusOf(p),
+                )}
+                fill={colorOf(p)}
+                fillOpacity={alphaOf(p)}
+                stroke="var(--surface)"
+                strokeWidth={1.25}
+                className="cursor-pointer"
+                onMouseEnter={() => setHover(p)}
+                onClick={() => openPaper(p.paper_id)}
+              />
+            </g>
           ))}
         </svg>
 
@@ -775,10 +879,9 @@ function ThemeBars({
               active === c.id && "bg-surface-2",
             )}
           >
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{ background: cat[c.id % cat.length] }}
-            />
+            <svg viewBox="0 0 12 12" width={11} height={11} className="shrink-0" aria-hidden>
+              <path d={markPath(markFor(c.id), 6, 6, 4.4)} fill={cat[c.id % cat.length]} />
+            </svg>
             <span className="w-32 shrink-0 truncate text-fg" title={c.label}>
               {c.label}
             </span>

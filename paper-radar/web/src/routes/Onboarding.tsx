@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Compass } from "lucide-react";
 
+import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,7 @@ export default function Onboarding() {
 
   async function onJoin(e: FormEvent) {
     e.preventDefault();
-    await run(async () => supabase.rpc("join_team_by_slug", { p_slug: slugify(code) }));
+    await run(async () => supabase.rpc("join_team_by_code", { p_code: code.trim() }));
   }
 
   async function run(action: () => Promise<{ error: unknown }>) {
@@ -46,10 +46,8 @@ export default function Onboarding() {
   return (
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white">
-          <Compass size={17} />
-        </span>
-        <span className="text-base font-semibold tracking-tight">Atlas</span>
+        <AtlasMark size={24} className="text-accent" />
+        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
       </div>
 
       <h2 className="text-xl font-bold tracking-tight">Set up your lab</h2>
@@ -84,7 +82,7 @@ export default function Onboarding() {
             />
             {name.trim() && (
               <p className="text-xs text-muted">
-                Join code: <span className="font-mono text-fg">{slugify(name)}</span>
+                You’ll get a private invite code to share once the lab is created.
               </p>
             )}
           </div>
@@ -101,7 +99,7 @@ export default function Onboarding() {
               id="lab-code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="tme-lab"
+              placeholder="Paste your lab’s invite code"
               className="font-mono"
               required
             />

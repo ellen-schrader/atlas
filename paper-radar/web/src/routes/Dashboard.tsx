@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AtSign, Bookmark, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { AtSign, BookMarked, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 
 import { InviteCode } from "@/components/InviteCode";
 import { PaperCard } from "@/components/PaperCard";
@@ -13,7 +13,7 @@ import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { useRecommendations } from "@/hooks/useRecommendations";
+import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { supabase } from "@/lib/supabase";
 import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -31,7 +31,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const recRowRef = useRef<HTMLDivElement>(null);
 
-  const search = usePaperSearch(team.id, "", null);
+  const search = usePaperSearch(team.id, "");
   const posts = (search.data?.pages ?? []).flat();
   const { data: counts } = useEngagementCounts(
     team.id,
@@ -41,6 +41,7 @@ export default function Dashboard() {
   const { data: toRead } = useReadingList(userId, team.id);
   const { data: readIds } = useReadPapers(userId, team.id);
   const recs = useRecommendations(team.id, "discover", 6);
+  const recsWaking = isWakingRecommendations(recs);
   const recResults = recs.data?.results ?? [];
   const { data: recCounts } = useEngagementCounts(
     team.id,
@@ -66,8 +67,10 @@ export default function Dashboard() {
   const active = posts.filter((p) => (counts?.[p.papers.id]?.comments ?? 0) > 0).slice(0, 2);
   const recent = posts.slice(0, 6);
 
-  // Mentions first; a paper that's both mentioned and on the reading list shows
-  // once (as the mention), so a single paper never occupies two slots.
+  // "Needs your attention" is interpersonal and time-sensitive only: unseen
+  // @mentions (a teammate is waiting on you). The reading-list backlog has its
+  // own page and the compact "Continue reading" nudge below, so it no longer
+  // floods this section — which had let a large reading list bury the mentions.
   const seen = new Set<string>();
   const attention: AttentionItem[] = [];
   for (const m of unseenMentions) {
@@ -87,28 +90,21 @@ export default function Dashboard() {
       onClear: () => void markSeen(m.paper_id),
     });
   }
-  for (const r of toRead ?? []) {
-    if (seen.has(r.paper_id)) continue;
-    seen.add(r.paper_id);
-    attention.push({
-      key: `r-${r.paper_id}`,
-      accent: false,
-      icon: <Bookmark size={15} />,
-      lead: "On your reading list",
-      title: r.papers?.title ?? "A paper",
-      sub: [r.papers?.venue, r.papers?.year].filter(Boolean).join(" · "),
-      onOpen: () => openPaper(r.paper_id),
-      onClear: () => void markPaperRead(r.paper_id),
-    });
-  }
   const attentionItems = attention.slice(0, 6);
+
+  // The single next paper to read: the oldest still-saved one (most at risk of
+  // going stale — the list is newest-first, so that's the tail), skipping any
+  // already surfaced above as a mention. The full backlog lives on /reading.
+  const readingQueue = (toRead ?? []).filter((r) => !seen.has(r.paper_id));
+  const nextUp = readingQueue[readingQueue.length - 1];
+  const readingCount = toRead?.length ?? 0;
 
   const empty = !search.isLoading && posts.length === 0;
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-10 p-8">
       <header>
-        <h1 className="text-display font-bold tracking-tight">
+        <h1 className="text-display font-serif font-semibold tracking-tight">
           {greeting()}, {firstName}
         </h1>
         <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
@@ -126,7 +122,7 @@ export default function Dashboard() {
           </button>
           <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
             <span className="text-xs text-muted">Or invite your lab with this join code</span>
-            <InviteCode code={team.slug} />
+            <InviteCode code={team.join_code} />
           </div>
         </div>
       )}
@@ -149,27 +145,47 @@ export default function Dashboard() {
         </Section>
       )}
 
+      {nextUp && (
+        <Section
+          title="Continue reading"
+          action={{ label: "Reading list", onClick: () => navigate("/reading") }}
+        >
+          <ContinueReading
+            title={nextUp.papers?.title ?? "A paper"}
+            meta={[nextUp.papers?.venue, nextUp.papers?.year].filter(Boolean).join(" · ")}
+            total={readingCount}
+            onOpen={() => openPaper(nextUp.paper_id)}
+            onMarkRead={() => void markPaperRead(nextUp.paper_id)}
+          />
+        </Section>
+      )}
+
       {!empty && (
         <Section
           title="Recommended for you"
           action={{ label: "Reading list", onClick: () => navigate("/reading") }}
         >
+          {/* The cold-start notice sits OUTSIDE the has-results branch on purpose: a
+              brand-new lab is exactly the case it explains, and that lab often has no
+              recommendations to show yet. Nesting it under `recResults.length > 0` hid
+              it from the only people who needed it. */}
+          {recs.data?.cold_start && !recs.isError && (
+            <p className="mb-3 text-xs text-muted">
+              Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
+              and this becomes yours, or{" "}
+              <button
+                onClick={() => navigate("/settings")}
+                className="font-medium text-accent hover:underline"
+              >
+                describe your research
+              </button>{" "}
+              to give it a head start.
+            </p>
+          )}
           {recs.isLoading ? (
             <CardSkeleton />
           ) : recResults.length > 0 ? (
             <>
-              {recs.data?.cold_start && (
-                <p className="mb-3 text-xs text-muted">
-                  Based on recent posts —{" "}
-                  <button
-                    onClick={() => navigate("/settings")}
-                    className="font-medium text-accent hover:underline"
-                  >
-                    add a research profile
-                  </button>{" "}
-                  for personalized picks.
-                </p>
-              )}
               <div className="group/rec relative">
                 <ScrollArrow side="left" rowRef={recRowRef} />
                 <div
@@ -197,12 +213,18 @@ export default function Dashboard() {
             <div className="flex flex-col items-start gap-2 rounded-card border border-dashed border-border bg-surface-2 p-5">
               <span className="inline-flex items-center gap-2 text-sm font-medium">
                 <Sparkles size={15} className="text-accent" />
-                {recs.isError ? "Recommendations are unavailable right now." : "No new papers to recommend yet."}
+                {recsWaking
+                  ? "Waking the paper service…"
+                  : recs.isError
+                    ? "Recommendations are unavailable right now."
+                    : "No new papers to recommend yet."}
               </span>
               <p className="text-xs text-muted">
-                {recs.isError
-                  ? "The recommendation service isn’t reachable — try again shortly."
-                  : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
+                {recsWaking
+                  ? "It sleeps when nobody’s around — recommendations will appear here shortly."
+                  : recs.isError
+                    ? "The recommendation service isn’t reachable — try again shortly."
+                    : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
               </p>
               {!recs.isError && (
                 <button
@@ -252,6 +274,9 @@ export default function Dashboard() {
                   reactions={counts?.[post.papers.id]?.reactions ?? 0}
                   comments={counts?.[post.papers.id]?.comments ?? 0}
                   read={readIds?.has(post.papers.id)}
+                  teamId={team.id}
+                  userId={userId}
+                  bookmarked={bookmarkedIds.has(post.papers.id)}
                   onOpen={() => openPaper(post.papers.id)}
                 />
               ))}
@@ -303,6 +328,46 @@ function AttentionCard({ item }: { item: AttentionItem }) {
         className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-fg"
       >
         <Check size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** A single, bounded nudge for the reading-list backlog: the next paper to read
+ *  plus how many are queued, deferring to the dedicated reading-list page rather
+ *  than dumping the whole list onto the dashboard. */
+function ContinueReading({
+  title,
+  meta,
+  total,
+  onOpen,
+  onMarkRead,
+}: {
+  title: string;
+  meta: string;
+  total: number;
+  onOpen: () => void;
+  onMarkRead: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3.5 rounded-card border border-border bg-surface p-4 shadow-sm transition hover:border-border-strong">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border bg-surface-2 text-muted">
+        <BookMarked size={17} />
+      </span>
+      <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
+          Next up{total > 1 ? ` · ${total} on your list` : ""}
+        </span>
+        <span className="mt-1 block truncate text-sm font-semibold leading-snug">{title}</span>
+        {meta && <span className="mt-0.5 block truncate text-xs text-muted">{meta}</span>}
+      </button>
+      <button
+        onClick={onMarkRead}
+        title="Mark as read"
+        aria-label="Mark as read"
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-accent"
+      >
+        <Check size={15} />
       </button>
     </div>
   );

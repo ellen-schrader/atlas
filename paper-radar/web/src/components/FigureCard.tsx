@@ -60,6 +60,11 @@ export function FigureCard({
             {categoryLabel(figure.category)}
           </span>
         )}
+        {figure.origin === "style_card" && (
+          <span className="absolute right-2.5 top-2.5 rounded-full border border-accent/40 bg-accent-weak px-2 py-0.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-accent backdrop-blur">
+            Style card
+          </span>
+        )}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/45 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
       <div className="flex flex-col gap-2.5 p-4">

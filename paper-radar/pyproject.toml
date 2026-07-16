@@ -10,17 +10,13 @@ dependencies = [
     "anthropic>=0.40",
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.5",
-    "pymupdf>=1.24",
-    "sentence-transformers>=3.0",
-    "faiss-cpu>=1.8",
-    "umap-learn>=0.5.6",
-    "streamlit>=1.38",
+    # sklearn backs the API's /overview map (embed/index.py: t-SNE + KMeans —
+    # deliberately numba-free, see compute_layout_2d); the deps only the local
+    # pipeline needs (sentence-transformers/torch, faiss, streamlit) live in
+    # `legacy`.
+    "scikit-learn>=1.4",
     "typer>=0.12",
     "numpy>=1.26,<3",
-    # Pin modern numba/llvmlite so the resolver doesn't backtrack to versions
-    # that predate Python 3.12 (umap-learn -> pynndescent -> numba -> llvmlite).
-    "numba>=0.60",
-    "llvmlite>=0.43",
 ]
 
 [project.optional-dependencies]
@@ -30,11 +26,26 @@ dev = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "supabase>=2.9",
+    "bibtexparser>=1.4",
+]
+# The Streamlit-era prototype (app/, embed/embed.py, `paper-radar serve`) and
+# the Teams-PDF importer. Not installed in the API container image.
+#
+# PyMuPDF is AGPL-3.0-or-commercial, so it is deliberately *not* a core dep:
+# keeping it here means the MIT-licensed API, MCP server and web app never link
+# it. Only ingest/pdf_extract.py (and `api/import_teams_pdfs.py`, which drives
+# it) needs it; the URL helpers everything else uses live in ingest/urls.py.
+legacy = [
+    "sentence-transformers>=3.0",
+    "streamlit>=1.38",
+    "faiss-cpu>=1.8",
+    "pymupdf>=1.24",
 ]
 api = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "supabase>=2.9",
+    "bibtexparser>=1.4",   # .bib import (ingest/bibtex.py)
 ]
 # Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
 # docs/CLAUDE_INTEGRATION_PLAN.md). Run: uv run --extra mcp python -m atlas_mcp
@@ -42,6 +53,18 @@ mcp = [
     "mcp>=1.2",
     "supabase>=2.9",
     "pillow>=10.0",
+    "matplotlib>=3.8",  # style-card renderer (atlas_mcp/render.py)
+]
+
+[tool.uv]
+# cryptography>=47 linux/aarch64 wheels SIGILL in the Docker Desktop VM (via
+# supabase -> pyjwt[crypto]); 46.x imports fine. Scoped to that platform so
+# amd64 prod builds and mac/dev stay current. Retest on a cryptography bump.
+constraint-dependencies = [
+    "cryptography<47 ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    # Complementary bound: forces uv to fork the resolution so every other
+    # platform stays on current cryptography instead of inheriting the pin.
+    "cryptography>=47 ; sys_platform != 'linux' or platform_machine != 'aarch64'",
 ]
 
 [project.scripts]

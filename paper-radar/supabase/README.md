@@ -13,8 +13,10 @@ tests/
 
 ## Status
 
-Draft — **written, not yet executed** against a real database (no Supabase
-project exists yet). Review the schema/policies first, then apply.
+**Live** — all migrations are applied to the hosted project
+(`eegjxioiidymmiizflkh`, see `../docs/DEPLOYMENT_PLAN.md` for the full
+deployment state). New migrations land via `supabase db push` — run in CI on
+merge to main (`.github/workflows/deploy.yml`), or manually as below.
 
 ## Apply to the hosted project (no Docker needed)
 

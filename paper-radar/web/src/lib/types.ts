@@ -10,6 +10,8 @@ export interface Team {
   id: string;
   name: string;
   slug: string;
+  /** High-entropy, revocable invite code — share this to let people join. */
+  join_code: string;
   created_by: string | null;
   created_at: string;
 }
@@ -64,11 +66,15 @@ export interface Figure {
   mime_type: string;
   file_size: number | null;
   // Provenance: 'own' is the lab's (unpublished) work; 'third_party' is an external
-  // image kept as inspiration, in which case source/license/attribution are recorded.
-  origin: "own" | "third_party";
+  // image kept as inspiration (source/license/attribution recorded); 'style_card' is
+  // a synthetic recreation — the image is a render of `spec`, and
+  // source_url/attribution cite the inspiration.
+  origin: "own" | "third_party" | "style_card";
   source_url: string | null;
   license: string | null;
   attribution: string | null;
+  /** Style-card spec (spec_version 1); present iff origin === "style_card". */
+  spec: Record<string, unknown> | null;
   created_at: string;
   uploader?: { display_name: string } | null; // joined profile of the uploader
   papers?: { id: string; title: string | null } | null; // joined linked paper (if any)
@@ -96,7 +102,7 @@ export interface SimilarPaper {
   similarity: number;
 }
 
-/** One paper on the GET /overview UMAP layout. */
+/** One paper on the GET /overview 2-D layout. */
 export interface OverviewPoint {
   paper_id: string;
   x: number;
@@ -134,4 +140,66 @@ export interface OverviewData {
   stats: OverviewStats;
   total: number; // posts in the lab
   embedded: number; // posts with an embedded paper (points returned)
+}
+
+/** A saved topic map (its definition + metadata; not its members). The list
+ *  endpoint also fills paper_count + owner_name for the library cards. */
+export interface MapDoc {
+  id: string;
+  team_id: string;
+  created_by: string;
+  name: string;
+  seed: string;
+  visibility: "lab" | "private";
+  created_at: string;
+  updated_at: string;
+  paper_count?: number;
+  owner_name?: string | null;
+}
+
+/** The scoped overview for one map: an OverviewData over just its members, plus
+ *  the map's identity and a freshness count. */
+export interface MapOverviewData extends OverviewData {
+  map_id: string;
+  name: string;
+  seed: string;
+  visibility: string;
+  created_by: string; // gate edit controls to the map's creator
+  new_this_week: number;
+  min_similarity: number; // the map's relevance floor
+  below_threshold: number; // embedded papers just under the floor
+  excluded_count: number; // papers the owner has dismissed
+}
+
+/** One member paper in a map's ranked list, with the caller's read-state. */
+export interface MapPaper {
+  post_id: string;
+  paper_id: string;
+  title: string | null;
+  authors: string[];
+  venue: string | null;
+  year: number | null;
+  doi: string | null;
+  similarity: number | null; // relevance to the seed
+  reactions: number;
+  comments: number;
+  read_status: "to_read" | "reading" | "read" | null;
+  posted_at: string | null;
+  pinned: boolean;
+}
+
+export interface MapPapersData {
+  total: number;
+  papers: MapPaper[];
+  labs: { lab: string; count: number }[];
+}
+
+/** An AI (or fallback) summary of a map's recent developments. `ai` is false when
+ *  it's the no-key recency blurb; `text` is empty when none has been generated. */
+export interface MapSummary {
+  text: string;
+  cited_ids: string[];
+  n_papers: number;
+  ai: boolean;
+  generated_at: string | null;
 }

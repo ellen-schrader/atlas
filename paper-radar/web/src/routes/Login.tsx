@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
-import { Compass } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
+import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,13 @@ import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 export default function Login() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  // The landing page's "Create your lab" CTA links to ?mode=signup. Without this it
+  // would promise sign-up and deliver the log-in form — a password the visitor
+  // doesn't have yet.
+  const [params] = useSearchParams();
+  const [mode, setMode] = useState<"login" | "signup">(
+    params.get("mode") === "signup" ? "signup" : "login",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,17 +52,17 @@ export default function Login() {
   return (
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white">
-          <Compass size={17} />
-        </span>
-        <span className="text-base font-semibold tracking-tight">Atlas</span>
+        <AtlasMark size={24} className="text-accent" />
+        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
       </div>
 
-      <h2 className="text-xl font-bold tracking-tight">
+      <h2 className="font-serif text-xl font-semibold tracking-tight">
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h2>
       <p className="mb-5 mt-1 text-sm text-muted">
-        {mode === "login" ? "Sign in to your lab’s radar." : "Start discovering papers with your lab."}
+        {mode === "login"
+          ? "Sign in to your lab."
+          : "Create a lab, and Atlas starts learning its taste."}
       </p>
 
       <div className="mb-5 flex rounded-control bg-surface-2 p-1 text-sm">

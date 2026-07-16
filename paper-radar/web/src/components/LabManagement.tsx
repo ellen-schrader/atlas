@@ -39,12 +39,12 @@ function RoleBadge({ role }: { role: string }) {
 export function LabManagement({
   teamId,
   teamName,
-  teamSlug,
+  teamCode,
   userId,
 }: {
   teamId: string;
   teamName: string;
-  teamSlug: string;
+  teamCode: string;
   userId: string;
 }) {
   const qc = useQueryClient();
@@ -112,7 +112,7 @@ export function LabManagement({
         <div className="mt-4">
           <Label>Join code</Label>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <InviteCode code={teamSlug} />
+            <InviteCode code={teamCode} />
             {isOwner && (
               <Button variant="secondary" size="sm" onClick={regenerate} disabled={busy === "regen"}>
                 {busy === "regen" ? "…" : "Regenerate"}

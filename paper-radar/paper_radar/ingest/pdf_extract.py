@@ -19,9 +19,19 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import fitz  # PyMuPDF
+
+from .urls import _clean_url, _normalize_key
+
+__all__ = [
+    "ExtractedURL",
+    "PDFExtraction",
+    "_clean_url",
+    "_normalize_key",
+    "extract_urls_from_dir",
+    "extract_urls_from_pdf",
+]
 
 # Teams timestamp formats, tried in order. European day-first is preferred (this
 # lab's exports use DD/MM/YYYY); US month-first is a last-resort fallback.
@@ -57,29 +67,6 @@ _TS_ONLY_RE = re.compile(
     r"\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?:,?\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?"
 )
 
-# Trailing characters that are almost never part of the real URL.
-_TRAILING_JUNK = ".,);:]}>”’'\""
-
-# Query params that are pure tracking/analytics noise: dropping them (plus any
-# "utm_*") lets the same paper shared with and without a tracker dedupe to one.
-# Meaningful params such as ``id`` (openreview) are deliberately kept.
-_TRACKING_PARAMS = {
-    "ct",
-    "af",
-    "dgcid",
-    "via",
-    "cid",
-    "ref",
-    "ref_src",
-    "spm",
-    "fbclid",
-    "gclid",
-    "mibextid",
-    "sr_share",
-    "rss",
-}
-
-
 @dataclass
 class ExtractedURL:
     """One URL found in a PDF, with best-effort provenance."""
@@ -98,36 +85,6 @@ class PDFExtraction:
 
     path: str
     urls: list[ExtractedURL] = field(default_factory=list)
-
-
-def _clean_url(url: str) -> str:
-    """Trim whitespace and trailing punctuation from a candidate URL."""
-    url = url.strip()
-    while url and url[-1] in _TRAILING_JUNK:
-        url = url[:-1]
-    return url
-
-
-def _normalize_key(url: str) -> str:
-    """Key used only for dedup (never stored).
-
-    Lowercases the host and drops a leading ``www.``, removes the fragment and
-    any trailing slash, and strips tracking query params (``utm_*`` and the
-    denylist above) while keeping meaningful ones. Remaining params are sorted so
-    order does not matter.
-    """
-    parts = urlsplit(url)
-    host = parts.netloc.lower().removeprefix("www.")
-    # Some Teams exports percent-encode the '=' in query strings (e.g. via%3Dihub).
-    raw_query = parts.query.replace("%3D", "=").replace("%3d", "=")
-    kept = [
-        (k, v)
-        for k, v in parse_qsl(raw_query, keep_blank_values=False)
-        if not (k.lower().startswith("utm_") or k.lower() in _TRACKING_PARAMS)
-    ]
-    kept.sort()
-    path = parts.path.rstrip("/")
-    return urlunsplit(("", host, path, urlencode(kept), ""))
 
 
 def _page_poster_stamps(page: fitz.Page) -> list[tuple[float, str, str]]:

@@ -1,0 +1,13 @@
+.venv
+**/.env
+web
+app
+data
+docs
+supabase
+tests
+atlas_mcp
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache

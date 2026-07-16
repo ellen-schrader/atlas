@@ -1,0 +1,1914 @@
+<title>Atlas — full redesign mock-up</title>
+<style>
+  :root {
+    /* ---- ground: slide glass (light) ---- */
+    --bg:        #f1f3f2;
+    --surface:   #ffffff;
+    --surface-2: #e9ecec;
+    --surface-3: #dfe3e3;
+    --border:    #dfe3e3;
+    --border-2:  #c8cfcf;
+    --fg:        #12181a;
+    --muted:     #576466;
+    --faint:     #7f8b8c;
+    --accent:    #0e8e8a;
+    --accent-2:  #0a6b68;      /* hover / pressed */
+    --accent-weak: rgba(14,142,138,.10);
+    --accent-fg: #ffffff;
+    --good:      #2f8f52;
+    --warn:      #b07515;
+    --crit:      #c2412f;
+    /* ---- channels: the fluorophore set. data only, never chrome. ---- */
+    --ch1:#0f8f8b; --ch2:#c23c86; --ch3:#b4791a; --ch4:#2f8f52; --ch5:#6a5cd8; --ch6:#c8503a;
+    --ch-off:#b9c1c1;
+    /* relevance ramp (light) */
+    --r0:#dfe4e4; --r1:#bdd8d7; --r2:#8ec6c3; --r3:#57ada9; --r4:#28938f; --r5:#0e7773; --r6:#075451;
+
+    --serif: "Iowan Old Style","Charter","Bitstream Charter","Palatino Linotype",Palatino,Georgia,serif;
+    --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono: ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+    --rchip:.375rem; --rctl:.5rem; --rcard:.75rem;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#080b11; --surface:#0f141c; --surface-2:#161d27; --surface-3:#1f2732;
+      --border:#1c242f; --border-2:#2c3743;
+      --fg:#e6ecec; --muted:#9aa8aa; --faint:#6f7c7e;
+      --accent:#2fd4cf; --accent-2:#5ee3df; --accent-weak:rgba(47,212,207,.13); --accent-fg:#04100f;
+      --good:#4ec97b; --warn:#e0a63c; --crit:#ef6a55;
+      --ch1:#2fd4cf; --ch2:#e75fae; --ch3:#e0a63c; --ch4:#4ec97b; --ch5:#9a8cf5; --ch6:#f0705a;
+      --ch-off:#39434c;
+      --r0:#1a222b; --r1:#1d4a4c; --r2:#22706f; --r3:#289690; --r4:#2fbdb6; --r5:#5fdcd6; --r6:#a8f0ec;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#080b11; --surface:#0f141c; --surface-2:#161d27; --surface-3:#1f2732;
+    --border:#1c242f; --border-2:#2c3743;
+    --fg:#e6ecec; --muted:#9aa8aa; --faint:#6f7c7e;
+    --accent:#2fd4cf; --accent-2:#5ee3df; --accent-weak:rgba(47,212,207,.13); --accent-fg:#04100f;
+    --good:#4ec97b; --warn:#e0a63c; --crit:#ef6a55;
+    --ch1:#2fd4cf; --ch2:#e75fae; --ch3:#e0a63c; --ch4:#4ec97b; --ch5:#9a8cf5; --ch6:#f0705a;
+    --ch-off:#39434c;
+    --r0:#1a222b; --r1:#1d4a4c; --r2:#22706f; --r3:#289690; --r4:#2fbdb6; --r5:#5fdcd6; --r6:#a8f0ec;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg:#f1f3f2; --surface:#ffffff; --surface-2:#e9ecec; --surface-3:#dfe3e3;
+    --border:#dfe3e3; --border-2:#c8cfcf;
+    --fg:#12181a; --muted:#576466; --faint:#7f8b8c;
+    --accent:#0e8e8a; --accent-2:#0a6b68; --accent-weak:rgba(14,142,138,.10); --accent-fg:#fff;
+    --good:#2f8f52; --warn:#b07515; --crit:#c2412f;
+    --ch1:#0f8f8b; --ch2:#c23c86; --ch3:#b4791a; --ch4:#2f8f52; --ch5:#6a5cd8; --ch6:#c8503a;
+    --ch-off:#b9c1c1;
+    --r0:#dfe4e4; --r1:#bdd8d7; --r2:#8ec6c3; --r3:#57ada9; --r4:#28938f; --r5:#0e7773; --r6:#075451;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:var(--sans); -webkit-font-smoothing:antialiased; line-height:1.55;
+  }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
+  .wrap { max-width:1120px; margin:0 auto; padding:0 clamp(1rem,3vw,2rem); }
+
+  /* ============ APPROVAL BANNER ============ */
+  .approval {
+    background:var(--surface); border-bottom:1px solid var(--border-2);
+    position:sticky; top:0; z-index:50; backdrop-filter:blur(8px);
+  }
+  .approval .wrap { display:flex; align-items:center; gap:1rem; padding-block:.7rem; flex-wrap:wrap; }
+  .approval .tag {
+    font-family:var(--mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--warn); border:1px solid var(--warn); border-radius:999px; padding:.12rem .5rem;
+  }
+  .approval p { margin:0; font-size:.82rem; color:var(--muted); }
+  .approval p b { color:var(--fg); font-weight:600; }
+  .approval nav { margin-left:auto; display:flex; gap:1rem; font-size:.8rem; }
+  .approval nav a { color:var(--muted); text-decoration:none; }
+  .approval nav a:hover { color:var(--accent); }
+  @media (max-width:760px){ .approval nav { display:none; } }
+
+  /* ============ SECTION SCAFFOLD ============ */
+  section.blk { padding-top:5.5rem; }
+  .sec-head { margin-bottom:2rem; max-width:62ch; }
+  .sec-eyebrow {
+    font-family:var(--mono); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 .7rem;
+  }
+  .sec-head h2 { font-family:var(--serif); font-size:clamp(1.7rem,3.4vw,2.35rem); line-height:1.15; letter-spacing:-.01em; font-weight:600; margin:0 0 .6rem; text-wrap:balance; }
+  .sec-head p { margin:0; color:var(--muted); font-size:1.02rem; }
+  .sec-head p b { color:var(--fg); font-weight:600; }
+
+  /* ============ HERO ============ */
+  .hero { position:relative; min-height:min(88vh,760px); display:grid; place-items:center; overflow:hidden; border-bottom:1px solid var(--border); }
+  #field { position:absolute; inset:0; width:100%; height:100%; }
+  .hero-veil { position:absolute; inset:0; background:radial-gradient(ellipse at 50% 45%, transparent 8%, var(--bg) 78%); pointer-events:none; }
+  .hero-in { position:relative; text-align:center; padding:5rem 1.5rem 4rem; max-width:760px; }
+  .mark { display:inline-flex; align-items:center; gap:.6rem; margin-bottom:2rem; }
+  .mark svg { width:30px; height:30px; }
+  .mark .wm { font-family:var(--serif); font-size:1.5rem; font-weight:600; letter-spacing:.02em; }
+  .hero h1 {
+    font-family:var(--serif); font-weight:600;
+    font-size:clamp(2.3rem,6.2vw,4.1rem); line-height:1.04; letter-spacing:-.015em;
+    margin:0 0 1.2rem; text-wrap:balance;
+  }
+  .hero h1 em { font-style:italic; color:var(--accent); }
+  .hero .dek { font-size:clamp(1rem,1.9vw,1.18rem); color:var(--muted); margin:0 auto 1.1rem; max-width:56ch; text-wrap:balance; }
+  .hero .dek b { color:var(--fg); font-weight:600; }
+  .hero .dek-2 { font-size:.95rem; max-width:54ch; margin-bottom:2.1rem; padding-top:.9rem; border-top:1px solid var(--border); }
+  .cta { display:flex; gap:.7rem; justify-content:center; flex-wrap:wrap; }
+  .hero .under { margin-top:1.6rem; font-family:var(--mono); font-size:.72rem; color:var(--faint); letter-spacing:.03em; }
+
+  .btn {
+    font-family:var(--sans); font-size:.88rem; font-weight:600; border-radius:var(--rctl);
+    padding:.6rem 1.1rem; border:1px solid var(--border-2); background:var(--surface); color:var(--fg);
+    display:inline-flex; align-items:center; gap:.45rem; cursor:pointer; text-decoration:none;
+    transition:background .15s, border-color .15s, color .15s;
+  }
+  .btn:hover { border-color:var(--accent); color:var(--accent); }
+  .btn svg { width:15px; height:15px; }
+  .btn.primary { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+  .btn.primary:hover { background:var(--accent-2); border-color:var(--accent-2); color:var(--accent-fg); }
+  .btn.sm { font-size:.78rem; padding:.4rem .7rem; }
+  .btn.ghost { background:transparent; border-color:transparent; color:var(--muted); }
+
+  /* ============ PROBLEM / 3 SURFACES ============ */
+  .surfaces { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:820px){ .surfaces { grid-template-columns:repeat(3,1fr); } }
+  .surface-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.4rem; display:flex; flex-direction:column; gap:.6rem; }
+  .surface-card .ico { width:34px; height:34px; display:grid; place-items:center; border-radius:var(--rctl); background:var(--accent-weak); color:var(--accent); }
+  .surface-card .ico svg { width:17px; height:17px; }
+  .surface-card h3 { font-family:var(--serif); font-size:1.18rem; font-weight:600; margin:.3rem 0 0; }
+  .surface-card p { margin:0; font-size:.88rem; color:var(--muted); }
+  .surface-card .note { margin-top:auto; padding-top:.7rem; font-family:var(--mono); font-size:.7rem; color:var(--faint); border-top:1px solid var(--border); }
+
+  /* ============ APP FRAME ============ */
+  .app {
+    background:var(--bg); border:1px solid var(--border-2); border-radius:12px; overflow:hidden;
+    box-shadow:0 24px 60px -30px rgba(4,10,14,.45);
+    display:grid; grid-template-columns:180px 1fr; min-height:440px;
+  }
+  @media (max-width:620px){ .app { grid-template-columns:54px 1fr; } }
+  .rail { background:var(--surface); border-right:1px solid var(--border); padding:1rem .65rem; display:flex; flex-direction:column; gap:.1rem; }
+  .rail-brand { display:flex; align-items:center; gap:.5rem; padding:.2rem .5rem 1.2rem; }
+  .rail-brand svg { width:19px; height:19px; flex-shrink:0; }
+  .rail-brand span { font-family:var(--serif); font-weight:600; font-size:1.02rem; letter-spacing:.01em; }
+  .nl { display:flex; align-items:center; gap:.6rem; padding:.42rem .55rem; border-radius:var(--rctl); font-size:.83rem; color:var(--muted); font-weight:500; }
+  .nl svg { width:15px; height:15px; flex-shrink:0; }
+  .nl.on { background:var(--accent-weak); color:var(--accent); font-weight:600; }
+  .nl .cnt { margin-left:auto; font-family:var(--mono); font-size:.62rem; background:var(--accent); color:var(--accent-fg); border-radius:999px; padding:0 .32rem; }
+  .rail-sp { flex:1; }
+  @media (max-width:620px){ .rail-brand span, .nl .lbl, .nl .cnt { display:none; } }
+
+  .canvas { padding:1.4rem 1.5rem 1.6rem; min-width:0; overflow:hidden; }
+  .crumb { font-family:var(--mono); font-size:.72rem; color:var(--faint); margin-bottom:.35rem; }
+  .crumb b { color:var(--muted); font-weight:500; }
+  .ptitle { font-family:var(--serif); font-size:1.5rem; font-weight:600; letter-spacing:-.005em; margin:0 0 .2rem; }
+  .psub { color:var(--muted); font-size:.85rem; margin:0 0 1.2rem; }
+  .rowb { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:1.1rem; flex-wrap:wrap; }
+  .eyebrow { font-family:var(--mono); font-size:.64rem; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); font-weight:600; }
+
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); }
+  .chip { display:inline-flex; align-items:center; gap:.3rem; font-family:var(--mono); font-size:.68rem; border:1px solid var(--border-2); background:var(--surface-2); border-radius:var(--rchip); padding:.1rem .45rem; color:var(--muted); }
+  .chip b { color:var(--fg); font-weight:500; }
+  .chip.acc { border-color:var(--accent); color:var(--accent); background:var(--accent-weak); }
+  .chipset { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; }
+  .av { width:19px; height:19px; border-radius:999px; display:inline-grid; place-items:center; font-size:.6rem; font-weight:700; color:#fff; flex-shrink:0; }
+
+  /* paper cards */
+  .papers { display:grid; grid-template-columns:repeat(2,1fr); gap:.85rem; }
+  @media (min-width:720px){ .papers { grid-template-columns:repeat(3,1fr); } }
+  .pc { overflow:hidden; display:flex; flex-direction:column; }
+  .pc .cov { aspect-ratio:16/9; border-bottom:1px solid var(--border); position:relative; }
+  .pc .cov canvas { display:block; width:100%; height:100%; }
+  .pc .cov .badge { position:absolute; left:.5rem; top:.5rem; font-family:var(--mono); font-size:.6rem; background:rgba(0,0,0,.55); color:#fff; padding:.05rem .35rem; border-radius:3px; backdrop-filter:blur(3px); }
+  .pc .body { padding:.7rem .75rem .8rem; display:flex; flex-direction:column; gap:.35rem; flex:1; }
+  .pc h4 { font-size:.86rem; font-weight:600; margin:0; line-height:1.3; }
+  .pc .meta { font-family:var(--mono); font-size:.66rem; color:var(--faint); }
+  .pc .foot { margin-top:auto; padding-top:.4rem; display:flex; align-items:center; gap:.5rem; font-family:var(--mono); font-size:.66rem; color:var(--faint); }
+  .pc .foot .sp { flex:1; }
+
+  /* attention list */
+  .att { display:flex; flex-direction:column; }
+  .att-row { display:flex; align-items:center; gap:.65rem; padding:.6rem .75rem; border-bottom:1px solid var(--border); font-size:.83rem; }
+  .att-row:last-child { border-bottom:0; }
+  .att-row .stripe { width:3px; align-self:stretch; border-radius:2px; background:var(--ch-off); margin:-.15rem 0; }
+  .att-row .stripe.at { background:var(--ch2); }
+  .att-row .stripe.rd { background:var(--ch1); }
+  .att-row .lead { font-family:var(--mono); font-size:.66rem; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; width:74px; flex-shrink:0; }
+  .att-row .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .att-row .done { color:var(--faint); }
+
+  /* maps library */
+  .mgrid { display:grid; grid-template-columns:repeat(2,1fr); gap:.85rem; }
+  @media (min-width:720px){ .mgrid { grid-template-columns:repeat(3,1fr); } }
+  .mtile { overflow:hidden; display:flex; flex-direction:column; }
+  .mtile .th { aspect-ratio:16/10; background:var(--surface-2); border-bottom:1px solid var(--border); }
+  .mtile .th svg { display:block; width:100%; height:100%; }
+  .mtile .mm { padding:.6rem .7rem .7rem; }
+  .mtile .mn { font-size:.84rem; font-weight:600; margin:0 0 .1rem; display:flex; align-items:center; gap:.35rem; }
+  .mtile .mq { font-size:.74rem; color:var(--muted); margin:0; }
+  .mtile .mb { font-family:var(--mono); font-size:.64rem; color:var(--faint); margin-top:.45rem; display:flex; align-items:center; gap:.3rem; }
+  .newtile { border-style:dashed; border-color:var(--border-2); background:transparent; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.3rem; cursor:pointer; min-height:100%; padding:1.5rem; }
+  .newtile svg { width:20px; height:20px; color:var(--accent); }
+  .newtile span { font-size:.82rem; font-weight:600; }
+  .newtile small { font-size:.7rem; color:var(--faint); }
+
+  .plot { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:.5rem; }
+  .plot svg { display:block; width:100%; height:auto; }
+  .legend { display:flex; flex-wrap:wrap; gap:.3rem .9rem; font-size:.7rem; color:var(--muted); padding:.15rem .35rem .55rem; }
+  .legend span { display:inline-flex; align-items:center; gap:.35rem; }
+  .dot { width:8px; height:8px; border-radius:999px; display:inline-block; flex-shrink:0; }
+
+  .kpis { display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; margin-bottom:1rem; }
+  @media (min-width:620px){ .kpis { grid-template-columns:repeat(6,1fr); } }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:.5rem .6rem; }
+  .kpi .k { font-family:var(--mono); font-size:.58rem; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+  .kpi .v { font-size:1.05rem; font-weight:650; margin-top:.05rem; font-variant-numeric:tabular-nums; }
+
+  /* annotation margin */
+  .with-notes { display:grid; gap:1.4rem; grid-template-columns:1fr; }
+  @media (min-width:960px){ .with-notes { grid-template-columns:minmax(0,1fr) 232px; align-items:start; } .notes { position:sticky; top:5rem; } }
+  .notes { display:flex; flex-direction:column; gap:1.1rem; }
+  .note { border-left:2px solid var(--accent); padding-left:.85rem; }
+  .note h4 { margin:0 0 .2rem; font-size:.8rem; }
+  .note p { margin:0; font-size:.81rem; color:var(--muted); line-height:1.45; }
+  .note code { font-family:var(--mono); font-size:.75rem; color:var(--accent); }
+
+  /* identity plates */
+  .ident { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:860px){ .ident { grid-template-columns:1fr 1fr; } }
+  .plate { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.3rem; }
+  .plate > .eyebrow { display:block; margin-bottom:1rem; }
+  .swatches { display:grid; grid-template-columns:repeat(6,1fr); gap:.4rem; }
+  .sw { display:flex; flex-direction:column; gap:.3rem; }
+  .sw i { display:block; height:44px; border-radius:6px; border:1px solid var(--border); }
+  .sw code { font-family:var(--mono); font-size:.58rem; color:var(--faint); }
+  .typerow { padding:.5rem 0; border-bottom:1px solid var(--border); }
+  .typerow:last-child { border-bottom:0; }
+  .typerow .lab { font-family:var(--mono); font-size:.62rem; color:var(--faint); text-transform:uppercase; letter-spacing:.08em; }
+  .typerow .spec { font-family:var(--mono); font-size:.62rem; color:var(--accent); float:right; }
+  .t-display { font-family:var(--serif); font-size:1.7rem; font-weight:600; letter-spacing:-.01em; }
+  .t-body { font-family:var(--sans); font-size:.95rem; }
+  .t-data { font-family:var(--mono); font-size:.85rem; font-variant-numeric:tabular-nums; }
+
+  /* mark lockup */
+  .marks { display:flex; align-items:center; gap:2.5rem; flex-wrap:wrap; }
+  .marks .big svg { width:64px; height:64px; }
+  .marks .lock { display:flex; align-items:center; gap:.65rem; }
+  .marks .lock svg { width:28px; height:28px; }
+  .marks .lock span { font-family:var(--serif); font-size:1.45rem; font-weight:600; letter-spacing:.02em; }
+
+  /* changes table */
+  .tblwrap { overflow-x:auto; border:1px solid var(--border); border-radius:var(--rcard); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; min-width:640px; font-size:.86rem; }
+  th, td { text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  thead th { font-family:var(--mono); font-size:.64rem; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:600; }
+  tbody tr:last-child td { border-bottom:0; }
+  td.was { color:var(--muted); }
+  td.now { color:var(--fg); }
+  td.now b { color:var(--accent); font-weight:600; }
+
+  /* ---- "it learns by being used" ---- */
+  .learns { margin-top:1.4rem; background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.5rem; }
+  .learns-h h3 { font-family:var(--serif); font-size:1.45rem; font-weight:600; margin:0 0 .4rem; letter-spacing:-.01em; }
+  .learns-h p { margin:0 0 1.2rem; font-size:.9rem; color:var(--muted); max-width:64ch; }
+  .learns-h p b { color:var(--fg); font-weight:600; }
+  .learns-grid { display:grid; gap:.6rem; grid-template-columns:1fr; }
+  @media (min-width:640px){ .learns-grid { grid-template-columns:repeat(3,1fr); } }
+  .lesson { display:flex; align-items:flex-start; gap:.6rem; background:var(--bg); border:1px solid var(--border); border-radius:var(--rctl); padding:.65rem .75rem; }
+  .lesson i { width:3px; align-self:stretch; border-radius:2px; flex-shrink:0; }
+  .lesson b { display:block; font-size:.83rem; font-weight:600; }
+  .lesson span { display:block; font-size:.76rem; color:var(--muted); margin-top:.1rem; }
+  .lesson em { font-style:normal; font-family:var(--mono); color:var(--accent); font-size:.9em; }
+  .learns-foot { margin:1.2rem 0 0; font-size:.86rem; color:var(--muted); max-width:76ch; line-height:1.6; }
+  .learns-foot b { color:var(--fg); font-weight:600; }
+
+  /* ---- emotional close ---- */
+  .closer { border-top:1px solid var(--border-2); padding-top:3rem; }
+  .closer-line { font-family:var(--serif); font-size:clamp(1.7rem,4vw,2.6rem); line-height:1.15; font-weight:600; letter-spacing:-.015em; margin:0 0 1rem; text-wrap:balance; max-width:20ch; }
+  .closer-line em { font-style:italic; color:var(--accent); }
+  .closer-sub { font-size:1rem; color:var(--muted); max-width:58ch; margin:0 0 1.6rem; }
+  .closer-sub b { color:var(--fg); font-weight:600; }
+
+  .ask { margin-top:5.5rem; padding:2rem; border:1px solid var(--accent); border-radius:var(--rcard); background:var(--accent-weak); }
+  .ask h2 { font-family:var(--serif); font-size:1.5rem; font-weight:600; margin:0 0 .6rem; }
+  .ask p { margin:0 0 1rem; color:var(--muted); font-size:.95rem; max-width:64ch; }
+  .ask ol { margin:0; padding-left:1.15rem; font-size:.9rem; color:var(--fg); display:flex; flex-direction:column; gap:.5rem; }
+  .ask ol b { color:var(--accent); }
+  footer { margin-top:4rem; padding:2rem 0 4rem; border-top:1px solid var(--border); font-family:var(--mono); font-size:.72rem; color:var(--faint); }
+
+  /* ---- hero reader strip ---- */
+  .readers { display:flex; gap:.35rem 1.5rem; justify-content:center; flex-wrap:wrap; margin-top:1.7rem; }
+  .reader { display:inline-flex; align-items:center; gap:.4rem; font-family:var(--mono); font-size:.72rem; color:var(--faint); }
+  .reader b { color:var(--muted); font-weight:500; }
+
+  /* ---- the bridge: atlas → MCP → claude ---- */
+  .bridge { display:grid; gap:1.2rem; grid-template-columns:1fr; align-items:stretch; }
+  @media (min-width:900px){ .bridge { grid-template-columns:1fr 84px 1fr; } }
+  .bridge-col { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.2rem; display:flex; flex-direction:column; gap:.85rem; }
+  .bridge-col > .eyebrow { margin-bottom:.2rem; }
+  .asset { display:flex; gap:.7rem; align-items:flex-start; }
+  .asset .ab { width:3px; border-radius:2px; align-self:stretch; flex-shrink:0; }
+  .asset h4 { margin:0 0 .15rem; font-size:.9rem; font-weight:600; }
+  .asset p { margin:0; font-size:.82rem; color:var(--muted); line-height:1.45; }
+  .tool { display:flex; align-items:baseline; gap:.55rem; flex-wrap:wrap; padding:.3rem 0; border-bottom:1px dashed var(--border); }
+  .tool:last-child { border-bottom:0; }
+  .tool code { font-family:var(--mono); font-size:.76rem; color:var(--accent); }
+  .tool span { font-size:.76rem; color:var(--muted); }
+  .tool span b { color:var(--fg); font-weight:600; font-family:var(--mono); }
+  .bridge-mid { display:none; }
+  @media (min-width:900px){
+    .bridge-mid { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.6rem; }
+    .bridge-mid .wire { flex:1; width:1px; background:linear-gradient(var(--border-2),var(--accent)); }
+    .bridge-mid .wire-tag { font-family:var(--mono); font-size:.62rem; letter-spacing:.12em; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:.15rem .5rem; background:var(--accent-weak); }
+  }
+
+  /* ---- claude code panels ---- */
+  .cc-grid { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:900px){ .cc-grid { grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); align-items:start; } }
+  .term { background:var(--surface); border:1px solid var(--border-2); border-radius:var(--rcard); overflow:hidden; }
+  .term-bar { display:flex; align-items:center; gap:.4rem; padding:.5rem .75rem; border-bottom:1px solid var(--border); background:var(--surface-2); font-family:var(--mono); font-size:.68rem; color:var(--faint); }
+  .term-bar i { width:8px; height:8px; border-radius:999px; background:var(--border-2); flex-shrink:0; }
+  .term-bar span { margin-left:.5rem; }
+  .term pre { margin:0; padding:1rem; font-family:var(--mono); font-size:.72rem; line-height:1.65; color:var(--muted); white-space:pre-wrap; overflow-x:auto; }
+  .term .p { color:var(--accent); font-weight:700; }
+  .term .u { color:var(--fg); font-weight:600; }
+  .term .tc { color:var(--ch5); }
+  .term .ok { color:var(--faint); }
+  .term .d { color:var(--faint); }
+  .term .a { color:var(--fg); }
+  .term .a b { color:var(--accent); font-weight:600; }
+
+  .fig, .taste { display:flex; flex-direction:column; gap:1rem; }
+  .figbox { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1rem; }
+  .figtitle { margin:0 0 .1rem; font-size:.88rem; font-weight:700; }
+  .figcap { margin:.6rem 0 0; font-family:var(--mono); font-size:.64rem; color:var(--faint); }
+  #labchart svg { display:block; width:100%; height:auto; }
+  .mpl { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:.9rem; }
+  .mpl pre { margin:0; font-family:var(--mono); font-size:.66rem; line-height:1.6; color:var(--muted); white-space:pre-wrap; overflow-x:auto; }
+  .mpl .cm { color:var(--faint); }
+  .mpl code { font-family:var(--mono); color:var(--accent); }
+
+  .taste { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.2rem; gap:0; }
+  .tastelede { margin:0 0 1rem; font-size:.84rem; color:var(--muted); }
+  .tastelede b { color:var(--fg); font-weight:600; }
+  .tastefoot { margin:1rem 0 0; font-family:var(--mono); font-size:.66rem; color:var(--faint); line-height:1.6; }
+  .tastefoot b, .tastefoot code { color:var(--accent); }
+  .tbar { display:flex; align-items:center; gap:.6rem; padding:.22rem 0; font-size:.78rem; }
+  .tbar .tl { width:104px; flex-shrink:0; color:var(--fg); }
+  .tbar .tt { flex:1; height:9px; border-radius:3px; background:var(--surface-2); overflow:hidden; }
+  .tbar .tf { height:100%; border-radius:3px; }
+  .tbar .tv { width:30px; text-align:right; font-family:var(--mono); font-size:.68rem; color:var(--faint); font-variant-numeric:tabular-nums; flex-shrink:0; }
+
+  /* ---- v3 verdicts (what user testing changed) ---- */
+  .verdicts { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:900px){ .verdicts { grid-template-columns:repeat(3,1fr); } }
+  .verdict { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.2rem; display:flex; flex-direction:column; gap:.7rem; }
+  .verdict.cut { border-top:3px solid var(--crit); }
+  .verdict.fix { border-top:3px solid var(--warn); }
+  .verdict.up  { border-top:3px solid var(--good); }
+  .v-h { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+  .v-tag { font-family:var(--mono); font-size:.62rem; letter-spacing:.09em; text-transform:uppercase; border-radius:999px; padding:.1rem .45rem; font-weight:700; }
+  .v-tag.cut { color:var(--crit); border:1px solid var(--crit); }
+  .v-tag.fix { color:var(--warn); border:1px solid var(--warn); }
+  .v-tag.up  { color:var(--good); border:1px solid var(--good); }
+  .v-what { font-weight:600; font-size:.92rem; }
+  .verdict blockquote { margin:0; padding-left:.8rem; border-left:2px solid var(--border-2); font-size:.83rem; color:var(--fg); font-style:italic; line-height:1.5; }
+  .verdict > p { margin:0; font-size:.82rem; color:var(--muted); line-height:1.5; }
+  .verdict > p b { color:var(--fg); font-weight:600; }
+  .verdict code { font-family:var(--mono); font-size:.9em; color:var(--accent); }
+  .cut-note { margin:0 0 1.4rem; padding:.85rem 1rem; background:var(--surface); border:1px dashed var(--border-2); border-radius:var(--rctl); font-size:.85rem; color:var(--muted); }
+  .cut-note b { color:var(--fg); font-weight:600; }
+
+  /* ---- import screen ---- */
+  .drop { border:1.5px dashed var(--border-2); border-radius:var(--rcard); padding:1.5rem 1rem; display:flex; flex-direction:column; align-items:center; gap:.35rem; text-align:center; margin-bottom:1.1rem; }
+  .drop svg { width:26px; height:26px; color:var(--accent); }
+  .drop span { font-size:.86rem; }
+  .drop small { font-family:var(--mono); font-size:.66rem; color:var(--faint); }
+  .preflight { background:var(--bg); border:1px solid var(--border); border-radius:var(--rctl); padding:.85rem; }
+  .pf-row { display:flex; align-items:baseline; gap:.5rem; font-size:.82rem; padding:.22rem 0; }
+  .pf-row .ok { color:var(--good); font-weight:700; }
+  .pf-row .warn { color:var(--warn); font-weight:700; }
+  .pf-row .no { color:var(--crit); font-weight:700; }
+  .pf-row .mut { color:var(--muted); }
+  .pf-row b { font-variant-numeric:tabular-nums; }
+  .pf-actions { display:flex; gap:.5rem; margin-top:.8rem; flex-wrap:wrap; }
+
+  .howto { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.2rem; }
+  .step { display:flex; gap:.65rem; align-items:flex-start; padding:.45rem 0; border-bottom:1px dashed var(--border); }
+  .step:last-of-type { border-bottom:0; }
+  .step i { font-style:normal; font-family:var(--mono); font-size:.62rem; color:var(--accent); border:1px solid var(--accent); border-radius:999px; width:16px; height:16px; display:grid; place-items:center; flex-shrink:0; margin-top:.15rem; }
+  .step b { display:block; font-size:.85rem; font-weight:600; }
+  .step span { display:block; font-size:.79rem; color:var(--muted); line-height:1.45; }
+  .step em { font-style:italic; }
+  .howto-note { margin:.9rem 0 0; font-size:.78rem; color:var(--muted); font-style:italic; line-height:1.5; }
+  .howto-flag { margin:.9rem 0 0; padding:.7rem .8rem; border:1px solid var(--warn); border-radius:var(--rctl); background:color-mix(in srgb, var(--warn) 6%, transparent); font-size:.78rem; color:var(--muted); line-height:1.55; }
+  .howto-flag b { color:var(--fg); font-weight:600; }
+
+  /* ---- setup steps ---- */
+  .setup-tabs { display:flex; gap:.3rem; margin-bottom:1rem; flex-wrap:wrap; }
+  .stab { font-size:.75rem; font-weight:500; padding:.3rem .6rem; border-radius:var(--rctl); color:var(--muted); border:1px solid transparent; }
+  .stab.on { background:var(--accent-weak); color:var(--accent); border-color:var(--accent); font-weight:600; }
+  .sstep { padding:.75rem 0; border-bottom:1px dashed var(--border); }
+  .sstep:last-of-type { border-bottom:0; }
+  .ss-h { display:flex; align-items:center; gap:.5rem; margin-bottom:.5rem; font-size:.86rem; }
+  .ss-h i { font-style:normal; font-family:var(--mono); font-size:.62rem; color:var(--accent-fg); background:var(--accent); border-radius:999px; width:16px; height:16px; display:grid; place-items:center; flex-shrink:0; }
+  .ss-h code { font-family:var(--mono); font-size:.85em; color:var(--accent); }
+  .ss-n { margin:.5rem 0 0; font-size:.77rem; color:var(--muted); line-height:1.5; }
+  .ss-n b { color:var(--fg); font-weight:600; }
+  .lnk { color:var(--accent); font-weight:600; }
+  .cmd.block { align-items:flex-start; }
+  .cmd.block code { white-space:pre; line-height:1.55; }
+  .cmd .ph { color:var(--faint); }
+  .cmd .tk { color:var(--fg); }
+  .cmd .cm { color:var(--faint); }
+  .trouble { margin-top:.9rem; border:1px solid var(--border); border-radius:var(--rctl); padding:.6rem .8rem; background:var(--bg); }
+  .trouble summary { cursor:pointer; font-size:.82rem; font-weight:600; color:var(--muted); }
+  .trouble summary:hover { color:var(--fg); }
+  .tr-row { padding:.55rem 0 0; font-size:.78rem; line-height:1.5; }
+  .tr-row b { display:block; color:var(--fg); font-weight:600; }
+  .tr-row span { color:var(--muted); }
+  .tr-row code { font-family:var(--mono); font-size:.9em; color:var(--accent); }
+
+  /* ---- cold-start phases ---- */
+  .phases { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:900px){ .phases { grid-template-columns:repeat(3,1fr); } }
+  .phase { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.2rem; display:flex; flex-direction:column; gap:.5rem; }
+  .ph-h { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin-bottom:.2rem; }
+  .ph-when { font-family:var(--mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); border-bottom:1px solid var(--accent); padding-bottom:.1rem; }
+  .phase h3 { font-family:var(--serif); font-size:1.2rem; font-weight:600; margin:.2rem 0 0; }
+  .phase > p { margin:0; font-size:.85rem; color:var(--muted); line-height:1.5; }
+  .phase > p b { color:var(--fg); font-weight:600; }
+  .ph-state { margin-top:auto; padding-top:.9rem; }
+  .ph-state > .eyebrow { display:block; margin-bottom:.45rem; }
+  .mini { background:var(--bg); border:1px solid var(--border); border-radius:var(--rctl); padding:.6rem .7rem; display:flex; flex-direction:column; gap:.35rem; }
+  .mini-row { font-size:.76rem; color:var(--fg); line-height:1.45; display:flex; gap:.4rem; align-items:flex-start; }
+  .mini-row.muted { color:var(--muted); font-style:italic; }
+  .mini-row b { font-weight:600; }
+  .mini-row .ok { color:var(--good); font-weight:700; flex-shrink:0; }
+  .mini-row .warn { color:var(--warn); font-weight:700; flex-shrink:0; }
+
+  /* ---- CVD check ---- */
+  .cvd-row { display:flex; align-items:center; gap:.8rem; margin-bottom:.45rem; }
+  .cvd-lab { width:104px; flex-shrink:0; font-family:var(--mono); font-size:.66rem; color:var(--muted); }
+  .cvd-strip { display:grid; grid-template-columns:repeat(6,1fr); gap:.3rem; flex:1; }
+  .cvd-cell { aspect-ratio:2/1; border-radius:5px; display:grid; place-items:center; border:1px solid var(--border); }
+  .cvd-cell svg { width:15px; height:15px; }
+
+  /* ---- governance block ---- */
+  .gov { margin-top:1.3rem; border:1px solid var(--warn); border-radius:var(--rctl); padding:.9rem; background:color-mix(in srgb, var(--warn) 6%, transparent); }
+  .gov-h { display:flex; align-items:center; gap:.45rem; font-size:.85rem; font-weight:700; color:var(--warn); margin-bottom:.5rem; }
+  .gov-h svg { width:15px; height:15px; flex-shrink:0; }
+  .gov > p { margin:0 0 .7rem; font-size:.8rem; color:var(--muted); line-height:1.5; }
+  .gov > p b { color:var(--fg); font-weight:600; }
+  .gov-rules { display:flex; flex-direction:column; gap:.4rem; }
+  .gov-rule { display:flex; gap:.55rem; align-items:flex-start; font-size:.79rem; color:var(--fg); line-height:1.45; }
+  .gov-rule i { font-style:normal; font-family:var(--mono); font-size:.62rem; color:var(--warn); border:1px solid var(--warn); border-radius:999px; width:15px; height:15px; display:grid; place-items:center; flex-shrink:0; margin-top:.15rem; }
+  .gov-rule b { font-weight:600; }
+  .gov-foot { margin:.8rem 0 0 !important; font-size:.76rem !important; font-style:italic; }
+
+  /* ---- connect screen ---- */
+  .conn { display:grid; gap:1rem; grid-template-columns:1fr; }
+  @media (min-width:760px){ .conn { grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); align-items:start; } }
+  .conn-main, .conn-side { background:var(--surface); border:1px solid var(--border); border-radius:var(--rcard); padding:1.1rem; }
+  .cmd { display:flex; align-items:center; gap:.6rem; background:var(--bg); border:1px solid var(--border-2); border-radius:var(--rctl); padding:.55rem .7rem; overflow-x:auto; }
+  .cmd code { font-family:var(--mono); font-size:.74rem; color:var(--accent); white-space:nowrap; flex:1; }
+  .conn-note { margin:.8rem 0 0; font-size:.78rem; color:var(--muted); line-height:1.5; }
+  .perms { display:flex; flex-direction:column; gap:.35rem; }
+  .perm { display:flex; align-items:flex-start; gap:.55rem; font-size:.8rem; }
+  .perm i { font-style:normal; font-family:var(--mono); font-size:.72rem; flex-shrink:0; width:14px; }
+  .perm i.ok { color:var(--good); }
+  .perm i.no { color:var(--faint); }
+  .perm em { font-style:normal; color:var(--faint); font-size:.75rem; }
+  .perm .off { color:var(--faint); }
+  .status { display:flex; align-items:center; gap:.6rem; padding:.6rem .7rem; border:1px solid var(--good); border-radius:var(--rctl); background:color-mix(in srgb, var(--good) 8%, transparent); }
+  .pulse { width:8px; height:8px; border-radius:999px; background:var(--good); flex-shrink:0; box-shadow:0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); animation:pulse 2.2s ease-out infinite; }
+  @keyframes pulse { 70% { box-shadow:0 0 0 7px transparent; } 100% { box-shadow:0 0 0 0 transparent; } }
+  .st-t { font-size:.83rem; font-weight:600; color:var(--good); }
+  .st-s { font-family:var(--mono); font-size:.66rem; color:var(--faint); }
+  .acts { display:flex; flex-direction:column; }
+  .act { display:flex; align-items:baseline; gap:.5rem; padding:.28rem 0; border-bottom:1px dashed var(--border); }
+  .act:last-child { border-bottom:0; }
+  .act code { font-family:var(--mono); font-size:.7rem; color:var(--muted); flex:1; }
+  .act span { font-family:var(--mono); font-size:.64rem; color:var(--faint); }
+
+  .callout { margin-top:2rem; background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--rcard); padding:1.2rem 1.4rem; }
+  .callout h4 { margin:0 0 .4rem; font-family:var(--serif); font-size:1.1rem; font-weight:600; }
+  .callout p { margin:0; font-size:.9rem; color:var(--muted); max-width:78ch; }
+  .callout p b { color:var(--fg); font-weight:600; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+
+<!-- ══════════ APPROVAL BAR ══════════ -->
+<div class="approval">
+  <div class="wrap">
+    <span class="tag">v3 · revised by user feedback</span>
+    <p><b>Atlas</b> — redesign mock-up. Saved maps <b>cut</b>; Connect &amp; BibTeX import <b>promoted</b>.</p>
+    <nav>
+      <a href="#landing">Landing</a>
+      <a href="#feedback">What changed</a>
+      <a href="#import">Import</a>
+      <a href="#mcp">Claude / MCP</a>
+      <a href="#app">App</a>
+      <a href="#decide">Decide</a>
+    </nav>
+  </div>
+</div>
+
+<!-- ══════════ HERO / LANDING ══════════ -->
+<header class="hero" id="landing">
+  <canvas id="field" aria-hidden="true"></canvas>
+  <div class="hero-veil"></div>
+  <div class="hero-in">
+    <div class="mark">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/><circle cx="16.2" cy="15.6" r="1"/></g></svg>
+      <span class="wm">Atlas</span>
+    </div>
+    <h1>Every lab has a taste. <em>Atlas gives yours to Claude.</em></h1>
+    <p class="dek">
+      The papers you save, the figures you admire, the ones you argue about — Atlas learns your lab's judgment
+      from how you already work, then hands it to Claude Code and Claude for Life Sciences. So Claude searches
+      <b>your</b> corpus, cites <b>your</b> papers, and plots in <b>your</b> lab's palette.
+    </p>
+    <p class="dek dek-2">
+      <b>It learns by being used.</b> No profile to fill in, no model to tune — every save and reaction is a lesson.
+      Day one it's a shared library. By month three it knows what your lab will care about.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#import">Teach Claude your lab
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </a>
+      <a class="btn" href="#mcp">How it learns</a>
+    </div>
+    <div class="readers">
+      <span class="reader"><i class="dot" style="background:var(--ch1)"></i>Import <b>a .bib file</b></span>
+      <span class="reader"><i class="dot" style="background:var(--ch2)"></i>Read and argue <b>as a lab</b></span>
+      <span class="reader"><i class="dot" style="background:var(--ch5)"></i>Claude inherits <b>your taste and style</b></span>
+    </div>
+    <p class="under">Your papers stay in your lab · Claude's access is read-only and lab-scoped</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ══════════ THE THESIS ══════════ -->
+  <section class="blk">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The idea</p>
+      <h2>The lab studies cells arranged in space. Atlas arranges their reading the same way.</h2>
+      <p>
+        This group works on the <b>spatial architecture of the breast tumour microenvironment</b> — they spend
+        their days looking at multiplexed images of cells in space. Atlas's core artifact is a spatial map of
+        their literature. <b>Those are the same picture</b>, and the redesign leans all the way into it:
+        the interface is coloured like the images they read.
+      </p>
+    </div>
+
+    <div class="surfaces">
+      <article class="surface-card">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg></span>
+        <h3>Papers</h3>
+        <p>Everything the lab has shared, deduplicated and enriched with real metadata. Full-text and semantic search, tag filters, comments, @-mentions.</p>
+        <p class="note">exists · refreshed visually</p>
+      </article>
+      <article class="surface-card">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></span>
+        <h3>Maps</h3>
+        <p>The corpus embedded and laid out by meaning. Save a map as a document — name it, share it with the lab, come back to it as the corpus grows.</p>
+        <p class="note">new · Flow 2, approved</p>
+      </article>
+      <article class="surface-card">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span>
+        <h3>Your lab's look</h3>
+        <p>The figures your lab admires — your own and others'. Atlas derives a palette and a real matplotlib style sheet from them: your visual signature, as code Claude can plot with.</p>
+        <p class="note">exists · becomes load-bearing</p>
+      </article>
+    </div>
+
+    <div class="learns">
+      <div class="learns-h">
+        <h3>It learns by being used.</h3>
+        <p>
+          There is no profile to fill in and no model to tune. Atlas watches how your lab <b>already works</b> —
+          and weights what it sees, because <b>not all engagement is endorsement</b>.
+        </p>
+      </div>
+      <div class="learns-grid">
+        <div class="lesson"><i style="background:var(--ch2)"></i><b>You save a paper</b><span>The strongest signal there is. <em>1.5×</em></span></div>
+        <div class="lesson"><i style="background:var(--ch1)"></i><b>You react to it</b><span>Endorsement. <em>1.0×</em></span></div>
+        <div class="lesson"><i style="background:var(--ch5)"></i><b>You argue in the comments</b><span>Engagement. <em>0.75×</em></span></div>
+        <div class="lesson"><i style="background:var(--ch3)"></i><b>You react 🤔</b><span>Sceptical, not keen. <em>0.3×</em></span></div>
+        <div class="lesson"><i style="background:var(--ch-off)"></i><b>You merely read it</b><span>Consumed ≠ liked. <em>0.25×</em></span></div>
+        <div class="lesson"><i style="background:var(--ch6)"></i><b>You upload a figure</b><span>Teaches the palette, not the taste.</span></div>
+      </div>
+      <p class="learns-foot">
+        Recent interest outweighs old — every signal halves in weight every 90 days, so the model tracks
+        <b>where the lab is going</b>, not where it's been. <b>Day one it's a shared library. By month three it
+        knows what your lab will care about.</b>
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════ WHAT USERS SAID ══════════ -->
+  <section class="blk" id="feedback">
+    <div class="sec-head">
+      <p class="sec-eyebrow">v3 · changed by user testing</p>
+      <h2>What the last draft got wrong.</h2>
+      <p>
+        We tested v2 with users. Three things came back, and two of them <b>killed features I was attached to</b>.
+        This draft follows the evidence rather than the plan.
+      </p>
+    </div>
+
+    <div class="verdicts">
+      <article class="verdict cut">
+        <div class="v-h"><span class="v-tag cut">Cut</span><span class="v-what">Saved map documents</span></div>
+        <blockquote>“Saving maps is a nice gimmick but I don't know if I would use it. The general stats overview and interactive map of the current prototype seems more practical.”</blockquote>
+        <p>
+          This was <b>the entire premise of Flow 2</b> — the library, the lens gallery, the composer, the
+          <code>maps</code> table. It is now <b>cut</b>. The falsification condition I wrote in v2 said
+          "kill it if labs wouldn't save maps", and a lab just said exactly that.
+          What survives is a <b>Share this view</b> link that puts the current filters in the URL:
+          the one genuinely useful bit of "saving", at roughly zero cost and with no new table.
+        </p>
+      </article>
+
+      <article class="verdict fix">
+        <div class="v-h"><span class="v-tag fix">Rebuilt</span><span class="v-what">Getting papers in</span></div>
+        <blockquote>“The PDF extraction was a quick way to populate my lab's papers. However, it is quite hacky. For a deployed product, this should be an import from BibTeX.”</blockquote>
+        <p>
+          Agreed, and it's the right instinct: scraping URLs out of Teams PDF exports is a hackathon trick,
+          not a product. <b>BibTeX becomes the front door</b> — every reference manager exports it, the
+          metadata is already clean, and we stop guessing. The PDF path stays as a legacy fallback for the
+          backlog that's already in Teams.
+        </p>
+      </article>
+
+      <article class="verdict up">
+        <div class="v-h"><span class="v-tag up">Promoted</span><span class="v-what">Connect / MCP setup</span></div>
+        <blockquote>“Adding Connect and explaining how I can set up this MCP is very important.”</blockquote>
+        <p>
+          The one hypothesis that <b>survived contact with a user</b>, and the only feature they called
+          <em>important</em> unprompted. It moves to <b>first in the build order</b>, and the screen stops
+          being a marketing panel — it becomes a real, complete, copy-pasteable setup guide.
+        </p>
+      </article>
+    </div>
+
+    <div class="callout" style="border-left-color:var(--warn)">
+      <h4>Also heard: the copy didn't land</h4>
+      <p>
+        “The landing page copy and statements are unclear — <em>point it at a folder, get a map</em>.” Fair.
+        That headline was me being clever instead of clear. The hero now says plainly what the product
+        <em>is</em>: one home for everything your lab reads, importable from a .bib file, searchable, mapped,
+        and connectable to Claude. <b>The animation stayed</b> — that was the one part of the landing page users
+        liked, so it's untouched.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════ IMPORT ══════════ -->
+  <section class="blk" id="import">
+    <div class="sec-head">
+      <p class="sec-eyebrow">Getting started</p>
+      <h2>Import from BibTeX — the way a real product does it.</h2>
+      <p>
+        Every reference manager a lab already uses exports BibTeX, and it carries <b>clean, structured
+        metadata</b>: title, authors, DOI, venue, year. No PDF scraping, no regex, no bot-walls. Atlas resolves
+        abstracts from the DOI, deduplicates against what the lab already has, and shows you exactly what it
+        will add <b>before</b> it adds it.
+      </p>
+    </div>
+
+    <div class="cc-grid">
+      <div class="term">
+        <div class="term-bar" style="background:var(--surface-2)"><span style="color:var(--accent)">Atlas · Import papers</span></div>
+        <div style="padding:1.1rem">
+          <div class="drop">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+            <span><b>Drop your .bib file</b> or choose a file</span>
+            <small>Also accepts .ris · Teams PDF export (legacy)</small>
+          </div>
+
+          <div class="preflight">
+            <span class="eyebrow" style="display:block;margin-bottom:.55rem">tme-lab.bib — 438 entries</span>
+            <div class="pf-row"><span class="ok">✓</span><b>402</b> new papers, metadata resolved from DOI</div>
+            <div class="pf-row"><span class="ok">✓</span><b>24</b> already in your lab — <span class="mut">skipped as duplicates</span></div>
+            <div class="pf-row"><span class="warn">!</span><b>9</b> missing a DOI — <span class="mut">we'll match on title, or you can fix them</span></div>
+            <div class="pf-row"><span class="no">✕</span><b>3</b> unparseable entries — <span class="mut">shown, so you can correct the .bib</span></div>
+            <div class="pf-actions">
+              <button class="btn primary sm">Import 402 papers</button>
+              <button class="btn ghost sm">Review the 12 problems first</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="howto">
+        <span class="eyebrow" style="display:block;margin-bottom:.8rem">Where do I get a .bib file?</span>
+        <div class="step"><i>1</i><div><b>Zotero</b><span>Right-click your library or a collection → <em>Export Collection…</em> → format <b>BibTeX</b> → Save.</span></div></div>
+        <div class="step"><i>2</i><div><b>Mendeley</b><span>Select references → <em>File → Export…</em> → <b>BibTeX (*.bib)</b>.</span></div></div>
+        <div class="step"><i>3</i><div><b>EndNote / Paperpile</b><span>Export with the <b>BibTeX</b> output style.</span></div></div>
+        <div class="step"><i>4</i><div><b>Google Scholar</b><span>Turn on a BibTeX export link in Settings, then save entries one at a time.</span></div></div>
+        <p class="howto-note">
+          Written inline, in the import screen — not buried in a docs site. The user asked for
+          “an explanation of how to get it”, and the explanation belongs at the exact moment they need it.
+        </p>
+        <p class="howto-flag">
+          <b>One thing to check with you:</b> the feedback said “from Zenodo”. Zenodo is a data repository and
+          doesn't have a BibTeX <em>library</em> export — I've assumed <b>Zotero</b> was meant, since that's the
+          reference manager with this exact workflow. <b>If Zenodo was literal</b>, that's a different feature
+          (import a record by DOI) and I'll build that instead. Tell me which.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ TWO READERS / MCP ══════════ -->
+  <section class="blk" id="mcp">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The navigation system</p>
+      <h2>Atlas has two readers: your lab, and Claude.</h2>
+      <p>
+        A lab's real asset isn't its folder of PDFs — it's <b>what the lab thinks is worth reading</b> and
+        <b>what its figures look like</b>. Atlas already computes both. Over MCP it hands them to
+        <b>Claude Code</b> and <b>Claude for Life Sciences</b>, so that when Claude answers, it can
+        <b>search your lab's corpus, cite your lab's papers, rank against your lab's taste, and plot in your
+        lab's palette</b> — instead of the field's generic average.
+      </p>
+    </div>
+
+    <div class="bridge">
+      <div class="bridge-col">
+        <span class="eyebrow">Atlas computes</span>
+        <div class="asset">
+          <i class="ab" style="background:var(--ch1)"></i>
+          <div><h4>The corpus</h4><p>425 papers, deduplicated, enriched, embedded, clustered into named themes.</p></div>
+        </div>
+        <div class="asset">
+          <i class="ab" style="background:var(--ch2)"></i>
+          <div><h4>The taste model</h4><p>A recency-decayed centroid of what the lab saves, reacts to, and argues about.</p></div>
+        </div>
+        <div class="asset">
+          <i class="ab" style="background:var(--ch5)"></i>
+          <div><h4>The visual style</h4><p>A palette and a matplotlib style sheet derived from the lab's mood board.</p></div>
+        </div>
+      </div>
+
+      <div class="bridge-mid" aria-hidden="true">
+        <div class="wire"></div>
+        <span class="wire-tag">MCP</span>
+        <div class="wire"></div>
+      </div>
+
+      <div class="bridge-col">
+        <span class="eyebrow">Claude reads</span>
+        <div class="tool"><code>search_lab_papers</code><span>semantic + keyword, citation-ready</span></div>
+        <div class="tool"><code>get_paper</code><span>full record incl. abstract</span></div>
+        <div class="tool"><code>list_recent_papers</code><span>what the lab shared this week</span></div>
+        <div class="tool"><code>get_moodboard_style</code><span>palette + <b>.mplstyle</b></span></div>
+        <div class="tool"><code>get_figure_palette</code><span>colours from one figure</span></div>
+        <div class="tool"><code>get_figure_image</code><span>see the figure itself</span></div>
+      </div>
+    </div>
+
+    <!-- ---- CLAUDE CODE ---- -->
+    <div class="sec-head" style="margin-top:4rem">
+      <p class="sec-eyebrow">In Claude Code</p>
+      <h2>“Plot this in our lab's style.”</h2>
+      <p>
+        The mood board isn't decoration — it compiles. <code style="font-family:var(--mono);color:var(--accent)">get_moodboard_style</code>
+        returns a palette <em>and</em> a real <code style="font-family:var(--mono);color:var(--accent)">.mplstyle</code> sheet, so a figure
+        Claude produces in your repo comes out already looking like it belongs in your paper.
+      </p>
+    </div>
+
+    <div class="cc-grid">
+      <div class="term" role="img" aria-label="A Claude Code session using the Atlas MCP server to plot a figure in the lab's style">
+        <div class="term-bar"><i></i><i></i><i></i><span>claude — ~/tme-lab/figures</span></div>
+        <pre><span class="p">›</span> <span class="u">plot the DCIS cohort's immune fraction by stage — use our lab's figure style</span>
+
+<span class="tc">⏺ atlas · get_moodboard_style</span><span class="ok">(category: "figures", limit: 8)</span>
+  <span class="d">└─ sampled 8 mood-board figures → palette + style sheet</span>
+
+<span class="tc">⏺ atlas · search_lab_papers</span><span class="ok">(query: "DCIS immune infiltration stage", mode: "semantic")</span>
+  <span class="d">└─ 6 papers · top: Spatially resolved clonal architecture… (Nature 2025)</span>
+
+<span class="tc">⏺ Write</span><span class="ok">(tme_lab.mplstyle)</span>
+<span class="tc">⏺ Bash</span><span class="ok">(uv run python plot_immune_fraction.py)</span>
+  <span class="d">└─ wrote figures/immune_fraction_by_stage.png</span>
+
+<span class="a">Plotted with your lab's palette (the magenta/violet cycle from your
+IF panels) and cited the 6 DCIS papers your lab has posted. The style
+sheet is saved as tme_lab.mplstyle — reuse it for the rest of the panel.</span></pre>
+      </div>
+
+      <div class="fig">
+        <span class="eyebrow" style="display:block;margin-bottom:.7rem">Output — in the lab's palette</span>
+        <div class="figbox">
+          <p class="figtitle">Immune fraction by DCIS stage</p>
+          <div id="labchart"></div>
+          <p class="figcap">TME Lab · generated with tme_lab.mplstyle</p>
+        </div>
+        <div class="mpl">
+          <span class="eyebrow" style="display:block;margin-bottom:.5rem">tme_lab.mplstyle <span style="color:var(--faint);text-transform:none;letter-spacing:0"> — emitted by <code>mplstyle()</code></span></span>
+          <pre><span class="cm"># Atlas mood-board style — TME Lab</span>
+axes.prop_cycle: cycler('color', [<span id="cyclehex"></span>])
+axes.spines.top: False
+axes.spines.right: False
+axes.grid: True
+grid.color: DDDDDD
+axes.titleweight: bold</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- CLAUDE FOR LIFE SCIENCES ---- -->
+    <div class="sec-head" style="margin-top:4rem">
+      <p class="sec-eyebrow">In Claude for Life Sciences</p>
+      <h2>Personalised to what this lab actually cares about.</h2>
+      <p>
+        Ask any model "what's new in spatial transcriptomics" and you get the field's answer. Ask Claude
+        <em>with Atlas connected</em> and you get <b>your lab's</b> answer — ranked against the taste vector, cited
+        from papers your colleagues chose, with the ones you've already read filtered out.
+      </p>
+    </div>
+
+    <div class="cc-grid">
+      <div class="term" role="img" aria-label="A Claude for Life Sciences answer grounded in the lab's corpus and taste model">
+        <div class="term-bar" style="background:var(--surface-2)"><span style="color:var(--accent)">Claude for Life Sciences · TME Lab connected</span></div>
+        <pre><span class="p">›</span> <span class="u">what should I read before Thursday's lab meeting?</span>
+
+<span class="tc">⏺ atlas · list_recent_papers</span><span class="ok">(limit: 20)</span>
+<span class="tc">⏺ atlas · search_lab_papers</span><span class="ok">(query: "stromal remodelling", mode: "semantic")</span>
+
+<span class="a">Three, in the order your lab would care:
+
+<b>1. A single-cell atlas of stromal remodelling</b> (bioRxiv, 2026)
+   Mira posted it Tuesday and 🤔-reacted — she's sceptical of the
+   deconvolution. Closest to your taste vector of anything new.
+
+<b>2. Imaging mass cytometry of the invasive front</b> (Cell, 2025)
+   Already has 4 comments. You're @-mentioned in one.
+
+<b>3. Benchmarking spatial deconvolution</b> (bioRxiv, 2025)
+   Directly answers Mira's objection to #1. Nobody has opened it.</span></pre>
+      </div>
+
+      <div class="taste">
+        <span class="eyebrow" style="display:block;margin-bottom:.9rem">The taste model, in the open</span>
+        <p class="tastelede">
+          Not all engagement is endorsement. Atlas weights the signals it trusts and decays them, so
+          <b>recent, deliberate</b> interest outweighs an old passing click.
+        </p>
+        <div id="tastebars"></div>
+        <p class="tastefoot">Half-life <b>90 days</b> · a signal loses half its weight every quarter.
+          Straight from <code>_taste_vector()</code> — this is the real model, not a mock.</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h4>Why this is the actual product</h4>
+      <p>
+        The corpus, the taste vector, and the mood-board style already exist in the codebase — they are just
+        <b>trapped inside the web app</b>. MCP is the door. The redesign's job is to make that door obvious:
+        one <b>Connect</b> screen, one command, and every Claude surface the lab already uses becomes
+        lab-aware. <b>The atlas is for the lab. The MCP server is for Claude. They are the same data.</b>
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════ IDENTITY ══════════ -->
+  <section class="blk" id="identity">
+    <div class="sec-head">
+      <p class="sec-eyebrow">Identity</p>
+      <h2>A mark that is the product, and a palette borrowed from the microscope.</h2>
+      <p>
+        The name stays — <b>Atlas</b> is right, and Maps earns it. What changes is everything under it.
+        Today's compass icon is a stock glyph and the accent is default SaaS blue; only <code style="font-family:var(--mono);font-size:.85em;color:var(--accent)">cover.ts</code>
+        has any personality. The new identity <b>promotes what was already the best thing in the app</b>.
+      </p>
+    </div>
+
+    <div class="ident">
+      <div class="plate">
+        <span class="eyebrow">Mark & wordmark</span>
+        <div class="marks">
+          <div class="big">
+            <svg viewBox="0 0 32 32" aria-label="Atlas mark"><g fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/><circle cx="16.2" cy="15.6" r="1"/></g></svg>
+          </div>
+          <div class="lock">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/><circle cx="16.2" cy="15.6" r="1"/></g></svg>
+            <span>Atlas</span>
+          </div>
+        </div>
+        <p style="margin:1.1rem 0 0;font-size:.84rem;color:var(--muted)">
+          A cell field inside a map hull — a cluster of papers, and a cluster of cells. It reads at 16px,
+          it's ownable, and it's literally what the product draws. Replaces the stock compass.
+        </p>
+      </div>
+
+      <div class="plate">
+        <span class="eyebrow">Type — three roles</span>
+        <div class="typerow">
+          <span class="lab">Display</span><span class="spec">serif · 600</span>
+          <div class="t-display">Spatial atlas of the TME</div>
+        </div>
+        <div class="typerow">
+          <span class="lab">Interface</span><span class="spec">system sans</span>
+          <div class="t-body">Post a paper, comment, filter by tag — the chrome stays quiet and familiar.</div>
+        </div>
+        <div class="typerow">
+          <span class="lab">Data</span><span class="spec">mono · tabular</span>
+          <div class="t-data">bioRxiv · 2025 · 61 matches · +12 new</div>
+        </div>
+        <p style="margin:1rem 0 0;font-size:.84rem;color:var(--muted)">
+          A scholarly serif for display gives a product about <em>papers</em> the right voice; sans stays out of
+          the way in the UI; mono carries every number, venue, and count.
+        </p>
+        <p style="margin:.7rem 0 0;font-size:.78rem;color:var(--warn);line-height:1.5">
+          <b>Risk, stated:</b> this mock-up uses a <em>system</em> serif stack, which resolves to Iowan Old Style on
+          macOS but falls back to Georgia on Windows — a visibly different product. Shipping this means
+          <b>self-hosting one real display face</b> (~30&nbsp;KB subset, not a CDN link) so every lab sees the same
+          Atlas. Otherwise the identity is only true on the designer's laptop.
+        </p>
+      </div>
+
+      <div class="plate" style="grid-column:1/-1">
+        <span class="eyebrow">Colour — one accent, six channels</span>
+        <div class="swatches" style="margin-bottom:1.1rem">
+          <div class="sw"><i style="background:var(--bg)"></i><code>ground</code></div>
+          <div class="sw"><i style="background:var(--surface)"></i><code>surface</code></div>
+          <div class="sw"><i style="background:var(--surface-2)"></i><code>surface-2</code></div>
+          <div class="sw"><i style="background:var(--muted)"></i><code>muted</code></div>
+          <div class="sw"><i style="background:var(--fg)"></i><code>fg</code></div>
+          <div class="sw"><i style="background:var(--accent)"></i><code>accent</code></div>
+        </div>
+        <div class="swatches">
+          <div class="sw"><i style="background:var(--ch1)"></i><code>ch1 cyan</code></div>
+          <div class="sw"><i style="background:var(--ch2)"></i><code>ch2 magenta</code></div>
+          <div class="sw"><i style="background:var(--ch3)"></i><code>ch3 amber</code></div>
+          <div class="sw"><i style="background:var(--ch4)"></i><code>ch4 green</code></div>
+          <div class="sw"><i style="background:var(--ch5)"></i><code>ch5 violet</code></div>
+          <div class="sw"><i style="background:var(--ch6)"></i><code>ch6 coral</code></div>
+        </div>
+        <p style="margin:1.1rem 0 0;font-size:.84rem;color:var(--muted);max-width:78ch">
+          The accent is a <b style="color:var(--accent)">fluorophore cyan</b>, not SaaS blue. The six channels are the
+          fluorophore set from a multiplexed panel — they colour <em>data only</em> (map clusters, venues, themes),
+          never chrome, so a colour on screen always means something. Neutrals are cool and faintly cyan-biased so the
+          accent sits in the family rather than on top of it. Semantic colours (good / warning / critical) are separate
+          and never borrow the accent.
+        </p>
+      </div>
+
+      <div class="plate" style="grid-column:1/-1">
+        <span class="eyebrow">Accessibility check — the palette under colour-vision deficiency</span>
+        <p style="margin:0 0 1.1rem;font-size:.84rem;color:var(--muted);max-width:78ch">
+          Six categorical hues is at the limit of what's safely distinguishable. I <b>simulated the palette</b>
+          rather than trusting it — and it failed in a way I hadn't predicted: under <b>deuteranopia</b> (~8% of men)
+          the pair that converges hardest is <b style="color:var(--fg)">cyan / magenta</b> (ΔE ≈ 0.04), with
+          amber / coral close behind. Not the green I'd assumed. <b>So hue is never the only channel.</b>
+        </p>
+        <div id="cvd"></div>
+        <p style="margin:1.1rem 0 0;font-size:.84rem;color:var(--muted);max-width:78ch">
+          Row 1 is the palette as designed. Rows 2–3 simulate deuteranopia and protanopia — note that the
+          <b>shapes stay separable when the colours don't</b>. This is why the map encodes theme redundantly
+          rather than trusting the palette.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ APP: HOME ══════════ -->
+  <section class="blk" id="app">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The app · 01</p>
+      <h2>Home answers one question: what needs me?</h2>
+      <p>
+        Today's Home is a wall of everything. The redesign puts <b>Needs you</b> first — mentions and reading-list
+        items that can now be <b>dismissed and checked off</b> (fixing the "attention never clears" blocker from the
+        UX review) — then recommendations, then the feed.
+      </p>
+    </div>
+
+    <div class="with-notes">
+      <div class="app">
+        <nav class="rail" aria-hidden="true">
+          <div class="rail-brand"><svg viewBox="0 0 32 32"><g fill="none" stroke="var(--accent)" stroke-width="1.4"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/></g></svg><span>Atlas</span></div>
+          <div class="nl on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Home</span><span class="cnt">3</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg><span class="lbl">Papers</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg><span class="lbl">Maps</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg><span class="lbl">Reading list</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span class="lbl">Mood board</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><span class="lbl">Connect</span></div>
+          <div class="rail-sp"></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2M17 11h6"/></svg><span class="lbl">Lab</span></div>
+        </nav>
+        <div class="canvas">
+          <h3 class="ptitle">Good morning, Ellen</h3>
+          <p class="psub">TME Lab · 425 papers · 12 posted this week</p>
+
+          <div class="rowb" style="margin-bottom:.6rem">
+            <span class="eyebrow">Needs you</span>
+            <button class="btn ghost sm">Mark all seen</button>
+          </div>
+          <div class="card att" style="margin-bottom:1.5rem">
+            <div class="att-row">
+              <i class="stripe at"></i>
+              <span class="lead">Mention</span>
+              <span class="t">Mira asked you about <b>Spatially resolved clonal architecture in DCIS</b></span>
+              <button class="btn ghost sm">Dismiss</button>
+            </div>
+            <div class="att-row">
+              <i class="stripe rd"></i>
+              <span class="lead">To read</span>
+              <span class="t">Imaging mass cytometry of the invasive front</span>
+              <button class="btn ghost sm">Mark read</button>
+            </div>
+            <div class="att-row">
+              <i class="stripe"></i>
+              <span class="lead done">Read</span>
+              <span class="t done">CODEX multiplexing at single-cell resolution</span>
+              <span class="chip" style="border-color:var(--good);color:var(--good);background:transparent">done</span>
+            </div>
+          </div>
+
+          <div class="rowb" style="margin-bottom:.6rem">
+            <span class="eyebrow">Recommended for the lab</span>
+            <span class="chip">from your taste model</span>
+          </div>
+          <div class="papers" id="rec-papers"></div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><h4>Attention that clears</h4><p>Dismiss a mention, check off a paper. The schema already has <code>mentions.seen_at</code> and <code>paper_status</code> — the old UI just never used them.</p></div>
+        <div class="note"><h4>State in form, not just number</h4><p>A severity stripe encodes kind at a glance: magenta = someone wants you, cyan = you queued it, grey = done.</p></div>
+        <div class="note"><h4>Covers, promoted</h4><p>The generated microscopy art moves from decoration to the app's visual signature — it's the only thing that ever looked like this lab.</p></div>
+        <div class="note"><h4>Ask, in the nav</h4><p>The MCP server already serves the corpus to Claude. It has never had a door in the UI. Now it does.</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══════════ APP: PAPERS ══════════ -->
+  <section class="blk">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The app · 02</p>
+      <h2>Papers gets the sort and filter it has been missing at 425 papers.</h2>
+      <p>
+        One tag filter is not enough to find anything in a corpus this size. Sort by newest / most-discussed,
+        filter by status and venue, and — the blocker from the UX review — <b>posting now fails gracefully</b>,
+        with copy that says what to do.
+      </p>
+    </div>
+
+    <div class="with-notes">
+      <div class="app">
+        <nav class="rail" aria-hidden="true">
+          <div class="rail-brand"><svg viewBox="0 0 32 32"><g fill="none" stroke="var(--accent)" stroke-width="1.4"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/></g></svg><span>Atlas</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Home</span></div>
+          <div class="nl on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg><span class="lbl">Papers</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg><span class="lbl">Maps</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg><span class="lbl">Reading list</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span class="lbl">Mood board</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><span class="lbl">Connect</span></div>
+          <div class="rail-sp"></div>
+        </nav>
+        <div class="canvas">
+          <div class="rowb">
+            <div>
+              <h3 class="ptitle">Papers</h3>
+              <p class="psub" style="margin-bottom:0">425 in the lab · 395 embedded</p>
+            </div>
+            <button class="btn primary sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Post a paper</button>
+          </div>
+
+          <div class="chipset" style="margin-bottom:1rem">
+            <span class="chip acc">Sort: <b>most discussed</b></span>
+            <span class="chip">Tag: <b>spatial-omics</b></span>
+            <span class="chip">Status: <b>unread</b></span>
+            <span class="chip" style="border-style:dashed;background:transparent">+ filter</span>
+            <span style="flex:1"></span>
+            <span class="chip" style="border:0;background:transparent">86 results</span>
+          </div>
+
+          <div class="papers" id="lib-papers"></div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><h4>Filters as chips</h4><p>Every active filter is visible and removable in one row — the same chip component the map uses, so state is never hidden.</p></div>
+        <div class="note"><h4>Sort, finally</h4><p>Newest, most-discussed, most-reacted, recently-read. At 425 papers a single tag filter is not a way to find things.</p></div>
+        <div class="note"><h4>Trustworthy posting</h4><p>Clear pending state, retry, and an error that names the problem instead of "Failed to fetch".</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══════════ APP: MAPS ══════════ -->
+  <section class="blk">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The app · 03 — <span style="color:var(--crit)">cut in v3</span></p>
+      <h2><s style="text-decoration-thickness:1px;opacity:.5">The maps library</s></h2>
+      <p>
+        <b>This screen is gone.</b> The library, the lens gallery, the composer, and the <code>maps</code> table
+        were all Flow 2 — and a user told us they wouldn't use them. It's shown here <b>struck through</b> so the
+        decision is visible rather than quietly disappeared. What replaces it is the screen below: the
+        <b>Overview</b>, which is what they said was actually practical.
+      </p>
+    </div>
+    <p class="cut-note">
+      Kept from the idea: a <b>Share this view</b> link that encodes the current filters in the URL. That's the
+      useful 5% of "saved maps" — no library, no new table, no composer. Roughly a day's work instead of a sprint.
+    </p>
+  </section>
+
+  <!-- ══════════ APP: OVERVIEW ══════════ -->
+  <section class="blk">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The app · 04 — <span style="color:var(--good)">now the centrepiece</span></p>
+      <h2>Overview — the stats and the interactive map.</h2>
+      <p>
+        <b>“The general stats overview and interactive map of the current prototype seems more practical.”</b>
+        So this stops being one of several map documents and becomes <b>the</b> map: one live page, always current,
+        no saving required. It keeps every control that already works — colour, size, semantic topic filter,
+        named themes — and gains the one thing worth keeping from Flow 2: <b>Share this view</b>.
+      </p>
+    </div>
+
+    <div class="with-notes">
+      <div class="app">
+        <nav class="rail" aria-hidden="true">
+          <div class="rail-brand"><svg viewBox="0 0 32 32"><g fill="none" stroke="var(--accent)" stroke-width="1.4"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/></g></svg><span>Atlas</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Home</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg><span class="lbl">Papers</span></div>
+          <div class="nl on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg><span class="lbl">Maps</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg><span class="lbl">Reading list</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span class="lbl">Mood board</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><span class="lbl">Connect</span></div>
+          <div class="rail-sp"></div>
+        </nav>
+        <div class="canvas">
+          <div class="rowb">
+            <div>
+              <h3 class="ptitle">Overview</h3>
+              <p class="psub" style="margin-bottom:.5rem">What your lab is reading, by meaning — always current.</p>
+              <div class="chipset">
+                <span class="chip">Colour: <b>theme</b></span>
+                <span class="chip">Size: <b>engagement</b></span>
+                <span class="chip acc">6 themes</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:.4rem;flex-shrink:0">
+              <button class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19"/></svg>Share this view</button>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi"><div class="k">Papers</div><div class="v">425</div></div>
+            <div class="kpi"><div class="k">Embedded</div><div class="v">395</div></div>
+            <div class="kpi"><div class="k">Themes</div><div class="v">6</div></div>
+            <div class="kpi"><div class="k">This month</div><div class="v" style="color:var(--good)">+22</div></div>
+            <div class="kpi"><div class="k">Top venue</div><div class="v" style="font-size:.82rem">bioRxiv</div></div>
+            <div class="kpi"><div class="k">Discussed</div><div class="v">38</div></div>
+          </div>
+
+          <div class="plot">
+            <div class="legend" id="theme-legend"></div>
+            <div data-scatter="cluster" data-w="640" data-h="330" data-r="4.2" data-hulls="1" data-size="eng"></div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><h4>Share this view</h4><p>Encodes the current filters in the URL and copies it. Paste it in Slack, or into a comment. <code>?topic=dcis&amp;colour=relevance</code> — that's the whole feature.</p></div>
+        <div class="note"><h4>Themes are named</h4><p>Claude labels each cluster from its papers' titles, cached in <code>trends</code>. The legend is the lab's own taxonomy, discovered not declared.</p></div>
+        <div class="note"><h4>Shape + colour</h4><p>Each theme has its own glyph, so the map holds up in greyscale and for colour-blind readers. Hue is never the only channel.</p></div>
+        <div class="note"><h4>Size = engagement</h4><p>Bigger mark, more discussion. What the lab is actually arguing about pops out of the field.</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══════════ APP: CONNECT ══════════ -->
+  <section class="blk">
+    <div class="sec-head">
+      <p class="sec-eyebrow">The app · 05 — <span style="color:var(--good)">now shipping first</span></p>
+      <h2>Connect — a setup guide, not a marketing panel.</h2>
+      <p>
+        <b>“Adding Connect and explaining how I can set up this MCP is very important.”</b> This was the only
+        thing a user called important unprompted, so it moves to <b>the front of the build order</b> — and the
+        screen changes character. v2 showed one glamorous command. Real setup has <b>prerequisites, a config
+        file, credentials, and a way to tell whether it worked</b>. So the screen shows all four, with a
+        troubleshooting path for when it doesn't.
+      </p>
+    </div>
+
+    <div class="with-notes">
+      <div class="app">
+        <nav class="rail" aria-hidden="true">
+          <div class="rail-brand"><svg viewBox="0 0 32 32"><g fill="none" stroke="var(--accent)" stroke-width="1.4"><path d="M16 3.2 27.4 10v12L16 28.8 4.6 22V10z" opacity=".38"/></g><g fill="var(--accent)"><circle cx="16" cy="9.4" r="2.3"/><circle cx="10.6" cy="15" r="1.5"/><circle cx="21.6" cy="14.2" r="1.7"/><circle cx="13.4" cy="20.6" r="1.3"/><circle cx="20" cy="21" r="1.1"/></g></svg><span>Atlas</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Home</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg><span class="lbl">Papers</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg><span class="lbl">Maps</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg><span class="lbl">Reading list</span></div>
+          <div class="nl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg><span class="lbl">Mood board</span></div>
+          <div class="nl on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><span class="lbl">Connect</span></div>
+          <div class="rail-sp"></div>
+        </nav>
+        <div class="canvas">
+          <h3 class="ptitle">Connect Claude to TME Lab</h3>
+          <p class="psub">Give Claude Code and Claude for Life Sciences read access to this lab's corpus, taste, and style.</p>
+
+          <div class="conn">
+            <div class="conn-main">
+              <div class="setup-tabs">
+                <span class="stab on">Claude Code</span>
+                <span class="stab">Claude Desktop</span>
+                <span class="stab">Claude for Life Sciences</span>
+              </div>
+
+              <div class="sstep">
+                <div class="ss-h"><i>1</i><b>Check you have <code>uv</code></b></div>
+                <div class="cmd"><code>uv --version</code><button class="btn sm">Copy</button></div>
+                <p class="ss-n">Not installed? <span class="lnk">Get uv →</span> (one line, no admin rights needed).</p>
+              </div>
+
+              <div class="sstep">
+                <div class="ss-h"><i>2</i><b>Add Atlas to your project's <code>.mcp.json</code></b></div>
+                <div class="cmd block"><code>{
+  "mcpServers": {
+    "atlas": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "paper-radar",
+               "--extra", "mcp", "python", "-m", "atlas_mcp"]
+    }
+  }
+}</code><button class="btn sm">Copy</button></div>
+              </div>
+
+              <div class="sstep">
+                <div class="ss-h"><i>3</i><b>Add your lab credentials to <code>paper-radar/api/.env</code></b></div>
+                <div class="cmd block"><code>ATLAS_EMAIL=<span class="ph">you@lab.org</span>
+ATLAS_PASSWORD=<span class="ph">••••••••</span>
+ATLAS_TEAM_ID=<span class="tk">7c1f…a93b</span>   <span class="cm"># TME Lab — filled in for you</span></code><button class="btn sm">Copy</button></div>
+                <p class="ss-n">
+                  Gitignored, and read by the server directly — so you never paste secrets into a Claude config
+                  file. <b>Your own login scopes the access</b>: Claude sees what you see, nothing more.
+                </p>
+              </div>
+
+              <div class="sstep">
+                <div class="ss-h"><i>4</i><b>Restart Claude Code and check it's live</b></div>
+                <div class="cmd"><code>/mcp</code><button class="btn sm">Copy</button></div>
+                <p class="ss-n">You should see <b>atlas</b> listed with 9 tools. Then try:
+                  <em>“what has our lab posted on myeloid cells?”</em></p>
+              </div>
+
+              <details class="trouble">
+                <summary>It didn't work</summary>
+                <div class="tr-row"><b>atlas isn't listed in <code>/mcp</code></b><span>You're not in the repo root, or <code>.mcp.json</code> has a trailing comma. Run <code>claude --debug</code> to see the spawn error.</span></div>
+                <div class="tr-row"><b>“Couldn't sign in to your lab”</b><span>Wrong email/password in <code>api/.env</code>, or the file is in the wrong directory — it must be <code>paper-radar/api/.env</code>.</span></div>
+                <div class="tr-row"><b>Tools return an empty list</b><span>You're in more than one lab and no <code>ATLAS_TEAM_ID</code> is set. Copy it from this page.</span></div>
+              </details>
+
+              <span class="eyebrow" style="display:block;margin:1.3rem 0 .6rem">What Claude can read</span>
+              <div class="perms">
+                <div class="perm"><i class="ok">✓</i><span>Papers your lab has posted <em>— titles, abstracts, tags, venues</em></span></div>
+                <div class="perm"><i class="ok">✓</i><span>Comments &amp; reactions <em>— the lab's taste signal</em></span></div>
+                <div class="perm"><i class="ok">✓</i><span>Mood-board figures &amp; derived style <em>— palette + .mplstyle</em></span></div>
+                <div class="perm"><i class="no">✕</i><span class="off">Other labs' papers, comments, or figures</span></div>
+                <div class="perm"><i class="no">✕</i><span class="off">Writing, posting, or deleting <em>— read-only today</em></span></div>
+              </div>
+
+              <div class="gov">
+                <div class="gov-h">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  <span>This is not only your decision</span>
+                </div>
+                <p>
+                  Connecting Claude exposes <b>your colleagues'</b> comments, reactions, and reading history — not just
+                  your own. So the consent is <b>the lab's</b>, not the connector's:
+                </p>
+                <div class="gov-rules">
+                  <div class="gov-rule"><i>1</i><span>Only a lab <b>owner</b> can enable MCP access for the lab.</span></div>
+                  <div class="gov-rule"><i>2</i><span>Every member is <b>notified</b> when it's switched on, and can see this screen.</span></div>
+                  <div class="gov-rule"><i>3</i><span>Any member can <b>opt their own engagement out</b> of the taste signal — their papers stay, their behaviour isn't read.</span></div>
+                  <div class="gov-rule"><i>4</i><span>The <b>call log below is visible to the whole lab</b>, not just to whoever connected.</span></div>
+                </div>
+                <p class="gov-foot">
+                  A researcher will not point a model at unpublished work on a colleague's behalf. If we get this wrong,
+                  nothing else in the redesign matters.
+                </p>
+              </div>
+            </div>
+
+            <div class="conn-side">
+              <div class="status">
+                <span class="pulse"></span>
+                <div>
+                  <div class="st-t">Connected</div>
+                  <div class="st-s">Claude Code · 2 min ago</div>
+                </div>
+              </div>
+              <span class="eyebrow" style="display:block;margin:1.1rem 0 .55rem">Recent Claude activity</span>
+              <div class="acts">
+                <div class="act"><code>get_moodboard_style</code><span>2m</span></div>
+                <div class="act"><code>search_lab_papers</code><span>2m</span></div>
+                <div class="act"><code>list_recent_papers</code><span>1h</span></div>
+                <div class="act"><code>get_paper</code><span>1h</span></div>
+              </div>
+              <p class="conn-note" style="margin-top:1rem">
+                Every call is logged here, so the lab can see what Claude looked at.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><h4>Copy, paste, done</h4><p>The whole integration is one command. The screen's only job is to make that command findable and to say what it grants.</p></div>
+        <div class="note"><h4>Scope, stated plainly</h4><p>Read-only, this lab only. A researcher will not connect a tool to their unpublished work without knowing exactly what it can see.</p></div>
+        <div class="note"><h4>An audit trail</h4><p>Recent tool calls, visible to the lab. Trust is the feature; the log is how you earn it.</p></div>
+        <div class="note"><h4>Mood board gets a job</h4><p>Today it's a gallery. Once it compiles to a style sheet Claude uses, uploading a figure becomes an act with a payoff.</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ══════════ WHAT CHANGES ══════════ -->
+  <section class="blk" id="changes">
+    <div class="sec-head">
+      <p class="sec-eyebrow">Scope</p>
+      <h2>What actually changes.</h2>
+      <p>Most of this is a token swap and a component refresh. The genuinely new surfaces are the landing page, Maps, and Ask.</p>
+    </div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Area</th><th>Today</th><th>Proposed</th><th>Effort</th></tr></thead>
+        <tbody>
+          <tr><td><b>Landing page</b></td><td class="was">None — the app opens on a login form</td><td class="now"><b>New</b> public page: animated corpus hero, three surfaces, sign-in</td><td class="was">M</td></tr>
+          <tr><td><b>Identity</b></td><td class="was">Stock compass, SaaS-blue accent, system-ui only</td><td class="now"><b>Cell-field mark</b>, fluorophore-cyan accent, serif/sans/mono scale</td><td class="was">S — token file</td></tr>
+          <tr><td><b>Data colour</b></td><td class="was">Generic categorical blues</td><td class="now"><b>Six-channel</b> fluorophore palette, data only</td><td class="was">S</td></tr>
+          <tr><td><b>Home</b></td><td class="was">Attention list that never clears</td><td class="now">Dismissible mentions, <b>mark-as-read</b> lifecycle</td><td class="was">S — schema exists</td></tr>
+          <tr><td><b>Papers</b></td><td class="was">One tag filter; posting fails as "Failed to fetch"</td><td class="now"><b>Sort + multi-filter</b>; posting with real error copy &amp; retry</td><td class="was">M</td></tr>
+          <tr><td><b>Import</b></td><td class="was">Scrapes URLs out of Teams PDF exports — <b>“quite hacky”</b></td><td class="now"><b>BibTeX import</b> with dedupe, a pre-flight report, and inline export instructions</td><td class="was">M</td></tr>
+          <tr><td><b>Overview</b></td><td class="was">Good, and buried behind a “soon” affordance</td><td class="now"><b>The centrepiece</b> — kept as-is, plus <b>Share this view</b> (URL state)</td><td class="was">XS</td></tr>
+          <tr style="opacity:.55"><td><b><s>Saved maps</s></b></td><td class="was">—</td><td class="now"><s>Map documents, lens gallery, composer, <code>maps</code> table</s> — <b style="color:var(--crit)">cut</b>, users wouldn't use it</td><td class="was">—</td></tr>
+          <tr><td><b>Connect</b></td><td class="was">MCP server built and working — <b>no door in the UI</b></td><td class="now"><b>New screen</b>: one command, explicit scope, live tool-call log</td><td class="was">S — highest leverage</td></tr>
+          <tr><td><b>Mood board</b></td><td class="was">A gallery. <code style="font-family:var(--mono)">mplstyle()</code> exists but nothing consumes it</td><td class="now"><b>Compiles to the lab's style</b> — download the sheet, or let Claude use it</td><td class="was">S</td></tr>
+          <tr><td><b>Taste model</b></td><td class="was">Ranks recommendations, invisible and unexplained</td><td class="now"><b>Shown in the open</b>, and served to Claude over MCP</td><td class="was">S</td></tr>
+          <tr><td><b>Settings</b></td><td class="was">Still on the pre-redesign card layout</td><td class="now">Rebuilt on the new system; invite code promoted</td><td class="was">S</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════ CLOSE ══════════ -->
+  <section class="blk">
+    <div class="closer">
+      <p class="closer-line">When the postdoc leaves, <em>the taste stays</em>.</p>
+      <p class="closer-sub">
+        Five years of judgment about what's worth reading walks out of your lab with every person who finishes.
+        Atlas keeps it — the papers, the arguments, the figures you admired — so the next person inherits
+        <b>the lab's mind, not just its Dropbox</b>.
+      </p>
+      <div class="cta" style="justify-content:flex-start">
+        <span class="btn primary">Start your lab</span>
+        <span class="btn">Import a .bib</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ DECISION ══════════ -->
+  <section class="ask" id="decide">
+    <h2>v3 — what I'd build, in this order</h2>
+    <p>
+      Still a mock-up; nothing in <code style="font-family:var(--mono)">web/src</code> has been touched.
+      User testing <b>cut the feature this proposal was originally built around</b> and promoted the one I'd
+      ranked last. The plan now follows the users, not the pitch.
+    </p>
+    <ol>
+      <li><b>Connect + MCP setup.</b> The only thing a user called <em>important</em>. Real setup guide, lab consent
+        model, tool-call log. Ships first.</li>
+      <li><b>BibTeX import.</b> Replaces the PDF scrape as the front door, with the export how-to inline.
+        <b>Blocked on one answer from you</b> — Zotero or literally Zenodo? (see the Import section).</li>
+      <li><b>Identity + landing page.</b> Tokens, a self-hosted display face, the clearer copy, and the animation
+        users liked, untouched.</li>
+      <li><b>Overview polish.</b> Share-this-view, shape encoding, and the theme legend. Small, since the page
+        already works.</li>
+      <li><b>Home / Papers fixes.</b> Dismissible mentions, mark-as-read, sort and filter — the UX-review backlog.</li>
+    </ol>
+    <p style="margin-top:1rem;font-size:.86rem">
+      <b>What I'd still like:</b> the same five-researcher test on <em>this</em> draft. One round of feedback deleted a
+      sprint of work — a second round is the cheapest thing on the list.
+    </p>
+  </section>
+
+  <footer>
+    Atlas redesign mock-up · companion to MAP_DASHBOARDS_PROPOSAL.md · palette derived from cover.ts · both themes follow the viewer · no production code changed
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  /* ---------- seeded RNG so every render is identical ---------- */
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const gauss = (r, m, s) => {
+    const u = Math.max(1e-9, r()), v = r();
+    return m + s * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  };
+
+  /* ---------- the corpus: 6 themes, as a UMAP of a focused lab would look ---------- */
+  const THEMES = [
+    { label: "Spatial TME profiling", cx: .30, cy: .44, sd: .095, n: 78 },
+    { label: "Multiplexed imaging",    cx: .53, cy: .30, sd: .085, n: 62 },
+    { label: "Immune infiltration",    cx: .70, cy: .55, sd: .080, n: 51 },
+    { label: "DCIS progression",       cx: .42, cy: .70, sd: .085, n: 55 },
+    { label: "Single-cell methods",    cx: .82, cy: .27, sd: .060, n: 33 },
+    { label: "Stromal architecture",   cx: .19, cy: .74, sd: .070, n: 36 },
+  ];
+  const TOPIC = { x: .58, y: .38 };            // the "ductal carcinoma" locus
+  const YEARS = [2019, 2021, 2023, 2024, 2025];
+
+  const PTS = (() => {
+    const r = rng(20260712), out = [];
+    THEMES.forEach((t, ci) => {
+      for (let i = 0; i < t.n; i++) {
+        const x = Math.min(.97, Math.max(.03, gauss(r, t.cx, t.sd)));
+        const y = Math.min(.97, Math.max(.03, gauss(r, t.cy, t.sd)));
+        const d = Math.hypot(x - TOPIC.x, y - TOPIC.y);
+        out.push({
+          x, y, c: ci,
+          year: YEARS[Math.min(4, Math.floor(r() * r() * 5 + r() * 2))] ?? 2024,
+          eng: r() < .55 ? 0 : Math.floor(r() * 8),
+          rel: Math.pow(Math.max(0, 1 - d / .55), 1.4),
+        });
+      }
+    });
+    return out;
+  })();
+
+  const CH = (i) => css(`--ch${(i % 6) + 1}`);
+  const REL = (f) => css(`--r${Math.min(6, Math.max(0, Math.round(f * 6)))}`);
+  const YRAMP = ["--r1", "--r2", "--r3", "--r5", "--r6"];
+
+  function hull(pts) {
+    if (pts.length < 3) return pts;
+    const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
+    const lo = [];
+    for (const pt of p) { while (lo.length >= 2 && cr(lo[lo.length-2], lo[lo.length-1], pt) <= 0) lo.pop(); lo.push(pt); }
+    const up = [];
+    for (let i = p.length - 1; i >= 0; i--) { const pt = p[i]; while (up.length >= 2 && cr(up[up.length-2], up[up.length-1], pt) <= 0) up.pop(); up.push(pt); }
+    lo.pop(); up.pop();
+    return lo.concat(up);
+  }
+
+  /* ---------- render one scatter into a host div ---------- */
+  function scatter(host) {
+    const mode = host.dataset.scatter;
+    const w = +host.dataset.w || 300, h = +host.dataset.h || 190;
+    const r0 = +host.dataset.r || 2.5;
+    const pad = 10;
+    const sx = (x) => pad + x * (w - 2 * pad);
+    const sy = (y) => pad + (1 - y) * (h - 2 * pad);
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Map of the lab's papers by meaning");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+    const bg = document.createElementNS(NS, "rect");
+    bg.setAttribute("width", w); bg.setAttribute("height", h);
+    bg.setAttribute("rx", "6"); bg.setAttribute("fill", css("--surface"));
+    svg.appendChild(bg);
+
+    if (host.dataset.hulls) {
+      THEMES.forEach((_, ci) => {
+        const hp = hull(PTS.filter(p => p.c === ci).map(p => [sx(p.x), sy(p.y)]));
+        if (hp.length < 3) return;
+        const poly = document.createElementNS(NS, "polygon");
+        poly.setAttribute("points", hp.map(([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`).join(" "));
+        poly.setAttribute("fill", CH(ci)); poly.setAttribute("fill-opacity", ".055");
+        poly.setAttribute("stroke", CH(ci)); poly.setAttribute("stroke-opacity", ".22");
+        poly.setAttribute("stroke-width", "1");
+        svg.appendChild(poly);
+      });
+    }
+
+    const maxEng = Math.max(1, ...PTS.map(p => p.eng));
+    // Redundant encoding: when the marks are big enough to read, theme is carried by
+    // SHAPE as well as hue. Simulating the palette (see cvd()) showed cyan/magenta
+    // converging under deuteranopia, so hue is never the sole channel here.
+    const useShape = mode === "cluster" && r0 >= 3.4;
+    for (const p of PTS) {
+      let fill = CH(p.c), r = r0, op = .9;
+      if (mode === "year")  fill = css(YRAMP[YEARS.indexOf(p.year)] ?? "--r3");
+      if (mode === "venue") fill = p.eng % 5 === 0 ? css("--ch-off") : CH(p.eng % 6);
+      if (mode === "blank") fill = css("--ch-off");
+      if (mode === "rel") { fill = REL(p.rel); r = r0 * (.55 + .9 * p.rel); op = .18 + .78 * p.rel; }
+      if (host.dataset.size === "eng" && mode !== "rel") r = r0 * (.6 + .8 * Math.sqrt(p.eng / maxEng));
+      const m = useShape ? mark(NS, p.c, sx(p.x), sy(p.y), r) : (() => {
+        const c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", sx(p.x).toFixed(1)); c.setAttribute("cy", sy(p.y).toFixed(1));
+        c.setAttribute("r", r.toFixed(2));
+        return c;
+      })();
+      m.setAttribute("fill", fill);
+      m.setAttribute("fill-opacity", op.toFixed(2));
+      m.setAttribute("stroke", css("--surface"));
+      m.setAttribute("stroke-width", ".7");
+      svg.appendChild(m);
+    }
+    host.replaceChildren(svg);
+  }
+
+  /* One distinct glyph per theme — circle, square, triangle, diamond, cross, hexagon. */
+  const SHAPES = ["circle", "square", "triangle", "diamond", "cross", "hex"];
+  function mark(NS, ci, cx, cy, r) {
+    const k = SHAPES[ci % SHAPES.length];
+    const pt = (a, rad) => `${(cx + rad * Math.cos(a)).toFixed(1)},${(cy + rad * Math.sin(a)).toFixed(1)}`;
+    if (k === "circle") {
+      const e = document.createElementNS(NS, "circle");
+      e.setAttribute("cx", cx.toFixed(1)); e.setAttribute("cy", cy.toFixed(1)); e.setAttribute("r", r.toFixed(2));
+      return e;
+    }
+    if (k === "square") {
+      const s = r * 1.72, e = document.createElementNS(NS, "rect");
+      e.setAttribute("x", (cx - s / 2).toFixed(1)); e.setAttribute("y", (cy - s / 2).toFixed(1));
+      e.setAttribute("width", s.toFixed(1)); e.setAttribute("height", s.toFixed(1)); e.setAttribute("rx", ".6");
+      return e;
+    }
+    if (k === "cross") {
+      const a = r * .62, b = r * 1.85, e = document.createElementNS(NS, "path");
+      e.setAttribute("d", `M${cx - a} ${cy - b / 2} h${2 * a} v${b / 2 - a} h${b / 2 - a} v${2 * a}`
+        + ` h${-(b / 2 - a)} v${b / 2 - a} h${-2 * a} v${-(b / 2 - a)} h${-(b / 2 - a)} v${-2 * a}`
+        + ` h${b / 2 - a} Z`);
+      return e;
+    }
+    const e = document.createElementNS(NS, "polygon");
+    if (k === "triangle") {
+      const R = r * 1.3;
+      e.setAttribute("points", [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6].map(a => pt(a, R)).join(" "));
+    } else if (k === "diamond") {
+      const R = r * 1.35;
+      e.setAttribute("points", [-Math.PI / 2, 0, Math.PI / 2, Math.PI].map(a => pt(a, R)).join(" "));
+    } else { // hex
+      const R = r * 1.18;
+      e.setAttribute("points", Array.from({ length: 6 }, (_, i) => pt((Math.PI / 3) * i - Math.PI / 2, R)).join(" "));
+    }
+    return e;
+  }
+
+  /* ---------- theme legend — glyph + colour + name, so it survives greyscale ---------- */
+  function legend() {
+    const el = document.getElementById("theme-legend");
+    if (!el) return;
+    const NS = "http://www.w3.org/2000/svg";
+    el.replaceChildren(...THEMES.map((t, i) => {
+      const s = document.createElement("span");
+      const svg = document.createElementNS(NS, "svg");
+      svg.setAttribute("viewBox", "0 0 14 14");
+      svg.setAttribute("width", "11"); svg.setAttribute("height", "11");
+      svg.setAttribute("aria-hidden", "true");
+      svg.style.flexShrink = "0";
+      const m = mark(NS, i, 7, 7, 4.6);
+      m.setAttribute("fill", CH(i));
+      svg.appendChild(m);
+      s.append(svg, document.createTextNode(t.label));
+      return s;
+    }));
+  }
+
+  /* ---------- microscopy covers (the existing cover.ts, re-tinted) ---------- */
+  function cover(cv, seed, dark) {
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    const w = cv.width = cv.clientWidth * 2, h = cv.height = cv.clientHeight * 2;
+    const r = rng(seed);
+    // dark: immunofluorescence channels glowing on near-black.
+    // light: H&E-style pigment, but pulled cool so it sits in the new palette.
+    const hues = dark ? [178, 316, 262, 148, 40] : [186, 320, 268, 158, 34];
+    ctx.fillStyle = dark ? "#080b11" : "#e7ecec";
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = dark ? "lighter" : "multiply";
+    const n = 3 + Math.floor(r() * 2);
+    for (let i = 0; i < n; i++) {
+      const hue = hues[Math.floor(r() * hues.length)];
+      const x = w * (.12 + r() * .76), y = h * (.1 + r() * .8);
+      const rad = Math.min(w, h) * (.42 + r() * .5);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+      if (dark) {
+        g.addColorStop(0, `hsla(${hue},85%,58%,0.50)`);
+        g.addColorStop(.6, `hsla(${hue},85%,52%,0.13)`);
+        g.addColorStop(1, `hsla(${hue},85%,52%,0)`);
+      } else {
+        g.addColorStop(0, `hsla(${hue},46%,62%,0.85)`);
+        g.addColorStop(1, `hsla(${hue},46%,62%,0)`);
+      }
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    const vg = ctx.createRadialGradient(w/2, h*.42, Math.min(w,h)*.2, w/2, h/2, Math.max(w,h)*.72);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, dark ? "rgba(0,0,0,0.5)" : "rgba(20,45,45,0.09)");
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
+  }
+
+  /* ---------- paper cards ---------- */
+  const RECS = [
+    { t: "Spatially resolved clonal architecture in ductal carcinoma in situ", v: "Nature", y: 2025, tag: "spatial-omics", c: 7, rx: 4, s: 101 },
+    { t: "Imaging mass cytometry of the invasive front in triple-negative breast cancer", v: "Cell", y: 2025, tag: "imaging", c: 4, rx: 9, s: 202 },
+    { t: "A single-cell atlas of stromal remodelling during tumour progression", v: "bioRxiv", y: 2026, tag: "single-cell", c: 2, rx: 3, s: 303 },
+  ];
+  const LIB = [
+    { t: "CODEX multiplexing at single-cell resolution in archival tissue", v: "Nat Methods", y: 2024, tag: "imaging", c: 11, rx: 6, s: 404 },
+    { t: "Neighbourhood analysis reveals immune exclusion niches", v: "Immunity", y: 2025, tag: "immune", c: 9, rx: 8, s: 505 },
+    { t: "Benchmarking spatial deconvolution across ten platforms", v: "bioRxiv", y: 2025, tag: "benchmark", c: 8, rx: 2, s: 606 },
+  ];
+
+  function paperCard(p, dark) {
+    const el = document.createElement("article");
+    el.className = "card pc";
+    el.innerHTML = `
+      <div class="cov"><canvas></canvas><span class="badge">${p.v}</span></div>
+      <div class="body">
+        <h4>${p.t}</h4>
+        <div class="meta">${p.y} · ${p.tag}</div>
+        <div class="foot">
+          <span>◇ ${p.rx}</span><span>❝ ${p.c}</span>
+          <span class="sp"></span>
+          <span style="color:var(--accent)">save</span>
+        </div>
+      </div>`;
+    requestAnimationFrame(() => cover(el.querySelector("canvas"), p.s, dark));
+    return el;
+  }
+
+  /* ---------- hero: a scattered field resolving into themes ---------- */
+  function hero() {
+    const cv = document.getElementById("field");
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    let raf = null, t0 = null;
+
+    const N = 420;
+    const r = rng(99);
+    const nodes = Array.from({ length: N }, () => {
+      const ci = Math.floor(r() * THEMES.length);
+      const th = THEMES[ci];
+      return {
+        // start: uniform noise (the firehose)
+        x0: r(), y0: r(),
+        // end: clustered by theme (the map)
+        x1: Math.min(.98, Math.max(.02, gauss(r, th.cx, th.sd * 1.15))),
+        y1: Math.min(.98, Math.max(.02, gauss(r, th.cy, th.sd * 1.15))),
+        c: ci, r: .7 + r() * 1.9, ph: r() * Math.PI * 2,
+      };
+    });
+
+    function size() {
+      const dpr = Math.min(2, devicePixelRatio || 1);
+      cv.width = cv.clientWidth * dpr;
+      cv.height = cv.clientHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function draw(p, tsec) {
+      const w = cv.clientWidth, h = cv.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+      // ease: the corpus "finds its structure"
+      const e = p < 0 ? 0 : p > 1 ? 1 : 1 - Math.pow(1 - p, 3);
+      const chs = [0,1,2,3,4,5].map(CH);
+      for (const n of nodes) {
+        const drift = reduce ? 0 : Math.sin(tsec * .35 + n.ph) * .0016;
+        const x = (n.x0 + (n.x1 - n.x0) * e + drift) * w;
+        const y = (n.y0 + (n.y1 - n.y0) * e - drift) * h;
+        ctx.beginPath();
+        ctx.arc(x, y, n.r * (.75 + .45 * e), 0, Math.PI * 2);
+        ctx.fillStyle = chs[n.c];
+        ctx.globalAlpha = .16 + .5 * e;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function frame(ts) {
+      if (t0 === null) t0 = ts;
+      const tsec = (ts - t0) / 1000;
+      draw(Math.min(1, tsec / 2.6), tsec);
+      raf = requestAnimationFrame(frame);
+    }
+
+    size();
+    addEventListener("resize", () => { size(); if (reduce) draw(1, 0); }, { passive: true });
+    if (reduce) { draw(1, 0); return; }              // settled state, no motion
+    raf = requestAnimationFrame(frame);
+    // stop the ambient drift when the hero scrolls away
+    new IntersectionObserver(([en]) => {
+      if (en.isIntersecting && raf === null) { t0 = null; raf = requestAnimationFrame(frame); }
+      else if (!en.isIntersecting && raf !== null) { cancelAnimationFrame(raf); raf = null; }
+    }).observe(cv);
+  }
+
+  /* ---------- the lab's mood-board palette ----------
+     What get_moodboard_style() would return for a lab whose figures are H&E and
+     immunofluorescence panels: the pigment/fluorophore cycle, quantized from the
+     board. Deliberately NOT the app's channel palette — it's the *lab's*, not ours. */
+  const MOOD = ["#b8368c", "#6244c7", "#1b8e8a", "#d3892a", "#3e8f55", "#c0453a"];
+
+  /* Figure Claude would emit with tme_lab.mplstyle: grouped bars, white ground,
+     horizontal grid, no top/right spines, bold title — the real mplstyle rules. */
+  function labChart() {
+    const host = document.getElementById("labchart");
+    if (!host) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const W = 380, H = 190, L = 34, R = 6, T = 8, B = 34;
+    const stages = ["Low", "Intermediate", "High"];
+    const series = [
+      { name: "CD8+ T", v: [11, 19, 31] },
+      { name: "Macrophage", v: [23, 28, 24] },
+      { name: "B cell", v: [6, 9, 17] },
+    ];
+    const maxY = 40, plotW = W - L - R, plotH = H - T - B;
+    const yv = (v) => T + plotH * (1 - v / maxY);
+
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Grouped bar chart: immune cell fraction by DCIS stage, plotted in the lab's mood-board palette");
+    const add = (tag, attrs, text) => {
+      const e = document.createElementNS(NS, tag);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      if (text != null) e.textContent = text;
+      svg.appendChild(e);
+      return e;
+    };
+    // white figure ground — mplstyle says figure.facecolor: white, always
+    add("rect", { x: 0, y: 0, width: W, height: H, fill: "#ffffff", rx: 4 });
+    // grid.color: DDDDDD
+    for (let v = 0; v <= maxY; v += 10) {
+      add("line", { x1: L, x2: W - R, y1: yv(v), y2: yv(v), stroke: "#dddddd", "stroke-width": .6 });
+      add("text", { x: L - 6, y: yv(v) + 3, "text-anchor": "end", fill: "#222222",
+                    "font-size": 7, "font-family": "ui-sans-serif, system-ui" }, String(v));
+    }
+    // spines: left + bottom only
+    add("line", { x1: L, x2: L, y1: T, y2: T + plotH, stroke: "#222222", "stroke-width": .8 });
+    add("line", { x1: L, x2: W - R, y1: T + plotH, y2: T + plotH, stroke: "#222222", "stroke-width": .8 });
+
+    const gw = plotW / stages.length, bw = (gw * .62) / series.length;
+    stages.forEach((s, i) => {
+      const g0 = L + i * gw + gw * .19;
+      series.forEach((ser, j) => {
+        const v = ser.v[i];
+        add("rect", { x: g0 + j * bw, y: yv(v), width: bw - 1.5,
+                      height: T + plotH - yv(v), fill: MOOD[j], rx: .5 });
+      });
+      add("text", { x: L + i * gw + gw / 2, y: H - B + 14, "text-anchor": "middle",
+                    fill: "#222222", "font-size": 7.5,
+                    "font-family": "ui-sans-serif, system-ui" }, s);
+    });
+    add("text", { x: L + plotW / 2, y: H - 4, "text-anchor": "middle", fill: "#222222",
+                  "font-size": 7, "font-family": "ui-sans-serif, system-ui" }, "DCIS grade");
+    // legend
+    series.forEach((ser, j) => {
+      const x = L + 4 + j * 74;
+      add("rect", { x, y: T + 2, width: 7, height: 7, fill: MOOD[j], rx: 1.5 });
+      add("text", { x: x + 11, y: T + 8.5, fill: "#222222", "font-size": 7,
+                    "font-family": "ui-sans-serif, system-ui" }, ser.name);
+    });
+    host.replaceChildren(svg);
+
+    const cyc = document.getElementById("cyclehex");
+    if (cyc) cyc.textContent = MOOD.map(h => `'${h.slice(1)}'`).join(", ");
+  }
+
+  /* ---------- colour-vision-deficiency simulation ----------
+     Viénot/Brettel-style: linearise sRGB → LMS → collapse the missing cone → back.
+     Good enough to *check a palette* with, which is the job here. */
+  function srgbToLin(c) { c /= 255; return c <= .04045 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4); }
+  function linToSrgb(c) {
+    const v = c <= .0031308 ? 12.92 * c : 1.055 * Math.pow(Math.max(0, c), 1 / 2.4) - .055;
+    return Math.round(Math.min(255, Math.max(0, v * 255)));
+  }
+  function simulate(hex, kind) {
+    const m = hex.replace("#", "");
+    const r = srgbToLin(parseInt(m.slice(0, 2), 16));
+    const g = srgbToLin(parseInt(m.slice(2, 4), 16));
+    const b = srgbToLin(parseInt(m.slice(4, 6), 16));
+    // sRGB → LMS
+    const L = 17.8824 * r + 43.5161 * g + 4.1194 * b;
+    const M = 3.4557 * r + 27.1554 * g + 3.8671 * b;
+    const S = 0.02996 * r + 0.18431 * g + 1.46709 * b;
+    let L2 = L, M2 = M, S2 = S;
+    if (kind === "deuter") M2 = 0.494207 * L + 1.24827 * S;       // green cone missing
+    if (kind === "prot")   L2 = 2.02344 * M - 2.52581 * S;        // red cone missing
+    // LMS → sRGB
+    const r2 =  0.080944 * L2 - 0.130504 * M2 + 0.116721 * S2;
+    const g2 = -0.010248 * L2 + 0.054019 * M2 - 0.113614 * S2;
+    const b2 = -0.000365 * L2 - 0.004121 * M2 + 0.693513 * S2;
+    return `#${[r2, g2, b2].map(v => linToSrgb(v).toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function cvd() {
+    const host = document.getElementById("cvd");
+    if (!host) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const hexes = [1, 2, 3, 4, 5, 6].map(i => css(`--ch${i}`));
+    const rows = [
+      { name: "As designed", kind: null },
+      { name: "Deuteranopia", kind: "deuter" },
+      { name: "Protanopia", kind: "prot" },
+    ];
+    host.replaceChildren(...rows.map(row => {
+      const el = document.createElement("div");
+      el.className = "cvd-row";
+      const lab = document.createElement("span");
+      lab.className = "cvd-lab";
+      lab.textContent = row.name;
+      el.appendChild(lab);
+      const strip = document.createElement("div");
+      strip.className = "cvd-strip";
+      hexes.forEach((hx, i) => {
+        const shown = row.kind ? simulate(hx, row.kind) : hx;
+        const cell = document.createElement("div");
+        cell.className = "cvd-cell";
+        cell.style.background = shown;
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 22 22");
+        svg.setAttribute("aria-hidden", "true");
+        const m = mark(NS, i, 11, 11, 6);
+        m.setAttribute("fill", "#ffffff");
+        m.setAttribute("fill-opacity", ".92");
+        svg.appendChild(m);
+        cell.appendChild(svg);
+        strip.appendChild(cell);
+      });
+      el.appendChild(strip);
+      return el;
+    }));
+  }
+
+  /* ---------- taste weights: the real numbers from _taste_vector() ---------- */
+  function tasteBars() {
+    const host = document.getElementById("tastebars");
+    if (!host) return;
+    const W = [
+      { l: "Saved to read", w: 1.5, c: "--ch2", n: "explicit, deliberate" },
+      { l: "Reaction", w: 1.0, c: "--ch1", n: "endorsement" },
+      { l: "Commented", w: .75, c: "--ch5", n: "engaged" },
+      { l: "🤔 reaction", w: .3, c: "--ch3", n: "sceptical, not keen" },
+      { l: "Read", w: .25, c: "--ch-off", n: "consumed ≠ liked" },
+    ];
+    host.replaceChildren(...W.map(d => {
+      const row = document.createElement("div");
+      row.className = "tbar";
+      row.title = d.n;
+      const l = document.createElement("span"); l.className = "tl"; l.textContent = d.l;
+      const t = document.createElement("span"); t.className = "tt";
+      const f = document.createElement("i"); f.className = "tf";
+      f.style.width = `${(d.w / 1.5) * 100}%`;
+      f.style.background = css(d.c);
+      t.appendChild(f);
+      const v = document.createElement("span"); v.className = "tv"; v.textContent = d.w.toFixed(2);
+      row.append(l, t, v);
+      return row;
+    }));
+  }
+
+  /* ---------- boot / re-render on theme change ---------- */
+  function render() {
+    labChart();
+    tasteBars();
+    cvd();
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const attr = document.documentElement.dataset.theme;
+    const isDark = attr ? attr === "dark" : dark;
+    document.querySelectorAll("[data-scatter]").forEach(scatter);
+    legend();
+    const rec = document.getElementById("rec-papers");
+    if (rec) rec.replaceChildren(...RECS.map(p => paperCard(p, isDark)));
+    const lib = document.getElementById("lib-papers");
+    if (lib) lib.replaceChildren(...LIB.map(p => paperCard(p, isDark)));
+  }
+
+  render();
+  hero();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+  new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>

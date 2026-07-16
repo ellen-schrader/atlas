@@ -3,3 +3,11 @@ papers_pdfs/
 
 # macOS
 .DS_Store
+
+# Local demo material and working notes (not part of the published repo)
+DEMO_CUES.md
+DEMO_PROMPTS.md
+DEMO_SCRIPT.md
+TODO.md
+figstyle/
+/*.pdf

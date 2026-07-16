@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from xml.etree import ElementTree
 
+from paper_radar.ingest import url_guard
+
 _ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"'<>]+)", re.IGNORECASE)
 _NATURE_RE = re.compile(r"nature\.com/articles/(?P<id>[a-z0-9.\-]+)", re.IGNORECASE)
@@ -40,13 +42,13 @@ _PMID_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(?P<pmid>\d+)", re.IGNORECAS
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
 
 _TIMEOUT = 10.0
-_API_UA = "paper-radar/0.1 (mailto:mail@ellen-schrader.de)"
+_API_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
 # A browser-like UA gets past the crudest bot filters when scraping landing pages.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-_NCBI_PARAMS = "&tool=paper-radar&email=mail@ellen-schrader.de"
+_NCBI_PARAMS = "&tool=paper-radar&email=atlas@ellen-schrader.de"
 _MAX_HTML_BYTES = 1_000_000
 
 
@@ -67,12 +69,25 @@ class PaperMetadata:
 
 
 def _get(url: str, *, browser: bool = False) -> bytes | None:
+    """Fetch a URL, or None on any failure.
+
+    Every HTTP request this module makes goes through here — the identifier APIs and
+    the landing-page scrape alike — so it is the one place an SSRF guard has to hold.
+    `open_public_url` refuses a non-public target *and* re-checks each redirect hop,
+    which a check on the submitted URL alone cannot do (urllib follows redirects
+    silently, so a public URL that 302s to 169.254.169.254 would otherwise sail
+    through). A blocked URL is treated as a failed fetch: ingest never blocks on a
+    bad link, it just gets no metadata for it.
+    """
     ua = _BROWSER_UA if browser else _API_UA
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": ua})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (trusted hosts)
-            return resp.read(_MAX_HTML_BYTES) if browser else resp.read()
+        with url_guard.open_public_url(url, headers={"User-Agent": ua}, timeout=_TIMEOUT) as resp:
+            # Cap both branches: a single paper's metadata (arXiv Atom, Crossref JSON,
+            # a landing page) is well under 1 MB, and now that _get follows redirects a
+            # redirect to a multi-GB public stream would otherwise be read whole.
+            return resp.read(_MAX_HTML_BYTES)
     except (
+        url_guard.BlockedUrl,
         urllib.error.URLError,
         TimeoutError,
         OSError,
@@ -121,7 +136,7 @@ def _arxiv_id(url: str) -> str | None:
     return m.group("id") if m else None
 
 
-def _doi(text: str) -> str | None:
+def _doi(text: str, *, from_url: bool = True) -> str | None:
     """Extract a DOI from a URL or meta value.
 
     Publisher URLs often embed the DOI mid-path (e.g. ``/doi/10.1158/<suffix>/
@@ -132,9 +147,15 @@ def _doi(text: str) -> str | None:
     if not m:
         return None
     doi = re.split(r"[?#\s]", m.group(1))[0]
-    parts = doi.split("/")
-    if len(parts) > 2:
-        doi = "/".join(parts[:2])
+    # A DOI suffix may itself contain slashes (legacy Wiley/SICI DOIs). Only trim
+    # trailing path segments when parsing a publisher URL, where the extras are
+    # /pdf, /full, an internal id or a slug appended after the DOI — never for a
+    # bare DOI from a citation meta tag, where truncating would corrupt the DOI and
+    # can merge two distinct papers onto the same key.
+    if from_url:
+        parts = doi.split("/")
+        if len(parts) > 2:
+            doi = "/".join(parts[:2])
     return doi.rstrip(".,);]")
 
 
@@ -431,7 +452,7 @@ def parse_citation_html(html: str, url: str) -> PaperMetadata | None:
         )
     )
     doi_raw = first_of("citation_doi", "dc.identifier", "prism.doi")
-    doi = _doi(doi_raw) if doi_raw else None
+    doi = _doi(doi_raw, from_url=False) if doi_raw else None
     abstract = _clean_text(
         first_of("citation_abstract", "dc.description", "og:description", "description")
     )

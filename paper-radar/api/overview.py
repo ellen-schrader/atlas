@@ -1,11 +1,12 @@
-"""Insights overview for a lab: UMAP layout + KMeans clusters (LLM-named).
+"""Insights overview for a lab: t-SNE 2-D layout + KMeans clusters (LLM-named).
 
-The expensive parts — the UMAP projection and the cluster assignment + Claude
-names — are cached in-process per team, keyed by the exact set of embedded
-papers, so they recompute only when that set changes. Point attributes
-(year/venue) and engagement are fetched fresh on each request by the caller, so
-they stay live. (Persisting names to the `trends` table across restarts is a
-follow-up — see docs/MAP_OVERVIEW_PLAN.md.)
+The layout + cluster assignment + Claude names are cached in-process per team,
+keyed by the exact set of embedded papers, so they recompute only when that
+set changes (a recompute is a few seconds — numba-free t-SNE, no JIT). The
+names are additionally persisted to the `trends` table (see _load_names /
+_store_names), so Claude is not re-asked after a restart. Point attributes
+(year/venue) and engagement are fetched fresh on each request by the caller,
+so they stay live.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ _MAX_TITLES_PER_CLUSTER = 25  # cap the prompt size when naming
 
 
 class _LayoutCache:
-    """Per-team cache of (umap coords + cluster ids + cluster names)."""
+    """Per-team cache of (2-D layout coords + cluster ids + cluster names)."""
 
     def __init__(self) -> None:
         self._d: dict[str, tuple[frozenset, tuple]] = {}
@@ -144,9 +145,10 @@ def _store_names(
     """Persist theme names for this signature (replaces the team's trends rows)."""
     try:
         svc = service_client()
-        # Only clear prior *naming* rows (those carry a signature), so any other
-        # future use of the trends table for this team is left intact.
-        svc.table("trends").delete().eq("team_id", team_id).not_.is_("signature", "null").execute()
+        # Replace only THIS signature's rows. Deleting every signature-carrying row
+        # made the lab overview and each map's theme names wipe each other, forcing
+        # a fresh (and differently-worded) Claude call on every lab<->map switch.
+        svc.table("trends").delete().eq("team_id", team_id).eq("signature", signature).execute()
         svc.table("trends").insert(
             [
                 {
@@ -165,17 +167,17 @@ def _store_names(
 
 
 def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
-    """UMAP + clusters + names for ``papers`` (each with id, title, embedding).
+    """2-D layout + clusters + names for ``papers`` (each with id, title, embedding).
 
     Returns ``(point_by_id, clusters)`` where ``point_by_id[id] = {x, y, cluster}``
-    and ``clusters = [{id, label, description, size}]``. UMAP + KMeans are
+    and ``clusters = [{id, label, description, size}]``. Layout + KMeans are
     deterministic; the LLM names are reused from ``trends`` when the embedded set
     is unchanged, so Claude is only called when the clustering actually changes.
     """
-    from paper_radar.embed.index import cluster_embeddings, compute_umap
+    from paper_radar.embed.index import cluster_embeddings, compute_layout_2d
 
     vecs = np.array([_parse_vec(p["embedding"]) for p in papers], dtype=np.float32)
-    coords = compute_umap(vecs)
+    coords = compute_layout_2d(vecs)
     labels = cluster_embeddings(vecs)
 
     titles_by_cluster: dict[int, list[str]] = defaultdict(list)
