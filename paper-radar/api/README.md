@@ -49,4 +49,17 @@ uv run python -m api.backfill_embeddings --all    # re-embed (model change)
 - "Find similar" needs no server round-trip through this service — the web app
   calls the `similar_papers` RPC directly on Supabase.
 
+## Teams integration (see `../../docs/teams-integration-plan.md`)
+
+Outbound mirror (M1): labs mapped in `TEAMS_WEBHOOK_URLS` get an Adaptive Card
+in their Teams channel whenever a paper is posted from the web app.
+
+1. In Teams: Workflows → create a flow from the **"Post to a channel when a
+   webhook request is received"** template; copy the webhook URL it generates.
+2. Set `TEAMS_WEBHOOK_URLS={"<team id or slug>": "<webhook url>"}` in `api/.env`
+   (locally) or `fly secrets set` (deployed).
+
+Posting is fire-and-forget from `create_post` background tasks — an unreachable
+webhook is logged and never fails the in-app post.
+
 Next: enrichment (summary/tags) and a real worker.
