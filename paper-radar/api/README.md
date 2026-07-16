@@ -56,8 +56,9 @@ in their Teams channel whenever a paper is posted from the web app.
 
 1. In Teams: Workflows → create a flow from the **"Post to a channel when a
    webhook request is received"** template; copy the webhook URL it generates.
-2. Set `TEAMS_WEBHOOK_URLS={"<team id or slug>": "<webhook url>"}` in `api/.env`
-   (locally) or `fly secrets set` (deployed).
+2. Set `TEAMS_WEBHOOK_URLS={"<team uuid>": "<webhook url>"}` in `api/.env`
+   (locally) or `fly secrets set` (deployed). Key by `public.teams.id`, not
+   the slug — slugs rotate with the lab invite code.
 
 Posting is fire-and-forget from `create_post` background tasks — an unreachable
 webhook is logged and never fails the in-app post.

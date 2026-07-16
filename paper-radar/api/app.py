@@ -247,19 +247,24 @@ def _enrich_and_store(paper_id: str, title: str | None, abstract: str | None) ->
 
 
 def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: str | None):
-    """Insert the paper_post as the user (RLS enforces membership). Returns (id, already)."""
+    """Insert the paper_post as the user (RLS enforces membership).
+
+    Returns ``(id, already, source)`` — source is the row's actual value so
+    callers can gate side effects on it (the Teams mirror fires only for
+    ``'web'`` posts).
+    """
     uc = user_client(token)
 
     existing = (
         uc.table("paper_posts")
-        .select("id")
+        .select("id, source")
         .eq("paper_id", paper_id)
         .eq("team_id", team_id)
         .limit(1)
         .execute()
     )
     if existing.data:
-        return existing.data[0]["id"], True
+        return existing.data[0]["id"], True, existing.data[0]["source"]
 
     row = {
         "paper_id": paper_id,
@@ -275,7 +280,7 @@ def _create_post(token: str, team_id: str, paper_id: str, user_id: str, note: st
         if getattr(exc, "code", None) == "42501":
             raise HTTPException(status_code=403, detail="You are not a member of this lab") from exc
         raise HTTPException(status_code=400, detail=f"Could not post paper: {exc}") from exc
-    return inserted.data[0]["id"], False
+    return inserted.data[0]["id"], False, row["source"]
 
 
 # --- routes ----------------------------------------------------------------
@@ -307,7 +312,7 @@ def create_post(
     url_norm = _normalize_key(url)
     meta = fetch_metadata(url)
     paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
-    post_id, already = _create_post(token, req.team_id, paper_id, user_id, req.note)
+    post_id, already, post_source = _create_post(token, req.team_id, paper_id, user_id, req.note)
 
     # Embed + tag after responding so posting stays fast; each no-ops without
     # its key, and the backfill scripts cover anything skipped.
@@ -317,10 +322,10 @@ def create_post(
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
 
     # Mirror new web posts to the lab's Teams channel (no-op for unmapped labs;
-    # failures are logged inside, never surfaced). Loop guard: Teams-ingested
-    # posts (source='teams') don't go through this endpoint, so nothing can
-    # echo back and forth.
-    if not already:
+    # failures are logged inside, never surfaced). Loop guard: only source='web'
+    # posts mirror, so Teams-ingested posts (source='teams', M2) can never echo
+    # back into the channel they came from.
+    if not already and post_source == "web":
         background.add_task(
             teams_integration.notify_paper_posted,
             req.team_id,

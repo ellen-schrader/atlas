@@ -18,7 +18,7 @@ Create a Workflow with the trigger **"When a Teams webhook request is received"*
    - `post_to_teams(webhook_url, card)`: POST `{"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": card}]}` with a short timeout; log-and-swallow failures (posting to Teams must never break the in-app post).
 2. **Hook into `create_post()`** (`api/app.py:297`): after the `paper_posts` insert succeeds, add a `BackgroundTasks` job (same pattern as `_embed_and_store` at `api/app.py:314`) that looks up the team's webhook URL and posts the card.
    - **Loop guard:** only fire for posts with `source='web'`. Posts ingested *from* Teams (`source='teams'`) are never echoed back.
-3. **Webhook URL storage:** v1 = `TEAMS_WEBHOOK_URLS` in `api/config.py` / fly secrets as a `{team_slug: url}` JSON map. v2 = `team_integrations` table + LabManagement UI field.
+3. **Webhook URL storage:** v1 = `TEAMS_WEBHOOK_URLS` in `api/config.py` / fly secrets as a `{team_uuid: url}` JSON map (uuid, not slug — slugs rotate with the invite code via `regenerate_team_code`). v2 = `team_integrations` table + LabManagement UI field.
 
 ---
 
