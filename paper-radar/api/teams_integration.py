@@ -26,6 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from paper_radar.ingest import url_guard
 
+from .config import get_api_settings
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -120,9 +121,40 @@ def _md_escape(text: str) -> str:
     return text
 
 
-def _link_target(url: str) -> str:
-    """Percent-encode parens so a URL (e.g. a (SICI)-style DOI) can't end the link."""
-    return url.replace("(", "%28").replace(")", "%29")
+# Abstracts can be a page long; a channel card wants a preview, not the paper.
+_ABSTRACT_CHARS = 600
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    # Cut on a word boundary so the ellipsis doesn't land mid-word.
+    return text[:limit].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+def _click_safe(url: str | None) -> str | None:
+    """A URL safe to place behind a click action — http(s) only.
+
+    The paper URL is user-supplied, and Action.OpenUrl opens whatever scheme it
+    carries. Teams sanitizes button URLs, but we don't rely on the client: a
+    ``javascript:``/``file:``/``data:`` URL is dropped here so it can never
+    become a clickable button in the channel.
+    """
+    if not url:
+        return None
+    try:
+        scheme = urlsplit(url).scheme.lower()
+    except ValueError:
+        return None
+    return url if scheme in ("http", "https") else None
+
+
+def _authors_line(authors: list[str] | None) -> str | None:
+    if not authors:
+        return None
+    shown = ", ".join(authors[:_MAX_AUTHORS])
+    return f"{shown} et al." if len(authors) > _MAX_AUTHORS else shown
 
 
 def build_paper_card(
@@ -132,52 +164,107 @@ def build_paper_card(
     authors: list[str] | None = None,
     venue: str | None = None,
     year: int | None = None,
+    abstract: str | None = None,
     note: str | None = None,
     posted_by: str | None = None,
+    atlas_url: str | None = None,
 ) -> dict:
-    """An Adaptive Card announcing one paper post."""
+    """An Adaptive Card announcing one paper post.
+
+    Layout: title as a header, then authors, then venue/year, an abstract
+    preview, an optional note, and a footer. The paper URL and (when provided)
+    the Atlas deep link are rendered as buttons rather than inline links, so
+    both are one tap away and neither depends on markdown escaping.
+    """
+    # Header — the title as its own bold line (not a link; the buttons carry the
+    # links). Falls back to the URL only when there's no title.
     body: list[dict] = [
         {
             "type": "TextBlock",
-            "text": f"[{_md_escape(title or url)}]({_link_target(url)})",
+            "text": _md_escape(title or url),
             "weight": "Bolder",
-            "size": "Medium",
+            "size": "Large",
             "wrap": True,
         }
     ]
 
-    byline: list[str] = []
-    if authors:
-        shown = ", ".join(authors[:_MAX_AUTHORS])
-        byline.append(f"{shown} et al." if len(authors) > _MAX_AUTHORS else shown)
-    venue_year = " ".join(str(p) for p in (venue, year) if p)
-    if venue_year:
-        byline.append(venue_year)
-    if byline:
+    authors_line = _authors_line(authors)
+    if authors_line:
         body.append(
             {
                 "type": "TextBlock",
-                "text": _md_escape(" · ".join(byline)),
+                "text": _md_escape(authors_line),
+                "wrap": True,
+                "spacing": "None",
+            }
+        )
+
+    venue_year = " · ".join(str(p) for p in (venue, year) if p)
+    if venue_year:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": _md_escape(venue_year),
                 "isSubtle": True,
                 "wrap": True,
+                "spacing": "None",
+            }
+        )
+
+    if abstract and abstract.strip():
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": _md_escape(_truncate(abstract, _ABSTRACT_CHARS)),
+                "wrap": True,
+                "spacing": "Medium",
             }
         )
 
     if note:
-        body.append({"type": "TextBlock", "text": _md_escape(note), "wrap": True})
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": f"“{_md_escape(note)}”",
+                "wrap": True,
+                "isSubtle": True,
+                "spacing": "Medium",
+            }
+        )
 
     footer = f"Posted by {_md_escape(posted_by)} via Atlas" if posted_by else "Posted via Atlas"
     body.append(
-        {"type": "TextBlock", "text": footer, "isSubtle": True, "size": "Small", "wrap": True}
+        {
+            "type": "TextBlock",
+            "text": footer,
+            "isSubtle": True,
+            "size": "Small",
+            "wrap": True,
+            "spacing": "Medium",
+        }
     )
 
-    return {
+    # Action.OpenUrl values are plain JSON strings the client opens directly (not
+    # markdown, so no escaping needed) — but only http(s) may become a clickable
+    # button, so a dangerous scheme in the user-supplied paper URL is never armed.
+    actions: list[dict] = []
+    paper_link = _click_safe(url)
+    if paper_link:
+        actions.append({"type": "Action.OpenUrl", "title": "View paper", "url": paper_link})
+    atlas_link = _click_safe(atlas_url)
+    if atlas_link:
+        actions.append({"type": "Action.OpenUrl", "title": "Open in Atlas", "url": atlas_link})
+
+    card = {
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "version": "1.4",
         "msteams": {"width": "Full"},
         "body": body,
     }
+    if actions:
+        card["actions"] = actions
+    return card
 
 
 def build_test_card(team_name: str | None) -> dict:
@@ -272,14 +359,30 @@ def _display_name(user_id: str | None) -> str | None:
         return None
 
 
+def _atlas_paper_url(paper_id: str | None) -> str | None:
+    """Deep link to the paper in the Atlas web app, or None if unconfigured.
+
+    The web app opens a paper via the global `?paper=<id>` modal on any route,
+    so the canonical link is `<web>/?paper=<id>`.
+    """
+    if not paper_id:
+        return None
+    base = get_api_settings().atlas_web_url.strip()
+    if not base:
+        return None
+    return f"{base.rstrip('/')}/?paper={paper_id}"
+
+
 def notify_paper_posted(
     team_id: str,
     *,
     url: str,
+    paper_id: str | None = None,
     title: str | None = None,
     authors: list[str] | None = None,
     venue: str | None = None,
     year: int | None = None,
+    abstract: str | None = None,
     note: str | None = None,
     posted_by_id: str | None = None,
 ) -> None:
@@ -302,8 +405,10 @@ def notify_paper_posted(
             authors=authors,
             venue=venue,
             year=year,
+            abstract=abstract,
             note=note,
             posted_by=_display_name(posted_by_id),
+            atlas_url=_atlas_paper_url(paper_id),
         )
         post_to_teams(webhook_url, card)
     except Exception as exc:

@@ -144,69 +144,158 @@ def test_webhook_url_disabled_row_is_none(monkeypatch):
 # --- build_paper_card ---------------------------------------------------------
 
 
-def test_card_has_linked_title_byline_note_and_footer():
+def _button_urls(card):
+    return {a["title"]: a["url"] for a in card.get("actions", [])}
+
+
+def test_card_layout_header_authors_venue_abstract_note_footer():
     card = teams_integration.build_paper_card(
         url="https://arxiv.org/abs/2401.01234",
         title="Attention Is All You Need",
         authors=["A. One", "B. Two", "C. Three", "D. Four"],
         venue="NeurIPS",
         year=2017,
+        abstract="We propose the Transformer.",
         note="classic, worth a re-read",
         posted_by="Ellen",
+        atlas_url="https://atlas.example.com/?paper=p1",
     )
     assert card["type"] == "AdaptiveCard"
     texts = [b["text"] for b in card["body"]]
-    assert texts[0] == "[Attention Is All You Need](https://arxiv.org/abs/2401.01234)"
-    # 4 authors → first 3 + et al.; venue and year joined into the byline
-    assert texts[1] == "A. One, B. Two, C. Three et al. · NeurIPS 2017"
-    assert "classic, worth a re-read" in texts
+    # Title is a bold header (not a markdown link — links are buttons now).
+    assert texts[0] == "Attention Is All You Need"
+    assert card["body"][0]["size"] == "Large" and card["body"][0]["weight"] == "Bolder"
+    # 4 authors → first 3 + et al., on their own line; venue · year separate.
+    assert texts[1] == "A. One, B. Two, C. Three et al."
+    assert texts[2] == "NeurIPS · 2017"
+    assert "We propose the Transformer." in texts
+    assert "“classic, worth a re-read”" in texts
     assert texts[-1] == "Posted by Ellen via Atlas"
+    # Both links are buttons.
+    assert _button_urls(card) == {
+        "View paper": "https://arxiv.org/abs/2401.01234",
+        "Open in Atlas": "https://atlas.example.com/?paper=p1",
+    }
 
 
-def test_card_minimal_falls_back_to_url_and_generic_footer():
+def test_card_without_atlas_url_has_only_the_paper_button():
+    card = teams_integration.build_paper_card(url="https://example.org/paper", title="T")
+    assert _button_urls(card) == {"View paper": "https://example.org/paper"}
+
+
+def test_card_minimal_falls_back_to_url_header_and_generic_footer():
     card = teams_integration.build_paper_card(url="https://example.org/paper")
     texts = [b["text"] for b in card["body"]]
-    assert texts[0] == "[https://example.org/paper](https://example.org/paper)"
+    assert texts[0] == "https://example.org/paper"  # header falls back to URL
     assert texts[-1] == "Posted via Atlas"
-    assert len(texts) == 2  # no byline, no note
+    assert len(texts) == 2  # header + footer only
+
+
+def test_card_abstract_is_truncated_on_a_word_boundary():
+    long_abstract = " ".join(f"word{i}" for i in range(400))  # distinct tokens
+    card = teams_integration.build_paper_card(
+        url="https://example.org/p", title="T", abstract=long_abstract
+    )
+    abstract_block = card["body"][1]["text"]
+    assert abstract_block.endswith("…")
+    assert len(abstract_block) <= teams_integration._ABSTRACT_CHARS + 1
+    shown = abstract_block[:-1]  # drop the ellipsis
+    # The kept text is a real prefix of the abstract, cut exactly at a space —
+    # i.e. no token was split mid-word.
+    assert long_abstract.startswith(shown)
+    assert long_abstract[len(shown)] == " "
 
 
 def test_card_escapes_markdown_in_title():
     card = teams_integration.build_paper_card(
         url="https://example.org/p", title="[RETRACTED] Model_v2 *study*"
     )
-    assert (
-        card["body"][0]["text"]
-        == "[\\[RETRACTED\\] Model\\_v2 \\*study\\*](https://example.org/p)"
-    )
+    assert card["body"][0]["text"] == "\\[RETRACTED\\] Model\\_v2 \\*study\\*"
 
 
-def test_card_percent_encodes_parens_in_link_url():
+def test_card_url_button_is_not_escaped_or_encoded():
+    # Action.OpenUrl carries a plain URL, not markdown — parens stay intact.
     card = teams_integration.build_paper_card(
         url="https://doi.org/10.1002/(SICI)1097-0142", title="Old Wiley DOI"
     )
-    assert card["body"][0]["text"] == "[Old Wiley DOI](https://doi.org/10.1002/%28SICI%291097-0142)"
+    assert _button_urls(card)["View paper"] == "https://doi.org/10.1002/(SICI)1097-0142"
 
 
-def test_card_escapes_markdown_in_note_and_footer():
-    # A note or display name must render literally, never as a live link.
+def test_card_escapes_markdown_in_abstract_note_and_footer():
+    # Any user/metadata text in a TextBlock must render literally, never as a link.
     card = teams_integration.build_paper_card(
         url="https://example.org/p",
+        abstract="see [here](https://evil.example)",
         note="[click me](https://evil.example)",
         posted_by="[x](https://evil.example)",
     )
     texts = [b["text"] for b in card["body"]]
-    assert "\\[click me\\]\\(https://evil.example\\)" in texts
+    assert "see \\[here\\]\\(https://evil.example\\)" in texts
+    assert "“\\[click me\\]\\(https://evil.example\\)”" in texts
     assert texts[-1] == "Posted by \\[x\\]\\(https://evil.example\\) via Atlas"
 
 
-def test_card_escapes_markdown_in_byline():
+def test_card_escapes_markdown_in_authors_line():
     card = teams_integration.build_paper_card(
         url="https://example.org/p",
         title="T",
         authors=["[phish](https://evil.example)"],
     )
     assert card["body"][1]["text"] == "\\[phish\\]\\(https://evil.example\\)"
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "ms-cxh://x",  # OS deep-link scheme
+    ],
+)
+def test_card_never_arms_a_dangerous_scheme_as_a_button(bad_url):
+    # A non-http(s) paper URL must not become a clickable Action.OpenUrl.
+    card = teams_integration.build_paper_card(url=bad_url, title="T")
+    assert "actions" not in card  # no clickable button at all
+    # The header still shows (escaped), so the card degrades gracefully.
+    assert card["body"][0]["text"] == "T"
+
+
+def test_card_drops_a_dangerous_atlas_url_but_keeps_the_paper_button():
+    card = teams_integration.build_paper_card(
+        url="https://example.org/p", title="T", atlas_url="javascript:alert(1)"
+    )
+    assert _button_urls(card) == {"View paper": "https://example.org/p"}
+
+
+# --- _atlas_paper_url --------------------------------------------------------
+
+
+def test_atlas_url_none_without_config(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "get_api_settings", lambda: types.SimpleNamespace(atlas_web_url="")
+    )
+    assert teams_integration._atlas_paper_url("p1") is None
+
+
+def test_atlas_url_none_without_paper_id(monkeypatch):
+    # paper_id missing → no settings lookup even needed.
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: pytest.fail("must not read settings without a paper_id"),
+    )
+    assert teams_integration._atlas_paper_url(None) is None
+
+
+def test_atlas_url_builds_deep_link_and_strips_trailing_slash(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: types.SimpleNamespace(atlas_web_url="https://atlas.example.com/"),
+    )
+    assert teams_integration._atlas_paper_url("p1") == "https://atlas.example.com/?paper=p1"
 
 
 # --- post_to_teams -----------------------------------------------------------

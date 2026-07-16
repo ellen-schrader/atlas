@@ -28,11 +28,10 @@ class ApiSettings(BaseSettings):
     embedding_dim: int = 1024
 
     # --- Teams integration (docs/teams-integration-plan.md) ---
-    # JSON map of team uuid → Power Automate "Workflows" webhook URL. When a
-    # lab is mapped, papers posted from the web app are mirrored to its Teams
-    # channel as an Adaptive Card. Empty = disabled. (Keyed by uuid, not slug —
-    # slugs are rotated by regenerate_team_code.)
-    teams_webhook_urls: str = ""
+    # Public base URL of the Atlas web app (e.g. https://atlas.example.com), used
+    # to build the "Open in Atlas" deep link on mirrored Teams cards. Trailing
+    # slash optional. Empty = omit the Atlas button (the card still links the paper).
+    atlas_web_url: str = ""
 
     @property
     def configured(self) -> bool:
