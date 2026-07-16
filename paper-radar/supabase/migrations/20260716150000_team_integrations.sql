@@ -38,3 +38,9 @@ create policy team_integrations_update on public.team_integrations for update
     with check (public.is_team_owner(team_id));
 create policy team_integrations_delete on public.team_integrations for delete
     using (public.is_team_owner(team_id));
+
+-- Table privileges (RLS still restricts rows). `authenticated` needs them for the
+-- owner-managed Settings panel; `service_role` for the outbound send path's read.
+-- The one-time blanket grant in rls.sql predates this table, so grant explicitly.
+grant select, insert, update, delete on public.team_integrations to authenticated;
+grant all                            on public.team_integrations to service_role;

@@ -13,6 +13,7 @@ import {
   deleteTeamsIntegration,
   getTeamsIntegration,
   saveTeamsIntegration,
+  setTeamsEnabled,
   testTeamsIntegration,
 } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -28,22 +29,13 @@ function Panel({ title, desc, children }: { title: string; desc: string; childre
   );
 }
 
-function hostOf(url: string | null): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
-}
-
 /** Owner-only: connect the lab to a Teams channel via a Power Automate webhook.
- *  The webhook URL is write-only from a member's perspective (owner-only RLS) and
- *  is validated server-side; this panel never posts to it directly — the test
- *  card goes through the API so the URL stays server-side at send time. */
+ *  The webhook URL never comes back from the server — the API returns only the
+ *  host and status — so pause/resume flips a flag rather than re-sending the
+ *  secret, and the test card is posted server-side. */
 function TeamsPanel({ teamId }: { teamId: string }) {
   const qc = useQueryClient();
-  const { data: teams } = useQuery({
+  const { data: teams, isLoading, isError } = useQuery({
     queryKey: ["teams-integration", teamId],
     queryFn: () => getTeamsIntegration(teamId),
   });
@@ -69,85 +61,91 @@ function TeamsPanel({ teamId }: { teamId: string }) {
 
   async function connect(e: FormEvent) {
     e.preventDefault();
-    if (
-      await run("save", () => saveTeamsIntegration(teamId, url.trim()), "Connected. Send a test card to confirm it works.")
-    )
+    const value = url.trim();
+    if (!value || busy !== null) return; // Enter can fire past a disabled button
+    if (await run("save", () => saveTeamsIntegration(teamId, value), "Connected. Send a test card to confirm it works."))
       setUrl("");
   }
 
-  const host = hostOf(teams?.webhook_url ?? null);
+  let body: ReactNode;
+  if (isLoading) {
+    body = <div className="text-sm text-muted">Loading…</div>;
+  } else if (isError || !teams) {
+    // Don't fall through to the Connect form on a failed load — that would let an
+    // owner overwrite an existing (but unfetched) connection.
+    body = <div className="text-sm text-danger">Couldn’t load the Teams connection. Reload to try again.</div>;
+  } else if (teams.configured) {
+    body = (
+      <div className="flex flex-col gap-3 text-sm">
+        <div>
+          Connected{teams.host && (
+            <>
+              {" "}to <span className="font-medium">{teams.host}</span>
+            </>
+          )}
+          {!teams.enabled && <span className="text-muted"> (paused)</span>}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => run("test", () => testTeamsIntegration(teamId), "Test card sent — check the channel.")}
+            disabled={busy !== null || !teams.enabled}
+          >
+            {busy === "test" ? "…" : "Send test card"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => run("toggle", () => setTeamsEnabled(teamId, !teams.enabled))}
+            disabled={busy !== null}
+          >
+            {busy === "toggle" ? "…" : teams.enabled ? "Pause" : "Resume"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-danger hover:text-danger"
+            onClick={() => run("rm", () => deleteTeamsIntegration(teamId), "Disconnected.")}
+            disabled={busy !== null}
+          >
+            {busy === "rm" ? "…" : "Disconnect"}
+          </Button>
+        </div>
+      </div>
+    );
+  } else {
+    body = (
+      <form onSubmit={connect} className="flex flex-col gap-2">
+        <ol className="list-decimal pl-4 text-xs text-muted [&>li]:mt-0.5">
+          <li>
+            In Teams, open <span className="font-medium">Workflows</span> and create a flow from the
+            “Send webhook alerts to a channel” template.
+          </li>
+          <li>Pick the team and channel new papers should appear in.</li>
+          <li>Copy the webhook URL the flow generates and paste it here.</li>
+        </ol>
+        <Label htmlFor="teams-webhook">Webhook URL</Label>
+        <div className="flex gap-2">
+          <Input
+            id="teams-webhook"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://…logic.azure.com/workflows/…"
+          />
+          <Button type="submit" size="sm" disabled={busy === "save" || !url.trim()}>
+            {busy === "save" ? "…" : "Connect"}
+          </Button>
+        </div>
+      </form>
+    );
+  }
 
   return (
     <Panel title="Post to Teams" desc="Mirror new papers into a Microsoft Teams channel.">
-      {teams?.configured ? (
-        <div className="flex flex-col gap-3 text-sm">
-          <div>
-            Connected{host && (
-              <>
-                {" "}to <span className="font-medium">{host}</span>
-              </>
-            )}
-            {!teams.enabled && <span className="text-muted"> (paused)</span>}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => run("test", () => testTeamsIntegration(teamId), "Test card sent — check the channel.")}
-              disabled={busy !== null || !teams.enabled}
-            >
-              {busy === "test" ? "…" : "Send test card"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                teams.webhook_url &&
-                run("toggle", () => saveTeamsIntegration(teamId, teams.webhook_url as string, !teams.enabled))
-              }
-              disabled={busy !== null}
-            >
-              {busy === "toggle" ? "…" : teams.enabled ? "Pause" : "Resume"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-danger hover:text-danger"
-              onClick={() => run("rm", () => deleteTeamsIntegration(teamId), "Disconnected.")}
-              disabled={busy !== null}
-            >
-              {busy === "rm" ? "…" : "Disconnect"}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <form onSubmit={connect} className="flex flex-col gap-2">
-          <ol className="list-decimal pl-4 text-xs text-muted [&>li]:mt-0.5">
-            <li>
-              In Teams, open <span className="font-medium">Workflows</span> and create a flow from
-              the “Send webhook alerts to a channel” template.
-            </li>
-            <li>Pick the team and channel new papers should appear in.</li>
-            <li>Copy the webhook URL the flow generates and paste it here.</li>
-          </ol>
-          <Label htmlFor="teams-webhook">Webhook URL</Label>
-          <div className="flex gap-2">
-            <Input
-              id="teams-webhook"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://…logic.azure.com/workflows/…"
-            />
-            <Button type="submit" size="sm" disabled={busy === "save" || !url.trim()}>
-              {busy === "save" ? "…" : "Connect"}
-            </Button>
-          </div>
-        </form>
-      )}
+      {body}
       {notice && (
-        <p className={cn("mt-3 text-xs", notice.ok ? "text-muted" : "text-danger")}>
-          {notice.text}
-        </p>
+        <p className={cn("mt-3 text-xs", notice.ok ? "text-muted" : "text-danger")}>{notice.text}</p>
       )}
     </Panel>
   );
@@ -293,7 +291,7 @@ export function LabManagement({
         {err && <p className="mt-3 text-xs text-danger">{err}</p>}
       </Panel>
 
-      {isOwner && <TeamsPanel teamId={teamId} />}
+      {isOwner && <TeamsPanel key={teamId} teamId={teamId} />}
 
       <Panel title="Leave lab" desc="You’ll lose access to this lab’s papers and discussions.">
         {!leaving ? (

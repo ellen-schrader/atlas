@@ -20,13 +20,15 @@ GOOD_URL = "https://prod-1.westeurope.logic.azure.com/workflows/abc?sig=x"
 
 
 class _FakeQuery:
-    def __init__(self, data):
+    def __init__(self, data, eqs: dict):
         self._data = data
+        self._eqs = eqs
 
     def select(self, *a, **k):
         return self
 
-    def eq(self, *a, **k):
+    def eq(self, col, val):
+        self._eqs[col] = val
         return self
 
     def limit(self, *a, **k):
@@ -39,10 +41,12 @@ class _FakeQuery:
 class _FakeClient:
     def __init__(self, tables: dict):
         self._tables = tables
+        self.eqs: dict = {}
 
     def table(self, name):
         assert name in self._tables, f"unexpected query on table {name!r}"
-        return _FakeQuery(self._tables[name])
+        self.eqs[name] = {}
+        return _FakeQuery(self._tables[name], self.eqs[name])
 
 
 def test_all_endpoints_require_bearer_token():
@@ -53,20 +57,56 @@ def test_all_endpoints_require_bearer_token():
         ).status_code
         == 401
     )
+    assert (
+        client.patch(
+            "/integrations/teams", json={"team_id": "t", "enabled": False}
+        ).status_code
+        == 401
+    )
     assert client.delete("/integrations/teams", params={"team_id": "t"}).status_code == 401
     assert client.post("/integrations/teams/test", json={"team_id": "t"}).status_code == 401
 
 
 def test_get_reports_not_configured_when_rls_hides_the_row(monkeypatch):
     monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
-    monkeypatch.setattr(integ, "user_client", lambda t: _FakeClient({"team_integrations": []}))
-    resp = client.get("/integrations/teams", headers=AUTH, params={"team_id": "t"})
+    client_obj = _FakeClient({"team_integrations": []})
+    monkeypatch.setattr(integ, "user_client", lambda t: client_obj)
+    resp = client.get("/integrations/teams", headers=AUTH, params={"team_id": "abc"})
     assert resp.status_code == 200
     assert resp.json() == {
         "configured": False,
-        "webhook_url": None,
+        "host": None,
         "enabled": False,
         "updated_at": None,
+    }
+    # The read must be scoped to the requested team.
+    assert client_obj.eqs["team_integrations"] == {"team_id": "abc"}
+
+
+def test_get_never_returns_the_full_webhook_url(monkeypatch):
+    # The URL is a bearer secret — the client gets only the host.
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+    monkeypatch.setattr(
+        integ,
+        "user_client",
+        lambda t: _FakeClient(
+            {
+                "team_integrations": [
+                    {"webhook_url": GOOD_URL, "enabled": True, "updated_at": "2026-07-16T00:00:00Z"}
+                ]
+            }
+        ),
+    )
+    resp = client.get("/integrations/teams", headers=AUTH, params={"team_id": "t"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "webhook_url" not in body
+    assert GOOD_URL not in resp.text
+    assert body == {
+        "configured": True,
+        "host": "prod-1.westeurope.logic.azure.com",
+        "enabled": True,
+        "updated_at": "2026-07-16T00:00:00Z",
     }
 
 
@@ -108,9 +148,13 @@ def test_save_persists_the_normalized_url(monkeypatch):
         json={"team_id": "t", "webhook_url": "https://PROD-1.LOGIC.AZURE.COM/workflows/x"},
     )
     assert resp.status_code == 200
+    # The normalized (lowercased) URL is stored, but only the host comes back.
     assert saved["webhook_url"] == "https://prod-1.logic.azure.com/workflows/x"
     assert saved["enabled"] is True
     assert saved["created_by"] == "u1"
+    body = resp.json()
+    assert "webhook_url" not in body
+    assert body["host"] == "prod-1.logic.azure.com"
 
 
 def test_save_maps_rls_denial_to_403(monkeypatch):
@@ -132,6 +176,83 @@ def test_save_maps_rls_denial_to_403(monkeypatch):
         "/integrations/teams", headers=AUTH, json={"team_id": "t", "webhook_url": GOOD_URL}
     )
     assert resp.status_code == 403
+
+
+def test_save_maps_unexpected_db_error_to_500_not_400(monkeypatch):
+    # A non-RLS failure is a real server fault, not an input rejection — it must
+    # not masquerade as a 400 (which would tell the owner their URL was bad).
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+
+    class _Boom:
+        def upsert(self, row):
+            raise RuntimeError("connection reset")
+
+    class _Client:
+        def table(self, name):
+            return _Boom()
+
+    monkeypatch.setattr(integ, "user_client", lambda t: _Client())
+    resp = client.put(
+        "/integrations/teams", headers=AUTH, json={"team_id": "t", "webhook_url": GOOD_URL}
+    )
+    assert resp.status_code == 500
+
+
+def test_patch_toggles_enabled_without_sending_a_url(monkeypatch):
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+    captured: dict = {}
+
+    class _Updating:
+        def update(self, values):
+            captured["values"] = values
+            return self
+
+        def eq(self, col, val):
+            captured[col] = val
+            return self
+
+        def execute(self):
+            return types.SimpleNamespace(
+                data=[{"webhook_url": GOOD_URL, "enabled": False, "updated_at": None}]
+            )
+
+    class _Client:
+        def table(self, name):
+            assert name == "team_integrations"
+            return _Updating()
+
+    monkeypatch.setattr(integ, "user_client", lambda t: _Client())
+    resp = client.patch(
+        "/integrations/teams", headers=AUTH, json={"team_id": "t", "enabled": False}
+    )
+    assert resp.status_code == 200
+    assert captured["values"]["enabled"] is False
+    assert captured["team_id"] == "t"
+    assert resp.json()["enabled"] is False
+    assert resp.json()["host"] == "prod-1.westeurope.logic.azure.com"
+
+
+def test_patch_404_when_no_row_updated(monkeypatch):
+    # A non-owner (or missing row) updates nothing under RLS → not configured.
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+
+    class _Updating:
+        def update(self, values):
+            return self
+
+        def eq(self, col, val):
+            return self
+
+        def execute(self):
+            return types.SimpleNamespace(data=[])
+
+    class _Client:
+        def table(self, name):
+            return _Updating()
+
+    monkeypatch.setattr(integ, "user_client", lambda t: _Client())
+    resp = client.patch("/integrations/teams", headers=AUTH, json={"team_id": "t", "enabled": True})
+    assert resp.status_code == 404
 
 
 def test_test_endpoint_404_when_unconfigured_or_not_owner(monkeypatch):

@@ -6,9 +6,8 @@ webhook URL ("When a Teams webhook request is received" trigger — the
 sanctioned replacement for the retired O365 incoming webhooks).
 
 Configured per lab in the team_integrations table (Settings → Lab management,
-owner-only), with the operator-level TEAMS_WEBHOOK_URLS env map (team uuid →
-URL) as a fallback. Unconfigured labs are a silent no-op, and nothing in the
-notify path ever raises: posting to Teams must never break, slow, or roll
+owner-only). Unconfigured or disabled labs are a silent no-op, and nothing in
+the notify path ever raises: posting to Teams must never break, slow, or roll
 back an in-app post, so every entry point catches and logs.
 
 Security: the webhook URL is attacker-influencable data that the SERVER posts
@@ -27,7 +26,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from paper_radar.ingest import url_guard
 
-from .config import get_api_settings
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -75,18 +73,25 @@ def validate_webhook_url(url: str) -> str:
             "That doesn't look like a Power Automate webhook URL "
             "(expected a *.logic.azure.com or *.api.powerplatform.com address)."
         )
+    # Keep this validator strictly stronger than the team_integrations DB CHECK
+    # so a value it accepts can never be rejected by the constraint (which would
+    # surface as an opaque write error): the host must start alphanumeric and
+    # there must be a path. Power Automate URLs always satisfy both.
+    if not host[0].isalnum():
+        raise ValueError("That webhook host isn't valid.")
+    if not parts.path or parts.path == "/":
+        raise ValueError("That webhook URL is missing its path — copy the whole URL from Teams.")
     # Normalize: lowercase the host so the stored value satisfies the DB CHECK
     # (no userinfo is present — rejected above — so lowercasing netloc is safe).
     return urlunsplit(parts._replace(netloc=parts.netloc.lower()))
 
 
 def webhook_url_for_team(team_id: str) -> str | None:
-    """The lab's Workflows webhook URL, or None if not configured/disabled.
+    """The lab's Workflows webhook URL, or None if not configured or disabled.
 
-    The team_integrations row (owner-managed in Settings) wins; an explicitly
-    disabled row is OFF even if the env fallback maps the team. The env map
-    (TEAMS_WEBHOOK_URLS, keyed by team uuid) covers labs configured before the
-    table existed.
+    Single source of truth: the owner-managed team_integrations row. A disabled
+    row is OFF, and deleting it (Settings → Disconnect) stops posting — there is
+    deliberately no env-map fallback that could keep a "disconnected" lab live.
     """
     found = (
         service_client()
@@ -96,22 +101,10 @@ def webhook_url_for_team(team_id: str) -> str | None:
         .limit(1)
         .execute()
     )
-    if found.data:
-        row = found.data[0]
-        return row["webhook_url"] if row["enabled"] else None
-
-    raw = get_api_settings().teams_webhook_urls
-    if not raw:
+    if not found.data:
         return None
-    try:
-        urls = json.loads(raw)
-    except ValueError:
-        log.warning("TEAMS_WEBHOOK_URLS is not valid JSON; Teams posting disabled")
-        return None
-    if not isinstance(urls, dict):
-        log.warning("TEAMS_WEBHOOK_URLS must be a JSON object; Teams posting disabled")
-        return None
-    return urls.get(team_id) or None
+    row = found.data[0]
+    return row["webhook_url"] if row["enabled"] else None
 
 
 # TextBlock text renders a CommonMark subset (emphasis, links, lists), so any

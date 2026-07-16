@@ -5,8 +5,14 @@ caller's ``user_client``, and the ``team_integrations`` policies are owner-only
 on every verb — a non-owner sees "not configured" and writes zero rows. The
 service role is never used in this module.
 
-The webhook URL is an SSRF sink (the server POSTs to it), so a save validates
-it (``teams_integration.validate_webhook_url``) on top of the table's CHECK
+Secret handling: the webhook URL is a bearer capability (holding it lets you
+post cards into the channel). It only ever travels client → server (the owner
+pastes it once). It is NEVER returned to the browser — reads expose just the
+host — and toggling on/off goes through a URL-free ``PATCH`` so the capability
+stays server-side after the initial save.
+
+The URL is also an SSRF sink (the server POSTs to it), so a save validates it
+(``teams_integration.validate_webhook_url``) on top of the table's CHECK
 constraint, and the send path re-validates independently.
 """
 
@@ -14,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -29,7 +36,8 @@ router = APIRouter(prefix="/integrations/teams", tags=["integrations"])
 
 class TeamsIntegrationOut(BaseModel):
     configured: bool
-    webhook_url: str | None = None
+    # The webhook host only — never the full URL (that's a bearer capability).
+    host: str | None = None
     enabled: bool = False
     updated_at: str | None = None
 
@@ -38,6 +46,11 @@ class TeamsIntegrationSave(BaseModel):
     team_id: str
     webhook_url: str = Field(min_length=1, max_length=2048)
     enabled: bool = True
+
+
+class TeamsEnabledPatch(BaseModel):
+    team_id: str
+    enabled: bool
 
 
 class TeamsTestRequest(BaseModel):
@@ -65,26 +78,33 @@ def _integration_row(token: str, team_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
-@router.get("", response_model=TeamsIntegrationOut)
-def get_integration(team_id: str, token: str = Depends(require_token)) -> TeamsIntegrationOut:
-    """The lab's Teams connection. RLS-scoped: a non-owner sees 'not configured'."""
-    _require_user(token)
-    row = _integration_row(token, team_id)
+def _host(url: str | None) -> str | None:
+    return urlsplit(url).hostname if url else None
+
+
+def _out(row: dict | None) -> TeamsIntegrationOut:
     if row is None:
         return TeamsIntegrationOut(configured=False)
     return TeamsIntegrationOut(
         configured=True,
-        webhook_url=row["webhook_url"],
+        host=_host(row.get("webhook_url")),
         enabled=row["enabled"],
-        updated_at=row["updated_at"],
+        updated_at=row.get("updated_at"),
     )
+
+
+@router.get("", response_model=TeamsIntegrationOut)
+def get_integration(team_id: str, token: str = Depends(require_token)) -> TeamsIntegrationOut:
+    """The lab's Teams connection (host + status only). RLS hides it from non-owners."""
+    _require_user(token)
+    return _out(_integration_row(token, team_id))
 
 
 @router.put("", response_model=TeamsIntegrationOut)
 def save_integration(
     req: TeamsIntegrationSave, token: str = Depends(require_token)
 ) -> TeamsIntegrationOut:
-    """Create or update the lab's Teams connection (owners only, via RLS)."""
+    """Create or replace the lab's webhook (owners only, via RLS)."""
     user_id = _require_user(token)
     try:
         webhook_url = teams_integration.validate_webhook_url(req.webhook_url)
@@ -101,18 +121,33 @@ def save_integration(
     try:
         user_client(token).table("team_integrations").upsert(row).execute()
     except Exception as exc:
-        # RLS denial (not an owner) surfaces as 42501.
-        if getattr(exc, "code", None) == "42501":
-            raise HTTPException(
-                status_code=403, detail="Only a lab owner can manage the Teams connection"
-            ) from exc
-        log.warning("saving Teams integration for team %s failed: %s", req.team_id, exc)
-        raise HTTPException(
-            status_code=400, detail="Could not save the Teams connection"
-        ) from exc
-    return TeamsIntegrationOut(
-        configured=True, webhook_url=webhook_url, enabled=req.enabled, updated_at=row["updated_at"]
-    )
+        _reraise_write_error(exc, "save the Teams connection")
+    return _out(row)
+
+
+@router.patch("", response_model=TeamsIntegrationOut)
+def set_enabled(req: TeamsEnabledPatch, token: str = Depends(require_token)) -> TeamsIntegrationOut:
+    """Pause/resume without moving the secret: flip `enabled` on the existing row.
+
+    An UPDATE (not upsert) so it only touches a row the owner already has; a
+    non-owner or a missing row updates nothing (RLS), reported as not-configured.
+    """
+    _require_user(token)
+    try:
+        updated = (
+            user_client(token)
+            .table("team_integrations")
+            .update({"enabled": req.enabled, "updated_at": datetime.now(UTC).isoformat()})
+            .eq("team_id", req.team_id)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _reraise_write_error(exc, "update the Teams connection")
+    if not updated:
+        raise HTTPException(status_code=404, detail="No Teams connection is configured")
+    return _out(updated[0])
 
 
 @router.delete("", response_model=TeamsIntegrationOut)
@@ -128,7 +163,7 @@ def send_test_card(req: TeamsTestRequest, token: str = Depends(require_token)) -
     """Fire a sample card through the saved webhook so the owner sees it working.
 
     Reads the row as the caller, so RLS makes this owner-only; the URL is
-    re-validated before the server connects to it.
+    re-validated before the server connects to it, and never leaves the server.
     """
     _require_user(token)
     row = _integration_row(token, req.team_id)
@@ -154,3 +189,18 @@ def send_test_card(req: TeamsTestRequest, token: str = Depends(require_token)) -
             detail="Teams did not accept the card — check that the workflow still exists",
         )
     return {"ok": True}
+
+
+def _reraise_write_error(exc: Exception, action: str) -> None:
+    """Map an RLS denial to 403; let anything else surface as a real 500.
+
+    A CHECK-constraint violation can't reach here — validate_webhook_url is
+    strictly stronger than the DB CHECK — so a non-42501 error is a genuine
+    server/infra fault and must not masquerade as a 400 input rejection.
+    """
+    if getattr(exc, "code", None) == "42501":
+        raise HTTPException(
+            status_code=403, detail="Only a lab owner can manage the Teams connection"
+        ) from exc
+    log.error("could not %s: %s", action, exc)
+    raise HTTPException(status_code=500, detail=f"Could not {action}") from exc
