@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Crown, LogOut } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
@@ -9,6 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMembers } from "@/hooks/useMembers";
 import { useMyRole } from "@/hooks/useMyRole";
+import {
+  deleteTeamsIntegration,
+  getTeamsIntegration,
+  saveTeamsIntegration,
+  testTeamsIntegration,
+} from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +25,131 @@ function Panel({ title, desc, children }: { title: string; desc: string; childre
       <p className="mt-1 text-sm text-muted">{desc}</p>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+function hostOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** Owner-only: connect the lab to a Teams channel via a Power Automate webhook.
+ *  The webhook URL is write-only from a member's perspective (owner-only RLS) and
+ *  is validated server-side; this panel never posts to it directly — the test
+ *  card goes through the API so the URL stays server-side at send time. */
+function TeamsPanel({ teamId }: { teamId: string }) {
+  const qc = useQueryClient();
+  const { data: teams } = useQuery({
+    queryKey: ["teams-integration", teamId],
+    queryFn: () => getTeamsIntegration(teamId),
+  });
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function run(key: string, fn: () => Promise<unknown>, okText?: string) {
+    setBusy(key);
+    setNotice(null);
+    try {
+      await fn();
+      if (okText) setNotice({ ok: true, text: okText });
+      void qc.invalidateQueries({ queryKey: ["teams-integration", teamId] });
+      return true;
+    } catch (e) {
+      setNotice({ ok: false, text: e instanceof Error ? e.message : "Something went wrong." });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function connect(e: FormEvent) {
+    e.preventDefault();
+    if (
+      await run("save", () => saveTeamsIntegration(teamId, url.trim()), "Connected. Send a test card to confirm it works.")
+    )
+      setUrl("");
+  }
+
+  const host = hostOf(teams?.webhook_url ?? null);
+
+  return (
+    <Panel title="Post to Teams" desc="Mirror new papers into a Microsoft Teams channel.">
+      {teams?.configured ? (
+        <div className="flex flex-col gap-3 text-sm">
+          <div>
+            Connected{host && (
+              <>
+                {" "}to <span className="font-medium">{host}</span>
+              </>
+            )}
+            {!teams.enabled && <span className="text-muted"> (paused)</span>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => run("test", () => testTeamsIntegration(teamId), "Test card sent — check the channel.")}
+              disabled={busy !== null || !teams.enabled}
+            >
+              {busy === "test" ? "…" : "Send test card"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                teams.webhook_url &&
+                run("toggle", () => saveTeamsIntegration(teamId, teams.webhook_url as string, !teams.enabled))
+              }
+              disabled={busy !== null}
+            >
+              {busy === "toggle" ? "…" : teams.enabled ? "Pause" : "Resume"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-danger hover:text-danger"
+              onClick={() => run("rm", () => deleteTeamsIntegration(teamId), "Disconnected.")}
+              disabled={busy !== null}
+            >
+              {busy === "rm" ? "…" : "Disconnect"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={connect} className="flex flex-col gap-2">
+          <ol className="list-decimal pl-4 text-xs text-muted [&>li]:mt-0.5">
+            <li>
+              In Teams, open <span className="font-medium">Workflows</span> and create a flow from
+              the “Send webhook alerts to a channel” template.
+            </li>
+            <li>Pick the team and channel new papers should appear in.</li>
+            <li>Copy the webhook URL the flow generates and paste it here.</li>
+          </ol>
+          <Label htmlFor="teams-webhook">Webhook URL</Label>
+          <div className="flex gap-2">
+            <Input
+              id="teams-webhook"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…logic.azure.com/workflows/…"
+            />
+            <Button type="submit" size="sm" disabled={busy === "save" || !url.trim()}>
+              {busy === "save" ? "…" : "Connect"}
+            </Button>
+          </div>
+        </form>
+      )}
+      {notice && (
+        <p className={cn("mt-3 text-xs", notice.ok ? "text-muted" : "text-danger")}>
+          {notice.text}
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -161,6 +292,8 @@ export function LabManagement({
         </div>
         {err && <p className="mt-3 text-xs text-danger">{err}</p>}
       </Panel>
+
+      {isOwner && <TeamsPanel teamId={teamId} />}
 
       <Panel title="Leave lab" desc="You’ll lose access to this lab’s papers and discussions.">
         {!leaving ? (
