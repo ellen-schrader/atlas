@@ -10,7 +10,7 @@ Everything Microsoft-side uses features a regular Teams user / team owner can se
 ## Direction 1 — Atlas → Teams (post papers to the channel)
 
 ### Microsoft side (one-time, per channel, no code)
-Create a Workflow with the trigger **"When a Teams webhook request is received"** followed by **"Post card in a chat or channel"**. Saving it yields a unique webhook URL. Atlas POSTs JSON to that URL — no auth setup, no Graph. (The old O365 incoming webhooks are disabled May 18–22, 2026; this is the sanctioned replacement.)
+In Teams, create a Workflow from the **"Send webhook alerts to a channel"** template — its trigger is "When a Teams webhook request is received" and it posts each Adaptive Card in the payload's `attachments` to the chosen channel. Saving it yields a unique webhook URL. Atlas POSTs JSON to that URL — no auth setup, no Graph. (The old O365 incoming webhooks are disabled May 18–22, 2026; this is the sanctioned replacement.)
 
 ### Atlas side
 1. **New module `paper-radar/api/teams_integration.py`**

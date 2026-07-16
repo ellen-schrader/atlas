@@ -54,8 +54,9 @@ uv run python -m api.backfill_embeddings --all    # re-embed (model change)
 Outbound mirror (M1): labs mapped in `TEAMS_WEBHOOK_URLS` get an Adaptive Card
 in their Teams channel whenever a paper is posted from the web app.
 
-1. In Teams: Workflows → create a flow from the **"Post to a channel when a
-   webhook request is received"** template; copy the webhook URL it generates.
+1. In Teams: Workflows → create a flow from the **"Send webhook alerts to a
+   channel"** template (trigger: "When a Teams webhook request is received");
+   pick the team + channel, and copy the webhook URL it generates.
 2. Set `TEAMS_WEBHOOK_URLS={"<team uuid>": "<webhook url>"}` in `api/.env`
    (locally) or `fly secrets set` (deployed). Key by `public.teams.id`, not
    the slug — slugs rotate with the lab invite code.
