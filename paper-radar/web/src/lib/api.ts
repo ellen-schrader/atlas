@@ -310,3 +310,56 @@ export function bibtexImport(bibtex: string, teamId: string): Promise<ImportResu
     body: JSON.stringify({ team_id: teamId, bibtex }),
   });
 }
+
+// --- Teams integration -------------------------------------------------------
+
+export interface TeamsIntegration {
+  configured: boolean;
+  /** The webhook host only — the full URL is a bearer secret and never leaves the server. */
+  host: string | null;
+  enabled: boolean;
+  updated_at: string | null;
+}
+
+/** The lab's Teams connection (host + status). RLS-scoped: non-owners see "not configured". */
+export function getTeamsIntegration(teamId: string): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>(
+    `/integrations/teams?team_id=${encodeURIComponent(teamId)}`,
+  );
+}
+
+/** Connect (or replace) the lab's Teams webhook. The server validates the URL
+ *  against the Power Automate host allowlist and rejects anything else. */
+export function saveTeamsIntegration(
+  teamId: string,
+  webhookUrl: string,
+  enabled = true,
+): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>("/integrations/teams", {
+    method: "PUT",
+    body: JSON.stringify({ team_id: teamId, webhook_url: webhookUrl, enabled }),
+  });
+}
+
+/** Pause/resume without moving the secret — flips `enabled` on the stored row. */
+export function setTeamsEnabled(teamId: string, enabled: boolean): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>("/integrations/teams", {
+    method: "PATCH",
+    body: JSON.stringify({ team_id: teamId, enabled }),
+  });
+}
+
+export function deleteTeamsIntegration(teamId: string): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>(
+    `/integrations/teams?team_id=${encodeURIComponent(teamId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** Fire a sample card through the saved webhook so the owner sees it working. */
+export function testTeamsIntegration(teamId: string): Promise<{ ok: boolean }> {
+  return authedRequest<{ ok: boolean }>("/integrations/teams/test", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId }),
+  });
+}

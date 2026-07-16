@@ -54,15 +54,26 @@ uv run python -m api.backfill_embeddings --all    # re-embed (model change)
 
 ## Teams integration (see `../../docs/teams-integration-plan.md`)
 
-Outbound mirror (M1): labs mapped in `TEAMS_WEBHOOK_URLS` get an Adaptive Card
-in their Teams channel whenever a paper is posted from the web app.
+Outbound mirror: connected labs get an Adaptive Card in their Teams channel
+whenever a paper is posted from the web app.
 
-1. In Teams: Workflows → create a flow from the **"Send webhook alerts to a
-   channel"** template (trigger: "When a Teams webhook request is received");
-   pick the team + channel, and copy the webhook URL it generates.
-2. Set `TEAMS_WEBHOOK_URLS={"<team uuid>": "<webhook url>"}` in `api/.env`
-   (locally) or `fly secrets set` (deployed). Key by `public.teams.id`, not
-   the slug — slugs rotate with the lab invite code.
+Lab owners connect it themselves in **Settings → Post to Teams**: create a flow
+in Teams from the **"Send webhook alerts to a channel"** template (trigger:
+"When a Teams webhook request is received"), pick the channel, and paste the
+generated webhook URL. It's stored in `team_integrations` (owner-only RLS, one
+row per lab) — the single source of truth; there is no env-var config, so
+disconnecting in the UI actually stops posting.
+
+Security posture (the webhook URL is a bearer capability the *server* POSTs to —
+both a secret and an SSRF sink):
+- **Never leaves the server after save.** The API returns only the host; the
+  browser never sees the full URL. Pause/resume is a URL-free `PATCH`.
+- **Validated on save and again on send:** `url_guard` SSRF screen + https +
+  default port + no credentials + `*.logic.azure.com` / `*.api.powerplatform.com`
+  host allowlist. The save-time validator is strictly stronger than the DB CHECK
+  constraint, which independently guards direct PostgREST writes.
+- **The POST never follows redirects** — a webhook that 3xx's at internal infra
+  fails instead of being fetched.
 
 Posting is fire-and-forget from `create_post` background tasks — an unreachable
 webhook is logged and never fails the in-app post.
