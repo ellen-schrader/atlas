@@ -222,8 +222,8 @@ def test_card_long_abstract_collapses_with_show_more_link():
     more, less = blocks["abstract-more"], blocks["abstract-less"]
     assert more["type"] == "Container" and "actions" not in more
     assert more.get("isVisible", True) is True
-    assert more["items"][0]["text"] == "Show more" and more["items"][0]["color"] == "Accent"
-    assert less["isVisible"] is False and less["items"][0]["text"] == "Show less"
+    assert more["items"][0]["text"] == "Show more ▾" and more["items"][0]["color"] == "Accent"
+    assert less["isVisible"] is False and less["items"][0]["text"] == "Show less ▴"
     button_titles = [a["title"] for a in card.get("actions", [])]
     assert "Show more" not in button_titles and "Show less" not in button_titles
 

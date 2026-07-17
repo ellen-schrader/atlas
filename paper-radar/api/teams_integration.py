@@ -176,7 +176,9 @@ def _abstract_blocks(abstract: str) -> list[dict]:
             "items": [
                 {
                     "type": "TextBlock",
-                    "text": "Show more" if is_more else "Show less",
+                    # The chevron signals the accent text is a tappable expander,
+                    # not just coloured prose (▾ expand / ▴ collapse).
+                    "text": "Show more ▾" if is_more else "Show less ▴",
                     "color": "Accent",
                     "wrap": True,
                 }
