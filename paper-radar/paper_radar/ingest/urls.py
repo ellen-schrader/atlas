@@ -8,10 +8,26 @@ PyMuPDF — and its licence — out of everything but the Teams-PDF importer.
 
 from __future__ import annotations
 
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import html
+import re
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Trailing characters that are almost never part of the real URL.
 _TRAILING_JUNK = ".,);:]}>”’'\""
+
+# Hosts that are never a paper — skip before doing a (slow) metadata lookup.
+# Shared by the Teams-PDF importer and the live channel ingest path.
+_SKIP_HOSTS = (
+    "x.com",
+    "twitter.com",
+    "github.com",
+    "huggingface.co",
+    "linkedin.com",
+    "youtube.com",
+    "youtu.be",
+    "teams.cloud.microsoft",
+    "teams.microsoft.com",
+)
 
 # Query params that are pure tracking/analytics noise: dropping them (plus any
 # "utm_*") lets the same paper shared with and without a tracker dedupe to one.
@@ -61,3 +77,45 @@ def _normalize_key(url: str) -> str:
     kept.sort()
     path = parts.path.rstrip("/")
     return urlunsplit(("", host, path, urlencode(kept), ""))
+
+
+def is_skip_host(url: str) -> bool:
+    """True for a URL whose host is never a paper (social/code/Teams itself)."""
+    host = urlsplit(url).netloc.lower().removeprefix("www.")
+    return any(h in host for h in _SKIP_HOSTS)
+
+
+# URLs in freeform message text: http(s) up to whitespace/quote/angle-bracket.
+# A trailing ')' or '.' from surrounding prose is trimmed by _clean_url.
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _unwrap_safelink(url: str) -> str:
+    """Outlook SafeLinks wrap the real URL in a ``?url=`` param — return the target."""
+    parts = urlsplit(url)
+    if parts.netloc.lower().endswith("safelinks.protection.outlook.com"):
+        target = parse_qs(parts.query).get("url", [None])[0]
+        if target:
+            return target
+    return url
+
+
+def extract_urls_from_text(text: str | None) -> list[str]:
+    """Every http(s) URL in a blob of text, cleaned and de-duped in order.
+
+    Strips HTML tags (Teams messages carry ``<at>`` mention markup and may be
+    HTML), unescapes entities, and unwraps Outlook SafeLinks. This is the live
+    channel-ingest counterpart to ``pdf_extract.extract_urls_from_dir``.
+    """
+    if not text:
+        return []
+    text = html.unescape(_TAG_RE.sub(" ", text))
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _URL_RE.findall(text):
+        url = _clean_url(_unwrap_safelink(_clean_url(match)))
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
