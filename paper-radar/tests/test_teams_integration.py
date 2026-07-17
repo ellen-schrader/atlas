@@ -204,7 +204,7 @@ def test_card_short_abstract_shown_whole_without_toggle():
     assert _by_id(card) == {}
 
 
-def test_card_long_abstract_collapses_with_show_more_toggle():
+def test_card_long_abstract_collapses_with_show_more_link():
     long_abstract = " ".join(f"word{i}" for i in range(400))  # well over the preview limit
     card = teams_integration.build_paper_card(
         url="https://example.org/p", title="T", abstract=long_abstract
@@ -217,13 +217,18 @@ def test_card_long_abstract_collapses_with_show_more_toggle():
     assert full["isVisible"] is False
     assert full["text"] == teams_integration._md_escape(long_abstract)  # nothing cut off
 
-    # "Show more" is shown, "Show less" starts hidden.
+    # The toggle is a link, not a button: a Container with a selectAction, and
+    # accent-coloured text — so it never shows up among the card's action buttons.
     more, less = blocks["abstract-more"], blocks["abstract-less"]
-    assert more.get("isVisible", True) is True and more["actions"][0]["title"] == "Show more"
-    assert less["isVisible"] is False and less["actions"][0]["title"] == "Show less"
+    assert more["type"] == "Container" and "actions" not in more
+    assert more.get("isVisible", True) is True
+    assert more["items"][0]["text"] == "Show more ▾" and more["items"][0]["color"] == "Accent"
+    assert less["isVisible"] is False and less["items"][0]["text"] == "Show less ▴"
+    button_titles = [a["title"] for a in card.get("actions", [])]
+    assert "Show more" not in button_titles and "Show less" not in button_titles
 
     # "Show more" expands: reveal full + less, hide preview + more.
-    targets = {t["elementId"]: t["isVisible"] for t in more["actions"][0]["targetElements"]}
+    targets = {t["elementId"]: t["isVisible"] for t in more["selectAction"]["targetElements"]}
     assert targets == {
         "abstract-preview": False,
         "abstract-full": True,
@@ -231,7 +236,7 @@ def test_card_long_abstract_collapses_with_show_more_toggle():
         "abstract-less": True,
     }
     # "Show less" is the exact inverse.
-    inv = {t["elementId"]: t["isVisible"] for t in less["actions"][0]["targetElements"]}
+    inv = {t["elementId"]: t["isVisible"] for t in less["selectAction"]["targetElements"]}
     assert inv == {k: (not v) for k, v in targets.items()}
 
 

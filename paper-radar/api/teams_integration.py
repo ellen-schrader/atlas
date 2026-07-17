@@ -138,10 +138,12 @@ def _abstract_blocks(abstract: str) -> list[dict]:
     """Body elements for the abstract.
 
     Short abstracts render whole. A longer one shows a truncated preview plus a
-    "Show more" toggle (Action.ToggleVisibility) that swaps the preview for the
-    full text in place and offers "Show less" to re-collapse — no cut-off, no
-    popup. Element ids are card-local, so the fixed names don't collide (each
-    posted card is its own message).
+    "Show more" affordance that swaps the preview for the full text in place and
+    offers "Show less" to re-collapse — no cut-off, no popup. The affordance is a
+    link (accent-coloured text in a container whose selectAction toggles the
+    visibility), not a button, so it doesn't add button chrome to the card.
+    Element ids are card-local, so the fixed names don't collide (each posted
+    card is its own message).
     """
     full = abstract.strip()
     common = {"type": "TextBlock", "wrap": True, "spacing": "Medium"}
@@ -150,26 +152,35 @@ def _abstract_blocks(abstract: str) -> list[dict]:
 
     preview = _md_escape(_truncate(full, _ABSTRACT_PREVIEW_CHARS))
 
-    def _toggle(is_more: bool) -> dict:
-        # The "Show more" button is shown first and expands; "Show less" starts
-        # hidden and collapses. `expand` is the state clicking this button moves
-        # to, so both actions set the same four ids to consistent visibilities.
+    def _link(is_more: bool) -> dict:
+        # "Show more" is shown first and expands; "Show less" starts hidden and
+        # collapses. `expand` is the state a tap moves to, so both set the same
+        # four ids to consistent visibilities. selectAction on the container
+        # renders as a plain click target (no button), and the accent colour
+        # makes the text read as a link.
         expand = is_more
         return {
-            "type": "ActionSet",
+            "type": "Container",
             "id": "abstract-more" if is_more else "abstract-less",
-            "spacing": "None",
             "isVisible": is_more,
-            "actions": [
+            "spacing": "Small",
+            "selectAction": {
+                "type": "Action.ToggleVisibility",
+                "targetElements": [
+                    {"elementId": "abstract-preview", "isVisible": not expand},
+                    {"elementId": "abstract-full", "isVisible": expand},
+                    {"elementId": "abstract-more", "isVisible": not expand},
+                    {"elementId": "abstract-less", "isVisible": expand},
+                ],
+            },
+            "items": [
                 {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show more" if is_more else "Show less",
-                    "targetElements": [
-                        {"elementId": "abstract-preview", "isVisible": not expand},
-                        {"elementId": "abstract-full", "isVisible": expand},
-                        {"elementId": "abstract-more", "isVisible": not expand},
-                        {"elementId": "abstract-less", "isVisible": expand},
-                    ],
+                    "type": "TextBlock",
+                    # The chevron signals the accent text is a tappable expander,
+                    # not just coloured prose (▾ expand / ▴ collapse).
+                    "text": "Show more ▾" if is_more else "Show less ▴",
+                    "color": "Accent",
+                    "wrap": True,
                 }
             ],
         }
@@ -177,8 +188,8 @@ def _abstract_blocks(abstract: str) -> list[dict]:
     return [
         {**common, "id": "abstract-preview", "text": preview},
         {**common, "id": "abstract-full", "text": _md_escape(full), "isVisible": False},
-        _toggle(is_more=True),
-        _toggle(is_more=False),
+        _link(is_more=True),
+        _link(is_more=False),
     ]
 
 
