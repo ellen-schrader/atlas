@@ -10,10 +10,13 @@ import { Label } from "@/components/ui/label";
 import { useMembers } from "@/hooks/useMembers";
 import { useMyRole } from "@/hooks/useMyRole";
 import {
+  deleteTeamsInboundSecret,
   deleteTeamsIntegration,
   getTeamsIntegration,
+  saveTeamsInboundSecret,
   saveTeamsIntegration,
   setTeamsEnabled,
+  teamsInboundUrl,
   testTeamsIntegration,
 } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -40,6 +43,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
     queryFn: () => getTeamsIntegration(teamId),
   });
   const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -65,6 +69,20 @@ function TeamsPanel({ teamId }: { teamId: string }) {
     if (!value || busy !== null) return; // Enter can fire past a disabled button
     if (await run("save", () => saveTeamsIntegration(teamId, value), "Connected. Send a test card to confirm it works."))
       setUrl("");
+  }
+
+  async function connectInbound(e: FormEvent) {
+    e.preventDefault();
+    const value = token.trim();
+    if (!value || busy !== null) return;
+    if (
+      await run(
+        "inbound-save",
+        () => saveTeamsInboundSecret(teamId, value),
+        "Inbound on — @Atlas a paper link in the channel to add it.",
+      )
+    )
+      setToken("");
   }
 
   let body: ReactNode;
@@ -111,6 +129,57 @@ function TeamsPanel({ teamId }: { teamId: string }) {
           >
             {busy === "rm" ? "…" : "Disconnect"}
           </Button>
+        </div>
+
+        <div className="mt-1 border-t border-border pt-3">
+          <div className="font-medium">Pull papers from Teams</div>
+          {teams.inbound_configured ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-muted">
+              <span>
+                On — post <span className="font-mono text-foreground">@Atlas &lt;link&gt;</span> in the
+                channel to add a paper.
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-danger hover:text-danger"
+                onClick={() =>
+                  run("inbound-rm", () => deleteTeamsInboundSecret(teamId), "Inbound turned off.")
+                }
+                disabled={busy !== null}
+              >
+                {busy === "inbound-rm" ? "…" : "Turn off"}
+              </Button>
+            </div>
+          ) : (
+            <form onSubmit={connectInbound} className="mt-1.5 flex flex-col gap-2">
+              <ol className="list-decimal pl-4 text-xs text-muted [&>li]:mt-0.5">
+                <li>
+                  In Teams: <span className="font-medium">Team → Manage team → Apps → Create an
+                  outgoing webhook</span>, name it “Atlas”.
+                </li>
+                <li>
+                  Set its callback URL to:
+                  <code className="mt-1 block overflow-x-auto rounded bg-surface-2 px-2 py-1 text-[11px] text-foreground">
+                    {teamsInboundUrl(teamId)}
+                  </code>
+                </li>
+                <li>Paste the security token Teams shows you here.</li>
+              </ol>
+              <Label htmlFor="teams-token">Security token</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="teams-token"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="base64 token from Teams"
+                />
+                <Button type="submit" size="sm" disabled={busy === "inbound-save" || !token.trim()}>
+                  {busy === "inbound-save" ? "…" : "Enable"}
+                </Button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
     );

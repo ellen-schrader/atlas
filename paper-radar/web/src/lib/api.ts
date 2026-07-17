@@ -318,7 +318,15 @@ export interface TeamsIntegration {
   /** The webhook host only — the full URL is a bearer secret and never leaves the server. */
   host: string | null;
   enabled: boolean;
+  /** Whether inbound (@Atlas → Atlas) is set up. The token itself never leaves the server. */
+  inbound_configured: boolean;
   updated_at: string | null;
+}
+
+/** The public URL a lab pastes into its Teams Outgoing Webhook so `@Atlas <link>`
+ *  reaches this API. The team id is not a secret — the HMAC token is the gate. */
+export function teamsInboundUrl(teamId: string): string {
+  return `${API_URL}/integrations/teams/inbound/${encodeURIComponent(teamId)}`;
 }
 
 /** The lab's Teams connection (host + status). RLS-scoped: non-owners see "not configured". */
@@ -362,4 +370,21 @@ export function testTeamsIntegration(teamId: string): Promise<{ ok: boolean }> {
     method: "POST",
     body: JSON.stringify({ team_id: teamId }),
   });
+}
+
+/** Store the inbound (Outgoing Webhook) HMAC token so `@Atlas <link>` imports
+ *  papers. Write-only — the token is validated as base64 and never returned. */
+export function saveTeamsInboundSecret(teamId: string, secret: string): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>("/integrations/teams/inbound", {
+    method: "PUT",
+    body: JSON.stringify({ team_id: teamId, secret }),
+  });
+}
+
+/** Turn off inbound ingestion by clearing the stored token. */
+export function deleteTeamsInboundSecret(teamId: string): Promise<TeamsIntegration> {
+  return authedRequest<TeamsIntegration>(
+    `/integrations/teams/inbound?team_id=${encodeURIComponent(teamId)}`,
+    { method: "DELETE" },
+  );
 }
