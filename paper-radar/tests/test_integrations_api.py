@@ -58,9 +58,7 @@ def test_all_endpoints_require_bearer_token():
         == 401
     )
     assert (
-        client.patch(
-            "/integrations/teams", json={"team_id": "t", "enabled": False}
-        ).status_code
+        client.patch("/integrations/teams", json={"team_id": "t", "enabled": False}).status_code
         == 401
     )
     assert client.delete("/integrations/teams", params={"team_id": "t"}).status_code == 401
@@ -77,6 +75,7 @@ def test_get_reports_not_configured_when_rls_hides_the_row(monkeypatch):
         "configured": False,
         "host": None,
         "enabled": False,
+        "inbound_configured": False,
         "updated_at": None,
     }
     # The read must be scoped to the requested team.
@@ -106,6 +105,7 @@ def test_get_never_returns_the_full_webhook_url(monkeypatch):
         "configured": True,
         "host": "prod-1.westeurope.logic.azure.com",
         "enabled": True,
+        "inbound_configured": False,
         "updated_at": "2026-07-16T00:00:00Z",
     }
 
@@ -300,12 +300,193 @@ def test_test_endpoint_refuses_disabled_connection(monkeypatch):
         integ,
         "user_client",
         lambda t: _FakeClient(
-            {
-                "team_integrations": [
-                    {"webhook_url": GOOD_URL, "enabled": False, "updated_at": None}
-                ]
-            }
+            {"team_integrations": [{"webhook_url": GOOD_URL, "enabled": False, "updated_at": None}]}
         ),
     )
     resp = client.post("/integrations/teams/test", headers=AUTH, json={"team_id": "t"})
     assert resp.status_code == 400
+
+
+# === inbound endpoints =======================================================
+
+import base64  # noqa: E402
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import json  # noqa: E402
+
+from api import teams_integration  # noqa: E402
+
+_TOKEN = base64.b64encode(b"inbound-token-bytes-least-32-chars!!").decode()
+
+
+def _sign(body: bytes) -> str:
+    key = base64.b64decode(_TOKEN)
+    return "HMAC " + base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
+
+
+# --- inbound secret management (owner-only) ---
+
+
+def test_save_inbound_secret_requires_bearer_token():
+    assert (
+        client.put(
+            "/integrations/teams/inbound", json={"team_id": "t", "secret": _TOKEN}
+        ).status_code
+        == 401
+    )
+
+
+def test_save_inbound_secret_rejects_non_base64_before_write(monkeypatch):
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+    monkeypatch.setattr(integ, "user_client", lambda t: pytest.fail("no DB write on invalid token"))
+    resp = client.put(
+        "/integrations/teams/inbound", headers=AUTH, json={"team_id": "t", "secret": "not base64!!"}
+    )
+    assert resp.status_code == 400
+
+
+def test_save_inbound_secret_404_when_no_row(monkeypatch):
+    # Outbound must be connected first; a missing row (or non-owner) updates nothing.
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+
+    class _Client:
+        def table(self, name):
+            class _U:
+                def update(self, v):
+                    return self
+
+                def eq(self, *a):
+                    return self
+
+                def execute(self):
+                    return types.SimpleNamespace(data=[])
+
+            return _U()
+
+    monkeypatch.setattr(integ, "user_client", lambda t: _Client())
+    resp = client.put(
+        "/integrations/teams/inbound", headers=AUTH, json={"team_id": "t", "secret": _TOKEN}
+    )
+    assert resp.status_code == 404
+
+
+def test_save_inbound_secret_never_returns_it(monkeypatch):
+    monkeypatch.setattr(integ, "get_user_id", lambda t: "u1")
+
+    class _Client:
+        def table(self, name):
+            class _U:
+                def update(self, v):
+                    return self
+
+                def eq(self, *a):
+                    return self
+
+                def execute(self):
+                    return types.SimpleNamespace(
+                        data=[
+                            {
+                                "webhook_url": GOOD_URL,
+                                "enabled": True,
+                                "inbound_secret": _TOKEN,
+                                "updated_at": None,
+                            }
+                        ]
+                    )
+
+            return _U()
+
+    monkeypatch.setattr(integ, "user_client", lambda t: _Client())
+    resp = client.put(
+        "/integrations/teams/inbound", headers=AUTH, json={"team_id": "t", "secret": _TOKEN}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["inbound_configured"] is True
+    assert _TOKEN not in resp.text and "inbound_secret" not in body
+
+
+# --- the public webhook endpoint (HMAC-gated) ---
+
+
+def test_inbound_webhook_404_when_not_configured(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: None)
+    resp = client.post("/integrations/teams/inbound/t1", content=b"{}")
+    assert resp.status_code == 404
+
+
+def test_inbound_webhook_401_on_bad_signature(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    body = json.dumps({"text": "@Atlas https://arxiv.org/abs/1"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": "HMAC wrong"}
+    )
+    assert resp.status_code == 401
+
+
+def test_inbound_webhook_401_when_signature_missing(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    resp = client.post("/integrations/teams/inbound/t1", content=b'{"text":"hi"}')
+    assert resp.status_code == 401
+
+
+def test_inbound_webhook_new_paper_schedules_import_and_acks(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda team_id, text: teams_integration.InboundPlan("new", url="https://arxiv.org/abs/1"),
+    )
+    scheduled = {}
+    monkeypatch.setattr(
+        teams_integration,
+        "import_paper_background",
+        lambda team_id, url, sender: scheduled.update(team_id=team_id, url=url, sender=sender),
+    )
+    body = json.dumps(
+        {"text": "@Atlas https://arxiv.org/abs/1", "from": {"name": "Ellen"}}
+    ).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "message" and "Adding" in resp.json()["text"]
+    # The signed sender is passed through for attribution.
+    assert scheduled == {"team_id": "t1", "url": "https://arxiv.org/abs/1", "sender": "Ellen"}
+
+
+def test_inbound_webhook_already_in_lab_does_not_schedule(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda team_id, text: teams_integration.InboundPlan(
+            "already", url="https://arxiv.org/abs/1"
+        ),
+    )
+    monkeypatch.setattr(
+        teams_integration,
+        "import_paper_background",
+        lambda *a: pytest.fail("must not re-import an existing paper"),
+    )
+    body = json.dumps({"text": "@Atlas https://arxiv.org/abs/1"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert "already" in resp.json()["text"].lower()
+
+
+def test_inbound_webhook_no_link_replies_with_hint(monkeypatch):
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda team_id, text: teams_integration.InboundPlan("no_url"),
+    )
+    body = json.dumps({"text": "hey @Atlas how are you"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert "couldn't find" in resp.json()["text"].lower()

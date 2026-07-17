@@ -105,9 +105,7 @@ def test_validate_rejects_unsafe_urls(url):
 
 def test_redirects_are_never_followed():
     handler = teams_integration._NoRedirect()
-    assert (
-        handler.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/") is None
-    )
+    assert handler.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/") is None
 
 
 # --- webhook_url_for_team ----------------------------------------------------
@@ -449,3 +447,96 @@ def test_notify_never_raises(monkeypatch):
 
     monkeypatch.setattr(teams_integration, "service_client", boom)
     teams_integration.notify_paper_posted("t1", url="https://example.org/p")
+
+
+# === inbound (Teams → Atlas) =================================================
+
+import base64  # noqa: E402
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+
+_TOKEN = base64.b64encode(b"a-real-teams-security-token-32bytes!").decode()
+
+
+def _sign(token: str, body: bytes) -> str:
+    key = base64.b64decode(token)
+    return "HMAC " + base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
+
+
+def test_verify_signature_accepts_a_correct_hmac():
+    body = b'{"text":"@Atlas https://arxiv.org/abs/1"}'
+    assert teams_integration.verify_teams_signature(_TOKEN, body, _sign(_TOKEN, body)) is True
+
+
+def test_verify_signature_rejects_tamper_missing_and_wrong_scheme():
+    body = b'{"text":"x"}'
+    good = _sign(_TOKEN, body)
+    assert teams_integration.verify_teams_signature(_TOKEN, body + b"!", good) is False  # tampered
+    assert teams_integration.verify_teams_signature(_TOKEN, body, None) is False  # no header
+    assert teams_integration.verify_teams_signature(_TOKEN, body, good[5:]) is False  # no "HMAC "
+    assert teams_integration.verify_teams_signature(_TOKEN, body, "HMAC not-base64") is False
+    # A different key must not validate.
+    other = base64.b64encode(b"some-other-key-entirely-here-32b!!").decode()
+    assert teams_integration.verify_teams_signature(other, body, good) is False
+
+
+def test_verify_signature_rejects_undecodable_stored_token():
+    body = b"x"
+    assert teams_integration.verify_teams_signature("not base64!!", body, "HMAC AAAA") is False
+
+
+def test_normalize_inbound_secret():
+    assert teams_integration.normalize_inbound_secret(f"  {_TOKEN}  ") == _TOKEN
+    for bad in ["", "   ", "not base64!!", "a" * 2000]:
+        with pytest.raises(ValueError):
+            teams_integration.normalize_inbound_secret(bad)
+
+
+def test_plan_no_url_never_touches_the_db(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "service_client", lambda: pytest.fail("no DB call without a link")
+    )
+    assert teams_integration.plan_inbound_import("t1", "just chatting, no links").status == "no_url"
+
+
+def test_plan_skips_non_paper_hosts(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "service_client", lambda: pytest.fail("github is a skip-host")
+    )
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://github.com/a/b")
+    assert plan.status == "no_url"
+
+
+def test_plan_new_when_paper_not_in_lab(monkeypatch):
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
+    assert plan.status == "new" and plan.url == "https://arxiv.org/abs/2401.01234"
+
+
+def test_plan_new_when_paper_exists_but_not_posted_here(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"papers": [{"id": "p1"}], "paper_posts": []}),
+    )
+    assert teams_integration.plan_inbound_import("t1", "https://arxiv.org/abs/1").status == "new"
+
+
+def test_plan_already_when_posted_to_this_team(monkeypatch):
+    client = _FakeClient({"papers": [{"id": "p1"}], "paper_posts": [{"id": "pp1"}]})
+    monkeypatch.setattr(teams_integration, "service_client", lambda: client)
+    plan = teams_integration.plan_inbound_import("t1", "https://arxiv.org/abs/1")
+    assert plan.status == "already"
+    # The dedup lookup is scoped to this team, not global.
+    assert client.eqs["paper_posts"]["team_id"] == "t1"
+
+
+def test_inbound_secret_for_team(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"team_integrations": [{"inbound_secret": _TOKEN}]}),
+    )
+    assert teams_integration.inbound_secret_for_team("t1") == _TOKEN
+    monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
+    assert teams_integration.inbound_secret_for_team("t1") is None
