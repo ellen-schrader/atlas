@@ -570,10 +570,12 @@ def create_post(
             teams_integration.notify_paper_posted,
             req.team_id,
             url=url,
+            paper_id=paper_id,
             title=meta.title,
             authors=meta.authors,
             venue=meta.venue,
             year=meta.year,
+            abstract=meta.abstract,
             note=req.note,
             posted_by_id=user_id,
         )
