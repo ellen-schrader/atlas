@@ -191,19 +191,48 @@ def test_card_minimal_falls_back_to_url_header_and_generic_footer():
     assert len(texts) == 2  # header + footer only
 
 
-def test_card_abstract_is_truncated_on_a_word_boundary():
-    long_abstract = " ".join(f"word{i}" for i in range(400))  # distinct tokens
+def _by_id(card):
+    return {b["id"]: b for b in card["body"] if "id" in b}
+
+
+def test_card_short_abstract_shown_whole_without_toggle():
+    card = teams_integration.build_paper_card(
+        url="https://example.org/p", title="T", abstract="A brief abstract."
+    )
+    assert "A brief abstract." in [b.get("text") for b in card["body"]]
+    # No preview/toggle machinery for a short abstract.
+    assert _by_id(card) == {}
+
+
+def test_card_long_abstract_collapses_with_show_more_toggle():
+    long_abstract = " ".join(f"word{i}" for i in range(400))  # well over the preview limit
     card = teams_integration.build_paper_card(
         url="https://example.org/p", title="T", abstract=long_abstract
     )
-    abstract_block = card["body"][1]["text"]
-    assert abstract_block.endswith("…")
-    assert len(abstract_block) <= teams_integration._ABSTRACT_CHARS + 1
-    shown = abstract_block[:-1]  # drop the ellipsis
-    # The kept text is a real prefix of the abstract, cut exactly at a space —
-    # i.e. no token was split mid-word.
-    assert long_abstract.startswith(shown)
-    assert long_abstract[len(shown)] == " "
+    blocks = _by_id(card)
+    # Preview visible + truncated; full hidden + complete.
+    preview, full = blocks["abstract-preview"], blocks["abstract-full"]
+    assert preview.get("isVisible", True) is True and preview["text"].endswith("…")
+    assert len(preview["text"]) <= teams_integration._ABSTRACT_PREVIEW_CHARS + 1
+    assert full["isVisible"] is False
+    assert full["text"] == teams_integration._md_escape(long_abstract)  # nothing cut off
+
+    # "Show more" is shown, "Show less" starts hidden.
+    more, less = blocks["abstract-more"], blocks["abstract-less"]
+    assert more.get("isVisible", True) is True and more["actions"][0]["title"] == "Show more"
+    assert less["isVisible"] is False and less["actions"][0]["title"] == "Show less"
+
+    # "Show more" expands: reveal full + less, hide preview + more.
+    targets = {t["elementId"]: t["isVisible"] for t in more["actions"][0]["targetElements"]}
+    assert targets == {
+        "abstract-preview": False,
+        "abstract-full": True,
+        "abstract-more": False,
+        "abstract-less": True,
+    }
+    # "Show less" is the exact inverse.
+    inv = {t["elementId"]: t["isVisible"] for t in less["actions"][0]["targetElements"]}
+    assert inv == {k: (not v) for k, v in targets.items()}
 
 
 def test_card_escapes_markdown_in_title():

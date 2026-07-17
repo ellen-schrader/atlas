@@ -121,8 +121,9 @@ def _md_escape(text: str) -> str:
     return text
 
 
-# Abstracts can be a page long; a channel card wants a preview, not the paper.
-_ABSTRACT_CHARS = 600
+# Abstracts can be a page long. The card shows a short teaser and, when the full
+# text is longer, a "Show more" toggle that reveals it in place — no truncation.
+_ABSTRACT_PREVIEW_CHARS = 240
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -131,6 +132,54 @@ def _truncate(text: str, limit: int) -> str:
         return text
     # Cut on a word boundary so the ellipsis doesn't land mid-word.
     return text[:limit].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+def _abstract_blocks(abstract: str) -> list[dict]:
+    """Body elements for the abstract.
+
+    Short abstracts render whole. A longer one shows a truncated preview plus a
+    "Show more" toggle (Action.ToggleVisibility) that swaps the preview for the
+    full text in place and offers "Show less" to re-collapse — no cut-off, no
+    popup. Element ids are card-local, so the fixed names don't collide (each
+    posted card is its own message).
+    """
+    full = abstract.strip()
+    common = {"type": "TextBlock", "wrap": True, "spacing": "Medium"}
+    if len(full) <= _ABSTRACT_PREVIEW_CHARS:
+        return [{**common, "text": _md_escape(full)}]
+
+    preview = _md_escape(_truncate(full, _ABSTRACT_PREVIEW_CHARS))
+
+    def _toggle(is_more: bool) -> dict:
+        # The "Show more" button is shown first and expands; "Show less" starts
+        # hidden and collapses. `expand` is the state clicking this button moves
+        # to, so both actions set the same four ids to consistent visibilities.
+        expand = is_more
+        return {
+            "type": "ActionSet",
+            "id": "abstract-more" if is_more else "abstract-less",
+            "spacing": "None",
+            "isVisible": is_more,
+            "actions": [
+                {
+                    "type": "Action.ToggleVisibility",
+                    "title": "Show more" if is_more else "Show less",
+                    "targetElements": [
+                        {"elementId": "abstract-preview", "isVisible": not expand},
+                        {"elementId": "abstract-full", "isVisible": expand},
+                        {"elementId": "abstract-more", "isVisible": not expand},
+                        {"elementId": "abstract-less", "isVisible": expand},
+                    ],
+                }
+            ],
+        }
+
+    return [
+        {**common, "id": "abstract-preview", "text": preview},
+        {**common, "id": "abstract-full", "text": _md_escape(full), "isVisible": False},
+        _toggle(is_more=True),
+        _toggle(is_more=False),
+    ]
 
 
 def _click_safe(url: str | None) -> str | None:
@@ -212,14 +261,7 @@ def build_paper_card(
         )
 
     if abstract and abstract.strip():
-        body.append(
-            {
-                "type": "TextBlock",
-                "text": _md_escape(_truncate(abstract, _ABSTRACT_CHARS)),
-                "wrap": True,
-                "spacing": "Medium",
-            }
-        )
+        body.extend(_abstract_blocks(abstract))
 
     if note:
         body.append(
