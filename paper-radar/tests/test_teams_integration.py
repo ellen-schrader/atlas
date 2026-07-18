@@ -105,9 +105,7 @@ def test_validate_rejects_unsafe_urls(url):
 
 def test_redirects_are_never_followed():
     handler = teams_integration._NoRedirect()
-    assert (
-        handler.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/") is None
-    )
+    assert handler.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/") is None
 
 
 # --- webhook_url_for_team ----------------------------------------------------
@@ -449,3 +447,194 @@ def test_notify_never_raises(monkeypatch):
 
     monkeypatch.setattr(teams_integration, "service_client", boom)
     teams_integration.notify_paper_posted("t1", url="https://example.org/p")
+
+
+# === inbound (Teams → Atlas) =================================================
+
+import base64  # noqa: E402
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+
+_TOKEN = base64.b64encode(b"a-real-teams-security-token-32bytes!").decode()
+
+
+def _sign(token: str, body: bytes) -> str:
+    key = base64.b64decode(token)
+    return "HMAC " + base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
+
+
+def test_verify_signature_accepts_a_correct_hmac():
+    body = b'{"text":"@Atlas https://arxiv.org/abs/1"}'
+    assert teams_integration.verify_teams_signature(_TOKEN, body, _sign(_TOKEN, body)) is True
+
+
+def test_verify_signature_rejects_tamper_missing_and_wrong_scheme():
+    body = b'{"text":"x"}'
+    good = _sign(_TOKEN, body)
+    assert teams_integration.verify_teams_signature(_TOKEN, body + b"!", good) is False  # tampered
+    assert teams_integration.verify_teams_signature(_TOKEN, body, None) is False  # no header
+    assert teams_integration.verify_teams_signature(_TOKEN, body, good[5:]) is False  # no "HMAC "
+    assert teams_integration.verify_teams_signature(_TOKEN, body, "HMAC not-base64") is False
+    # A different key must not validate.
+    other = base64.b64encode(b"some-other-key-entirely-here-32b!!").decode()
+    assert teams_integration.verify_teams_signature(other, body, good) is False
+
+
+def test_verify_signature_rejects_undecodable_stored_token():
+    body = b"x"
+    assert teams_integration.verify_teams_signature("not base64!!", body, "HMAC AAAA") is False
+
+
+def test_normalize_inbound_secret():
+    assert teams_integration.normalize_inbound_secret(f"  {_TOKEN}  ") == _TOKEN
+    for bad in ["", "   ", "not base64!!", "a" * 2000]:
+        with pytest.raises(ValueError):
+            teams_integration.normalize_inbound_secret(bad)
+
+
+def test_plan_no_url_never_touches_the_db(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "service_client", lambda: pytest.fail("no DB call without a link")
+    )
+    assert teams_integration.plan_inbound_import("t1", "just chatting, no links").status == "no_url"
+
+
+def test_plan_skips_non_paper_hosts(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "service_client", lambda: pytest.fail("github is a skip-host")
+    )
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://github.com/a/b")
+    assert plan.status == "no_url"
+
+
+def test_plan_new_when_paper_not_in_lab(monkeypatch):
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
+    assert plan.status == "new" and plan.url == "https://arxiv.org/abs/2401.01234"
+
+
+def test_plan_new_when_paper_exists_but_not_posted_here(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"papers": [{"id": "p1"}], "paper_posts": []}),
+    )
+    assert teams_integration.plan_inbound_import("t1", "https://arxiv.org/abs/1").status == "new"
+
+
+def test_plan_already_when_posted_to_this_team(monkeypatch):
+    client = _FakeClient({"papers": [{"id": "p1"}], "paper_posts": [{"id": "pp1"}]})
+    monkeypatch.setattr(teams_integration, "service_client", lambda: client)
+    plan = teams_integration.plan_inbound_import("t1", "https://arxiv.org/abs/1")
+    assert plan.status == "already"
+    # The dedup lookup is scoped to this team, not global.
+    assert client.eqs["paper_posts"]["team_id"] == "t1"
+
+
+def test_inbound_secret_for_team(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"team_integrations": [{"inbound_secret": _TOKEN}]}),
+    )
+    assert teams_integration.inbound_secret_for_team("t1") == _TOKEN
+    monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
+    assert teams_integration.inbound_secret_for_team("t1") is None
+
+
+# --- import_paper_background (the actual resolve → insert) ---
+
+
+class _InsertCapture:
+    """A fake service client that records the paper_posts insert and reports the
+    existing-post check as empty (a fresh paper)."""
+
+    def __init__(self):
+        self.inserted = None
+
+    def table(self, name):
+        assert name == "paper_posts"
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def insert(self, row):
+        self.inserted = row
+        return self
+
+    def execute(self):
+        return types.SimpleNamespace(data=[] if self.inserted is None else [{"id": "pp1"}])
+
+
+def _fake_meta(**kw):
+    base = dict(
+        url="https://arxiv.org/abs/1",
+        title="A Paper",
+        doi=None,
+        abstract="x",
+        authors=[],
+        venue=None,
+        year=None,
+        keywords=[],
+        source="arxiv",
+    )
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm: ("p1", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen Schrader")
+
+    assert cap.inserted == {
+        "paper_id": "p1",
+        "team_id": "t1",
+        "posted_by": None,
+        "posted_by_label": "Ellen Schrader",
+        "source": "teams",
+    }
+
+
+def test_import_background_truncates_a_long_sender_label(monkeypatch):
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "z" * 500)
+    assert len(cap.inserted["posted_by_label"]) == teams_integration._INBOUND_LABEL_MAX
+
+
+def test_import_background_skips_unresolved_and_never_inserts(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "fetch_metadata", lambda url: _fake_meta(title=None, doi=None)
+    )
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: pytest.fail("must not write an unresolved link"),
+    )
+    teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+
+
+def test_import_background_never_raises(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "fetch_metadata", lambda url: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    # A resolve failure is logged, not raised (it runs as a fire-and-forget task).
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")

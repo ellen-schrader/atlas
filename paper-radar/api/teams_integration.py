@@ -19,12 +19,24 @@ fails instead of being fetched.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import logging
 import urllib.request
+from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
 from paper_radar.ingest import url_guard
+from paper_radar.ingest.metadata import fetch_metadata
+from paper_radar.ingest.urls import (
+    _clean_url,
+    _normalize_key,
+    extract_urls_from_text,
+    is_skip_host,
+)
 
 from .config import get_api_settings
 from .supa import service_client
@@ -466,3 +478,161 @@ def notify_paper_posted(
         post_to_teams(webhook_url, card)
     except Exception as exc:
         log.warning("Teams notification for team %s failed: %s", team_id, exc)
+
+
+# === inbound: Teams channel → Atlas (M2, papers) ===========================
+#
+# A Teams *Outgoing Webhook* (registered per team, owner-only, no Graph) POSTs a
+# message to /integrations/teams/inbound/<team_id> whenever someone @mentions
+# "Atlas". The request is HMAC-signed with a per-team token. We verify it, pull
+# the paper link out of the message, and import it as source='teams'.
+
+_INBOUND_LABEL_MAX = 200
+
+
+def normalize_inbound_secret(secret: str) -> str:
+    """The trimmed base64 token, or raise ValueError. Used on save.
+
+    Teams shows a base64 security token once when the Outgoing Webhook is
+    created; we store it verbatim and use its decoded bytes as the HMAC key.
+    """
+    token = (secret or "").strip()
+    if not token:
+        raise ValueError("Paste the security token Teams showed when you created the webhook.")
+    if len(token) > 1024:
+        raise ValueError("That token is too long to be a Teams webhook secret.")
+    try:
+        base64.b64decode(token, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("That doesn't look like a Teams webhook security token.") from exc
+    return token
+
+
+def inbound_secret_for_team(team_id: str) -> str | None:
+    """The lab's inbound HMAC token, or None if inbound isn't configured (service role)."""
+    found = (
+        service_client()
+        .table("team_integrations")
+        .select("inbound_secret")
+        .eq("team_id", team_id)
+        .limit(1)
+        .execute()
+    )
+    return found.data[0]["inbound_secret"] if found.data else None
+
+
+def verify_teams_signature(secret_b64: str, raw_body: bytes, auth_header: str | None) -> bool:
+    """True iff `auth_header` is a valid Teams `HMAC <sig>` over `raw_body`.
+
+    Teams signs with HMAC-SHA256 keyed by the base64-decoded token; the header is
+    ``HMAC <base64(signature)>``. Constant-time compare; any malformed input
+    (missing header, wrong scheme, undecodable token) is a rejection, not an error.
+    """
+    if not auth_header or not auth_header.startswith("HMAC "):
+        return False
+    provided = auth_header[len("HMAC ") :].strip()
+    try:
+        key = base64.b64decode(secret_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    expected = base64.b64encode(hmac.new(key, raw_body, hashlib.sha256).digest()).decode()
+    return hmac.compare_digest(expected, provided)
+
+
+@dataclass
+class InboundPlan:
+    """The fast (no-network) decision for the synchronous reply."""
+
+    status: str  # "no_url" | "already" | "new"
+    url: str | None = None
+
+
+def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
+    """Decide the reply without a metadata fetch: is there a link, and is it new?
+
+    Only cheap DB lookups (url_norm → paper → this team's posts), so it returns
+    well inside the Outgoing Webhook's ~5 s reply window. The slow resolve +
+    insert happens afterwards in a background task.
+    """
+    urls = [u for u in extract_urls_from_text(text) if not is_skip_host(u)]
+    if not urls:
+        return InboundPlan("no_url")
+    url = _clean_url(urls[0])
+    svc = service_client()
+    papers = (
+        svc.table("papers").select("id").eq("url_norm", _normalize_key(url)).limit(1).execute().data
+        or []
+    )
+    if papers:
+        posted = (
+            svc.table("paper_posts")
+            .select("id")
+            .eq("paper_id", papers[0]["id"])
+            .eq("team_id", team_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if posted:
+            return InboundPlan("already", url=url)
+    return InboundPlan("new", url=url)
+
+
+def import_paper_background(team_id: str, url: str, sender_name: str | None) -> None:
+    """Resolve one URL and add it to the lab as source='teams'. Runs off the reply
+    path, so it may take the full metadata-fetch budget. Idempotent (dedup on
+    url_norm/DOI and unique(paper_id, team_id)); failures are logged, not raised."""
+    # Deferred import: app imports this module, so importing app at module load
+    # would be circular. These helpers carry the tested dedup + embed logic.
+    from .app import _embed_and_store, _enrich_and_store, _upsert_paper
+
+    try:
+        url = _clean_url(url)
+        url_norm = _normalize_key(url)
+        meta = fetch_metadata(url)
+        if not (meta.title or meta.doi):
+            log.info("inbound: %s did not resolve to a paper; skipping", url)
+            return
+        paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
+        svc = service_client()
+        existing = (
+            svc.table("paper_posts")
+            .select("id")
+            .eq("paper_id", paper_id)
+            .eq("team_id", team_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if existing:
+            return  # already in the lab (e.g. matched by DOI under another URL)
+        try:
+            svc.table("paper_posts").insert(
+                {
+                    "paper_id": paper_id,
+                    "team_id": team_id,
+                    "posted_by": None,
+                    "posted_by_label": (sender_name or "Teams")[:_INBOUND_LABEL_MAX],
+                    "source": "teams",
+                }
+            ).execute()
+        except Exception as insert_exc:
+            # A second @mention of the same new paper can race past the `existing`
+            # check; the unique(paper_id, team_id) constraint (23505) is the
+            # backstop — a benign no-op, not a failure worth warning about.
+            if getattr(insert_exc, "code", None) == "23505":
+                return
+            raise
+        if needs_embedding and get_api_settings().voyage_api_key:
+            _embed_and_store(paper_id, meta.title, meta.abstract)
+        if needs_embedding:
+            _enrich_and_store(paper_id, meta.title, meta.abstract)
+    except Exception as exc:
+        log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
+
+
+def inbound_reply(text: str) -> dict:
+    """A Teams Outgoing Webhook response: a plain message the bot posts back."""
+    return {"type": "message", "text": text}

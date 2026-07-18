@@ -32,23 +32,10 @@ from datetime import UTC, datetime
 
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.pdf_extract import extract_urls_from_dir  # needs the `legacy` extra
-from paper_radar.ingest.urls import _clean_url, _normalize_key
+from paper_radar.ingest.urls import _clean_url, _normalize_key, is_skip_host
 from supabase import Client, create_client
 
 from .config import get_api_settings
-
-# Hosts that are never a paper — skip before doing a (slow) metadata lookup.
-_SKIP_HOSTS = (
-    "x.com",
-    "twitter.com",
-    "github.com",
-    "huggingface.co",
-    "linkedin.com",
-    "youtube.com",
-    "youtu.be",
-    "teams.cloud.microsoft",
-    "teams.microsoft.com",
-)
 
 
 def window_date(filename: str, base_year: int) -> datetime | None:
@@ -128,8 +115,7 @@ def main(argv: list[str] | None = None) -> None:
 
     posted = skipped_host = skipped_unresolved = already = failed = 0
     for n, item in enumerate(items, 1):
-        host = item.url.split("/")[2].lower().removeprefix("www.") if "//" in item.url else ""
-        if any(h in host for h in _SKIP_HOSTS):
+        if is_skip_host(item.url):
             skipped_host += 1
             continue
 

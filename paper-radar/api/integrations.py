@@ -18,11 +18,13 @@ constraint, and the send path re-validates independently.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from . import teams_integration
@@ -33,12 +35,35 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations/teams", tags=["integrations"])
 
+# A Teams channel message is a few KB. Cap the inbound body so an unauthenticated
+# caller can't make us buffer an arbitrarily large payload before the HMAC check.
+_MAX_INBOUND_BODY = 256 * 1024
+
+
+async def _read_capped(request: Request, limit: int) -> bytes:
+    """Read the request body but abort (413) once it exceeds `limit` bytes.
+
+    Streams so an oversized body is rejected without ever being fully buffered
+    (a plain ``await request.body()`` would read it all first). Handles chunked
+    encoding, where Content-Length can't be trusted up front.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="Payload too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 class TeamsIntegrationOut(BaseModel):
     configured: bool
     # The webhook host only — never the full URL (that's a bearer capability).
     host: str | None = None
     enabled: bool = False
+    # Whether inbound (@Atlas → Atlas) is set up — never the secret itself.
+    inbound_configured: bool = False
     updated_at: str | None = None
 
 
@@ -51,6 +76,11 @@ class TeamsIntegrationSave(BaseModel):
 class TeamsEnabledPatch(BaseModel):
     team_id: str
     enabled: bool
+
+
+class TeamsInboundSave(BaseModel):
+    team_id: str
+    secret: str = Field(min_length=1, max_length=1024)
 
 
 class TeamsTestRequest(BaseModel):
@@ -68,7 +98,7 @@ def _integration_row(token: str, team_id: str) -> dict | None:
     rows = (
         user_client(token)
         .table("team_integrations")
-        .select("webhook_url, enabled, updated_at")
+        .select("webhook_url, enabled, updated_at, inbound_secret")
         .eq("team_id", team_id)
         .limit(1)
         .execute()
@@ -89,6 +119,8 @@ def _out(row: dict | None) -> TeamsIntegrationOut:
         configured=True,
         host=_host(row.get("webhook_url")),
         enabled=row["enabled"],
+        # Presence only — the token never leaves the server.
+        inbound_configured=bool(row.get("inbound_secret")),
         updated_at=row.get("updated_at"),
     )
 
@@ -119,10 +151,12 @@ def save_integration(
         "updated_at": datetime.now(UTC).isoformat(),
     }
     try:
-        user_client(token).table("team_integrations").upsert(row).execute()
+        # upsert returns the persisted row (representation), so inbound_secret set
+        # on an earlier save is reflected rather than reported as cleared.
+        saved = user_client(token).table("team_integrations").upsert(row).execute().data or []
     except Exception as exc:
         _reraise_write_error(exc, "save the Teams connection")
-    return _out(row)
+    return _out(saved[0] if saved else row)
 
 
 @router.patch("", response_model=TeamsIntegrationOut)
@@ -156,6 +190,105 @@ def delete_integration(team_id: str, token: str = Depends(require_token)) -> Tea
     _require_user(token)
     user_client(token).table("team_integrations").delete().eq("team_id", team_id).execute()
     return TeamsIntegrationOut(configured=False)
+
+
+@router.put("/inbound", response_model=TeamsIntegrationOut)
+def save_inbound_secret(
+    req: TeamsInboundSave, token: str = Depends(require_token)
+) -> TeamsIntegrationOut:
+    """Store the lab's inbound (Outgoing Webhook) HMAC token — owners only, via RLS.
+
+    An UPDATE on the existing row (the outbound webhook must be connected first),
+    so a non-owner or a missing row touches nothing. The token is validated as
+    base64 and never returned to the browser.
+    """
+    _require_user(token)
+    try:
+        secret = teams_integration.normalize_inbound_secret(req.secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        updated = (
+            user_client(token)
+            .table("team_integrations")
+            .update({"inbound_secret": secret, "updated_at": datetime.now(UTC).isoformat()})
+            .eq("team_id", req.team_id)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _reraise_write_error(exc, "save the inbound connection")
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Connect the outbound webhook first, then add inbound."
+        )
+    return _out(updated[0])
+
+
+@router.delete("/inbound", response_model=TeamsIntegrationOut)
+def clear_inbound_secret(
+    team_id: str, token: str = Depends(require_token)
+) -> TeamsIntegrationOut:
+    """Turn off inbound (@Atlas) ingestion by clearing the token — owners only."""
+    _require_user(token)
+    updated = (
+        user_client(token)
+        .table("team_integrations")
+        .update({"inbound_secret": None, "updated_at": datetime.now(UTC).isoformat()})
+        .eq("team_id", team_id)
+        .execute()
+        .data
+        or []
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="No Teams connection is configured")
+    return _out(updated[0])
+
+
+@router.post("/inbound/{team_id}")
+async def inbound_webhook(
+    team_id: str, request: Request, background: BackgroundTasks
+) -> dict:
+    """Receive an "@Atlas <link>" message from a Teams Outgoing Webhook and import it.
+
+    PUBLIC — no JWT. The per-team HMAC token (from team_integrations, selected by
+    the team_id in the path) is the only authenticator: we verify the signature
+    over the raw body before parsing anything. We reply fast (link present? already
+    in the lab?) and do the slow resolve + insert + embed in the background, so we
+    stay inside Teams' ~5 s synchronous-reply window.
+    """
+    raw = await _read_capped(request, _MAX_INBOUND_BODY)
+    secret = await run_in_threadpool(teams_integration.inbound_secret_for_team, team_id)
+    if not secret:
+        # Don't distinguish "no such team" from "inbound off" — generic 404.
+        raise HTTPException(status_code=404, detail="Not configured")
+    if not teams_integration.verify_teams_signature(
+        secret, raw, request.headers.get("Authorization")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Malformed payload") from exc
+    text = payload.get("text") or ""
+    sender = (payload.get("from") or {}).get("name") or None
+
+    # The plan is cheap DB-only work (link present? already in the lab?) — well
+    # inside Teams' ~5 s reply window. Offloaded so it never blocks the event loop.
+    plan = await run_in_threadpool(teams_integration.plan_inbound_import, team_id, text)
+
+    if plan.status == "no_url":
+        return teams_integration.inbound_reply(
+            "I couldn't find a paper link there. Mention me with a link, e.g. "
+            "`@Atlas https://arxiv.org/abs/…`"
+        )
+    if plan.status == "already":
+        return teams_integration.inbound_reply("👍 That paper is already in the lab.")
+
+    background.add_task(teams_integration.import_paper_background, team_id, plan.url, sender)
+    return teams_integration.inbound_reply("⏳ Adding that paper to Atlas — it'll appear shortly.")
 
 
 @router.post("/test")
