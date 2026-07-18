@@ -16,6 +16,7 @@ export default function ResetPassword({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -24,7 +25,7 @@ export default function ResetPassword({ onDone }: { onDone: () => void }) {
     try {
       const { error: err } = await supabase.auth.updateUser({ password });
       if (err) throw err;
-      onDone();
+      setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -39,29 +40,42 @@ export default function ResetPassword({ onDone }: { onDone: () => void }) {
         <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
       </div>
 
-      <h2 className="font-serif text-xl font-semibold tracking-tight">Choose a new password</h2>
-      <p className="mb-5 mt-1 text-sm text-muted">Set a new password for your account.</p>
+      {done ? (
+        <>
+          <h2 className="font-serif text-xl font-semibold tracking-tight">Password updated</h2>
+          <p className="mb-5 mt-1 text-sm text-muted">
+            Your password has been changed and you're signed in.
+          </p>
+          <Button onClick={onDone}>Continue to Atlas</Button>
+        </>
+      ) : (
+        <>
+          <h2 className="font-serif text-xl font-semibold tracking-tight">Choose a new password</h2>
+          <p className="mb-5 mt-1 text-sm text-muted">Set a new password for your account.</p>
 
-      <form onSubmit={onSubmit} className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-password">New password</Label>
-          <Input
-            id="new-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={8}
-            required
-            autoFocus
-          />
-        </div>
+          <form onSubmit={onSubmit} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="new-password">New password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                required
+                autoFocus
+              />
+            </div>
 
-        {error && <p className="text-xs text-danger">{error}</p>}
+            {error && <p className="text-xs text-danger">{error}</p>}
 
-        <Button type="submit" disabled={busy} className="mt-1">
-          {busy ? "…" : "Update password"}
-        </Button>
-      </form>
+            <Button type="submit" disabled={busy} className="mt-1">
+              {busy ? "…" : "Update password"}
+            </Button>
+          </form>
+        </>
+      )}
     </AuthLayout>
   );
 }

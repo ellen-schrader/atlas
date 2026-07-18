@@ -31,9 +31,14 @@ export default function App() {
   const { session, loading } = useSession();
 
   // A password-reset link signs the user in with a short-lived recovery session,
-  // which would otherwise route them straight into the app. Catch the event and
-  // show the set-a-new-password screen until they've chosen one.
-  const [recovering, setRecovering] = useState(false);
+  // which would otherwise route them straight into the app. Show the set-a-new-
+  // password screen until they've chosen one. Seed synchronously from the URL
+  // (the recovery link carries `type=recovery` in the hash) so it can't be
+  // missed if supabase-js emits PASSWORD_RECOVERY before this listener attaches;
+  // the listener is the backup for when the hash was already consumed.
+  const [recovering, setRecovering] = useState(
+    () => typeof window !== "undefined" && window.location.hash.includes("type=recovery"),
+  );
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY") setRecovering(true);

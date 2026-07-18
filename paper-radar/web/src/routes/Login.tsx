@@ -24,6 +24,12 @@ export default function Login() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  function switchMode(m: "login" | "signup" | "reset") {
+    setMode(m);
+    setError(null);
+    setNotice(null);
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -80,11 +86,7 @@ export default function Login() {
             <button
               key={m}
               type="button"
-              onClick={() => {
-                setMode(m);
-                setError(null);
-                setNotice(null);
-              }}
+              onClick={() => switchMode(m)}
               className={cn(
                 "flex-1 rounded-md py-1.5 font-medium transition",
                 mode === m ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
@@ -108,6 +110,7 @@ export default function Login() {
           <Input
             id="email"
             type="email"
+            autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -120,11 +123,7 @@ export default function Login() {
               {mode === "login" && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setMode("reset");
-                    setError(null);
-                    setNotice(null);
-                  }}
+                  onClick={() => switchMode("reset")}
                   className="text-xs text-muted hover:text-fg"
                 >
                   Forgot password?
@@ -134,6 +133,7 @@ export default function Login() {
             <Input
               id="password"
               type="password"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               minLength={8}
@@ -158,11 +158,7 @@ export default function Login() {
         {mode === "reset" && (
           <button
             type="button"
-            onClick={() => {
-              setMode("login");
-              setError(null);
-              setNotice(null);
-            }}
+            onClick={() => switchMode("login")}
             className="text-xs text-muted hover:text-fg"
           >
             ← Back to log in
