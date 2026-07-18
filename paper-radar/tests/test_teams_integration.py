@@ -540,3 +540,101 @@ def test_inbound_secret_for_team(monkeypatch):
     assert teams_integration.inbound_secret_for_team("t1") == _TOKEN
     monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
     assert teams_integration.inbound_secret_for_team("t1") is None
+
+
+# --- import_paper_background (the actual resolve → insert) ---
+
+
+class _InsertCapture:
+    """A fake service client that records the paper_posts insert and reports the
+    existing-post check as empty (a fresh paper)."""
+
+    def __init__(self):
+        self.inserted = None
+
+    def table(self, name):
+        assert name == "paper_posts"
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def insert(self, row):
+        self.inserted = row
+        return self
+
+    def execute(self):
+        return types.SimpleNamespace(data=[] if self.inserted is None else [{"id": "pp1"}])
+
+
+def _fake_meta(**kw):
+    base = dict(
+        url="https://arxiv.org/abs/1",
+        title="A Paper",
+        doi=None,
+        abstract="x",
+        authors=[],
+        venue=None,
+        year=None,
+        keywords=[],
+        source="arxiv",
+    )
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm: ("p1", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen Schrader")
+
+    assert cap.inserted == {
+        "paper_id": "p1",
+        "team_id": "t1",
+        "posted_by": None,
+        "posted_by_label": "Ellen Schrader",
+        "source": "teams",
+    }
+
+
+def test_import_background_truncates_a_long_sender_label(monkeypatch):
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "z" * 500)
+    assert len(cap.inserted["posted_by_label"]) == teams_integration._INBOUND_LABEL_MAX
+
+
+def test_import_background_skips_unresolved_and_never_inserts(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "fetch_metadata", lambda url: _fake_meta(title=None, doi=None)
+    )
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: pytest.fail("must not write an unresolved link"),
+    )
+    teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+
+
+def test_import_background_never_raises(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "fetch_metadata", lambda url: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    # A resolve failure is logged, not raised (it runs as a fire-and-forget task).
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")

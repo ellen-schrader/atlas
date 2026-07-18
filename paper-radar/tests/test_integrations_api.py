@@ -490,3 +490,13 @@ def test_inbound_webhook_no_link_replies_with_hint(monkeypatch):
     )
     assert resp.status_code == 200
     assert "couldn't find" in resp.json()["text"].lower()
+
+
+def test_inbound_webhook_rejects_oversized_body(monkeypatch):
+    # Guard the public endpoint from buffering a huge unauthenticated payload.
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    huge = b"x" * (integ._MAX_INBOUND_BODY + 1)
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=huge, headers={"Authorization": "HMAC x"}
+    )
+    assert resp.status_code == 413

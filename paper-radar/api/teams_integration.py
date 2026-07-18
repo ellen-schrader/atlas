@@ -608,15 +608,23 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
         )
         if existing:
             return  # already in the lab (e.g. matched by DOI under another URL)
-        svc.table("paper_posts").insert(
-            {
-                "paper_id": paper_id,
-                "team_id": team_id,
-                "posted_by": None,
-                "posted_by_label": (sender_name or "Teams")[:_INBOUND_LABEL_MAX],
-                "source": "teams",
-            }
-        ).execute()
+        try:
+            svc.table("paper_posts").insert(
+                {
+                    "paper_id": paper_id,
+                    "team_id": team_id,
+                    "posted_by": None,
+                    "posted_by_label": (sender_name or "Teams")[:_INBOUND_LABEL_MAX],
+                    "source": "teams",
+                }
+            ).execute()
+        except Exception as insert_exc:
+            # A second @mention of the same new paper can race past the `existing`
+            # check; the unique(paper_id, team_id) constraint (23505) is the
+            # backstop — a benign no-op, not a failure worth warning about.
+            if getattr(insert_exc, "code", None) == "23505":
+                return
+            raise
         if needs_embedding and get_api_settings().voyage_api_key:
             _embed_and_store(paper_id, meta.title, meta.abstract)
         if needs_embedding:

@@ -35,6 +35,27 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations/teams", tags=["integrations"])
 
+# A Teams channel message is a few KB. Cap the inbound body so an unauthenticated
+# caller can't make us buffer an arbitrarily large payload before the HMAC check.
+_MAX_INBOUND_BODY = 256 * 1024
+
+
+async def _read_capped(request: Request, limit: int) -> bytes:
+    """Read the request body but abort (413) once it exceeds `limit` bytes.
+
+    Streams so an oversized body is rejected without ever being fully buffered
+    (a plain ``await request.body()`` would read it all first). Handles chunked
+    encoding, where Content-Length can't be trusted up front.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="Payload too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 class TeamsIntegrationOut(BaseModel):
     configured: bool
@@ -237,7 +258,7 @@ async def inbound_webhook(
     in the lab?) and do the slow resolve + insert + embed in the background, so we
     stay inside Teams' ~5 s synchronous-reply window.
     """
-    raw = await request.body()
+    raw = await _read_capped(request, _MAX_INBOUND_BODY)
     secret = await run_in_threadpool(teams_integration.inbound_secret_for_team, team_id)
     if not secret:
         # Don't distinguish "no such team" from "inbound off" — generic 404.
