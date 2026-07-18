@@ -40,6 +40,13 @@ def test_extract_anchor_href_variants_and_dedup():
     assert extract_urls_from_text(both) == ["https://arxiv.org/abs/1"]
 
 
+def test_extract_anchor_href_unescapes_entities_in_query():
+    # The whole point of unescaping before href extraction: an &amp; in the href's
+    # query must yield the full URL, not one truncated at the first entity.
+    text = '<a href="https://www.nature.com/articles/x?a=1&amp;b=2">Title</a>'
+    assert extract_urls_from_text(text) == ["https://www.nature.com/articles/x?a=1&b=2"]
+
+
 def test_extract_trims_trailing_prose_punctuation():
     assert extract_urls_from_text("see (https://arxiv.org/abs/1.2).") == [
         "https://arxiv.org/abs/1.2"
