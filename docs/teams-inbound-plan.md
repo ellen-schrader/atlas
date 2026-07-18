@@ -55,6 +55,14 @@ HMAC verify (valid / invalid / missing / wrong-team), URL-from-text extraction (
 
 Recommendation: decide A vs B first; I'd lean A if the "who commented" matters, B if you just want the discussion text mirrored.
 
+### Build reply-tag ingestion together with comments
+
+**Requested and shelved (2026-07-18):** adding a paper by replying to a message that contains it and tagging `@Atlas` in the reply (the reply itself has no link) — e.g. someone posts a paper, a labmate replies "@Atlas" to file it.
+
+Why it's shelved and coupled to comments: the real-time Outgoing Webhook payload carries only the reply's own text plus the thread id, **not the parent message's content**, so Atlas can't see the paper link in the message being replied to. Reading the parent needs either Microsoft Graph (unavailable) or the **same scheduled sweep** above — a sweep already walks each thread's root message and its replies, so it can resolve a bare `@Atlas` reply against the root's link at no extra transport cost.
+
+So when the sweep gets built for comments, do reply-tag ingestion in the same pass: for each thread, if a reply mentions Atlas and has no link of its own, import the root message's paper. Until then, `@Atlas <link>` (or a bare DOI) in a message or reply is the supported path.
+
 ---
 
 ## Reactions — not recommended without Graph
