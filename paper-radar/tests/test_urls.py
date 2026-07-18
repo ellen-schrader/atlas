@@ -61,6 +61,37 @@ def test_extract_unwraps_outlook_safelinks():
     assert extract_urls_from_text(f"paper: {wrapped}") == ["https://doi.org/10.1038/x"]
 
 
+def test_extract_bare_doi_becomes_doi_org_link():
+    assert extract_urls_from_text("@Atlas 10.1016/j.cell.2026.06.027") == [
+        "https://doi.org/10.1016/j.cell.2026.06.027"
+    ]
+
+
+def test_extract_doi_with_prefix_and_trailing_period():
+    assert extract_urls_from_text("please add doi:10.1038/s41586-024-01234-5.") == [
+        "https://doi.org/10.1038/s41586-024-01234-5"
+    ]
+
+
+def test_bare_doi_dedupes_with_the_same_doi_as_a_url():
+    # A DOI typed bare must resolve to the same key as its doi.org URL form.
+    from paper_radar.ingest.urls import _normalize_key
+
+    bare = extract_urls_from_text("10.1016/j.cell.2026.06.027")[0]
+    assert _normalize_key(bare) == _normalize_key("https://doi.org/10.1016/j.cell.2026.06.027")
+
+
+def test_doi_inside_a_url_path_is_not_pulled_out_separately():
+    # The full publisher URL is the single candidate; its embedded DOI isn't
+    # emitted as a second doi.org link.
+    text = '<a href="https://link.springer.com/article/10.1007/s00018-024-05">t</a>'
+    assert extract_urls_from_text(text) == ["https://link.springer.com/article/10.1007/s00018-024-05"]
+
+
+def test_version_like_number_is_not_a_doi():
+    assert extract_urls_from_text("we pinned pandas 10.2.3 in the env") == []
+
+
 def test_extract_none_and_empty():
     assert extract_urls_from_text(None) == []
     assert extract_urls_from_text("no links here") == []
