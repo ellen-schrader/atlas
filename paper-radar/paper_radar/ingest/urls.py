@@ -49,6 +49,50 @@ _TRACKING_PARAMS = {
 }
 
 
+# A DOI on its own, optionally behind the "doi:" handle prefix people copy from
+# citation lines. Suffixes may contain slashes (legacy Wiley/SICI), so \S+ is right.
+# [0-9] rather than \d so it matches the ASCII-only client regex — Python's \d also
+# accepts non-ASCII digit scripts, which would coerce inputs the browser rejects.
+_BARE_DOI_RE = re.compile(r"^(?:doi:\s*)?(10\.[0-9]{4,9}/\S+)$", re.IGNORECASE)
+
+# A scheme-less input is only turned into an https URL when it starts with something
+# shaped like a real web host: dot-separated labels ending in an alphabetic TLD. This
+# is deliberately strict — a bare or oddly-encoded IP (``2130706433``, ``0x7f000001``,
+# ``127.1``, ``localhost``) must NOT gain a scheme here, or it would sail past the
+# API's fast syntactic SSRF gate (which can't parse those as IPs) and rely solely on
+# the deferred fetch-time DNS check. Denying coercion keeps their original hard 400.
+_HOSTLIKE_PREFIX_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[:/?#]|$)", re.IGNORECASE)
+
+
+def coerce_fetch_url(raw: str) -> str:
+    """Turn what people actually paste into something the http(s)-only guard accepts.
+
+    The add-paper box invites "arXiv, DOI, PubMed, bioRxiv, or a publisher page",
+    and people oblige: a bare ``10.1038/...``, a ``doi:`` prefix, or a scheme-less
+    ``arxiv.org/abs/...``. None of those is a fetchable URL, so without this they
+    all die at ``validate_public_url`` with "Only http(s) links can be fetched."
+    A bare DOI becomes its doi.org resolver URL; a scheme-less *host-shaped* input
+    gets ``https://``. Inputs that already carry a scheme pass through untouched, and
+    anything that doesn't look like a DOI or a hostname is left alone so the guard
+    still rejects it. This widens what is accepted, never what is fetched — the SSRF
+    guard runs on the result, and coercing only host-shaped strings keeps encoded
+    internal addresses (bare/hex/short IPs) from bypassing its fast syntactic check.
+    """
+    raw = raw.strip()
+    m = _BARE_DOI_RE.match(raw)
+    if m:
+        return f"https://doi.org/{m.group(1)}"
+    try:
+        scheme = urlsplit(raw).scheme
+    except ValueError:
+        # Malformed (e.g. bad IPv6 brackets): hand it through so validate_public_url
+        # turns it into its clean "That URL is malformed." rejection.
+        return raw
+    if raw and not scheme and _HOSTLIKE_PREFIX_RE.match(raw):
+        return f"https://{raw}"
+    return raw
+
+
 def _clean_url(url: str) -> str:
     """Trim whitespace and trailing punctuation from a candidate URL."""
     url = url.strip()
