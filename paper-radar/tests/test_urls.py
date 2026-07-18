@@ -20,6 +20,26 @@ def test_extract_strips_mention_markup_and_entities():
     assert extract_urls_from_text(text) == ["https://nature.com/articles/x?a=1&b=2"]
 
 
+def test_extract_url_from_titled_anchor_href():
+    # A pasted link becomes <a href="URL">Page Title</a>; the URL is only in the
+    # href, so tag-stripping alone would lose it (the reported "no paper link" bug).
+    text = (
+        '<at id="0">Atlas</at> '
+        '<a href="https://pubmed.ncbi.nlm.nih.gov/38976543/">'
+        "Spatial Proximity Sequencing … - PubMed</a>"
+    )
+    assert extract_urls_from_text(text) == ["https://pubmed.ncbi.nlm.nih.gov/38976543/"]
+
+
+def test_extract_anchor_href_variants_and_dedup():
+    # Quoted, unquoted, and a duplicate bare copy all collapse to one URL.
+    assert extract_urls_from_text("<a href=https://doi.org/10.1/x>t</a>") == [
+        "https://doi.org/10.1/x"
+    ]
+    both = '<a href="https://arxiv.org/abs/1">t</a> also https://arxiv.org/abs/1'
+    assert extract_urls_from_text(both) == ["https://arxiv.org/abs/1"]
+
+
 def test_extract_trims_trailing_prose_punctuation():
     assert extract_urls_from_text("see (https://arxiv.org/abs/1.2).") == [
         "https://arxiv.org/abs/1.2"
