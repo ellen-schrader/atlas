@@ -14,7 +14,7 @@ export default function Login() {
   // would promise sign-up and deliver the log-in form — a password the visitor
   // doesn't have yet.
   const [params] = useSearchParams();
-  const [mode, setMode] = useState<"login" | "signup">(
+  const [mode, setMode] = useState<"login" | "signup" | "reset">(
     params.get("mode") === "signup" ? "signup" : "login",
   );
   const [name, setName] = useState("");
@@ -38,6 +38,13 @@ export default function Login() {
         });
         if (err) throw err;
         if (!data.session) setNotice("Check your email to confirm your account, then log in.");
+      } else if (mode === "reset") {
+        const { error: err } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (err) throw err;
+        // Neutral wording: don't reveal whether an account exists for that email.
+        setNotice("If an account exists for that email, a reset link is on its way.");
       } else {
         const { error: err } = await supabase.auth.signInWithPassword({ email, password });
         if (err) throw err;
@@ -57,29 +64,37 @@ export default function Login() {
       </div>
 
       <h2 className="font-serif text-xl font-semibold tracking-tight">
-        {mode === "login" ? "Welcome back" : "Create your account"}
+        {mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}
       </h2>
       <p className="mb-5 mt-1 text-sm text-muted">
         {mode === "login"
           ? "Sign in to your lab."
-          : "Create a lab, and Atlas starts learning its taste."}
+          : mode === "signup"
+            ? "Create a lab, and Atlas starts learning its taste."
+            : "Enter your email and we'll send you a link to set a new password."}
       </p>
 
-      <div className="mb-5 flex rounded-control bg-surface-2 p-1 text-sm">
-        {(["login", "signup"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => setMode(m)}
-            className={cn(
-              "flex-1 rounded-md py-1.5 font-medium transition",
-              mode === m ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
-            )}
-          >
-            {m === "login" ? "Log in" : "Sign up"}
-          </button>
-        ))}
-      </div>
+      {mode !== "reset" && (
+        <div className="mb-5 flex rounded-control bg-surface-2 p-1 text-sm">
+          {(["login", "signup"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                setMode(m);
+                setError(null);
+                setNotice(null);
+              }}
+              className={cn(
+                "flex-1 rounded-md py-1.5 font-medium transition",
+                mode === m ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
+              )}
+            >
+              {m === "login" ? "Log in" : "Sign up"}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
         {mode === "signup" && (
@@ -98,24 +113,61 @@ export default function Login() {
             required
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={8}
-            required
-          />
-        </div>
+        {mode !== "reset" && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              {mode === "login" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("reset");
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  className="text-xs text-muted hover:text-fg"
+                >
+                  Forgot password?
+                </button>
+              )}
+            </div>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={8}
+              required
+            />
+          </div>
+        )}
 
         {error && <p className="text-xs text-danger">{error}</p>}
         {notice && <p className="text-xs text-accent">{notice}</p>}
 
         <Button type="submit" disabled={busy} className="mt-1">
-          {busy ? "…" : mode === "login" ? "Log in" : "Create account"}
+          {busy
+            ? "…"
+            : mode === "login"
+              ? "Log in"
+              : mode === "signup"
+                ? "Create account"
+                : "Send reset link"}
         </Button>
+
+        {mode === "reset" && (
+          <button
+            type="button"
+            onClick={() => {
+              setMode("login");
+              setError(null);
+              setNotice(null);
+            }}
+            className="text-xs text-muted hover:text-fg"
+          >
+            ← Back to log in
+          </button>
+        )}
       </form>
     </AuthLayout>
   );

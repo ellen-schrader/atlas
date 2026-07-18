@@ -1,9 +1,11 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
+import { supabase } from "@/lib/supabase";
+import ResetPassword from "@/routes/ResetPassword";
 import Dashboard from "@/routes/Dashboard";
 import Layout from "@/routes/Layout";
 import Landing from "@/routes/Landing";
@@ -28,7 +30,20 @@ function Center({ children }: { children: ReactNode }) {
 export default function App() {
   const { session, loading } = useSession();
 
+  // A password-reset link signs the user in with a short-lived recovery session,
+  // which would otherwise route them straight into the app. Catch the event and
+  // show the set-a-new-password screen until they've chosen one.
+  const [recovering, setRecovering] = useState(false);
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
   if (loading) return <Center>Loading…</Center>;
+
+  if (recovering) return <ResetPassword onDone={() => setRecovering(false)} />;
 
   if (!session) {
     // Signed out, "/" is now the public landing page rather than a redirect to the
