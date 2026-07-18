@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
-from paper_radar.ingest.urls import _clean_url, _normalize_key
+from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url
 
 from . import embeddings, enrichment, integrations, maps, teams_integration
 from . import map_summary as map_summary_mod
@@ -260,7 +260,12 @@ _SIMILARITY_MAX_PAPERS = 10_000
 
 
 def _validated_fetch_url(raw: str) -> str:
-    """Clean + SSRF-check a URL we're about to fetch, as a 400 on rejection.
+    """Coerce + clean + SSRF-check a URL we're about to fetch, as a 400 on rejection.
+
+    `coerce_fetch_url` first turns a bare DOI / `doi:` handle / scheme-less link into
+    a real https URL — otherwise everything the add-paper box invites besides a full
+    URL dies here with "Only http(s) links can be fetched." The guard then runs on
+    the coerced form, so this widens what's accepted, not what's fetched.
 
     `resolve=False` keeps this to the syntactic checks (scheme, literal internal IP,
     internal name) for a fast, clean 400 — the DNS-resolution check runs again inside
@@ -268,7 +273,7 @@ def _validated_fetch_url(raw: str) -> str:
     internal address is still caught there without resolving the host twice here.
     """
     try:
-        return _clean_url(url_guard.validate_public_url(raw, resolve=False))
+        return _clean_url(url_guard.validate_public_url(coerce_fetch_url(raw), resolve=False))
     except url_guard.BlockedUrl as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -540,7 +545,11 @@ def create_post(
         # (javascript:/data:/…) so a hand-entered link can't become stored XSS, while
         # a bare DOI or a bot-walled publisher page (both scheme-less/http) still posts.
         _reject_dangerous_url(req.url)
-        url = _clean_url(req.url)
+        # Normalise the same way the fetch path does (bare DOI -> doi.org, scheme-less
+        # -> https) so a non-web caller that posts fields with a bare DOI still stores a
+        # real URL and dedupes against the same paper added via /resolve. Pure string
+        # work, no network — the SSRF concerns that gate _validated_fetch_url don't apply.
+        url = _clean_url(coerce_fetch_url(req.url))
         meta = PaperMetadata(url=url, **req.fields.model_dump())
     else:
         # No fields: this resolves the URL server-side — the same SSRF sink as /resolve,

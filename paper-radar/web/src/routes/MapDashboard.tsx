@@ -18,6 +18,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { usePaperModal } from "@/components/PaperModal";
+import { Modal } from "@/components/ui/modal";
 import {
   deleteMap,
   fetchMapOverview,
@@ -441,19 +442,10 @@ function MapEditPanel({
     onSave(patch);
   };
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-center justify-between">
+    <Modal open onClose={onClose} label="Edit map" className="max-w-md">
+      <div className="p-5">
+        <div className="mb-3 pr-8">
           <h2 className="font-serif text-lg font-semibold tracking-tight">Edit map</h2>
-          <button type="button" onClick={onClose} aria-label="Close">
-            <X size={16} className="text-muted hover:text-fg" />
-          </button>
         </div>
 
         <label className="block text-xs font-medium text-muted">Name</label>
@@ -542,7 +534,7 @@ function MapEditPanel({
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

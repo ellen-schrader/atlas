@@ -55,6 +55,81 @@ def test_resolve_recognizes_scheme_and_computes_dedup_key(signed_in):
     assert data["url_norm"] == "//arxiv.org/abs/2401.01234"
 
 
+@pytest.mark.parametrize(
+    ("pasted", "coerced"),
+    [
+        # A bare DOI — what the add-paper box explicitly invites — used to die at
+        # the http(s)-only guard with "Only http(s) links can be fetched."
+        ("10.1038/s41586-020-2649-2", "https://doi.org/10.1038/s41586-020-2649-2"),
+        ("doi:10.1038/s41586-020-2649-2", "https://doi.org/10.1038/s41586-020-2649-2"),
+        # Scheme-less links: doi.org itself, and the placeholder's own arXiv example.
+        ("doi.org/10.1038/s41586-020-2649-2", "https://doi.org/10.1038/s41586-020-2649-2"),
+        ("arxiv.org/abs/2401.01234", "https://arxiv.org/abs/2401.01234"),
+        ("pubmed.ncbi.nlm.nih.gov/38278431", "https://pubmed.ncbi.nlm.nih.gov/38278431"),
+    ],
+)
+def test_resolve_accepts_bare_dois_and_schemeless_links(signed_in, pasted, coerced):
+    resp = client.post("/resolve", json={"url": pasted, "network": False}, headers=AUTH)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["url"] == coerced
+    # The identifier is recognised on the coerced URL, so the right resolver runs.
+    assert data["source"] != "unknown"
+
+
+def test_resolve_coercion_does_not_bypass_the_ssrf_guard(signed_in):
+    """Prepending https:// must not smuggle an internal host past the guard."""
+    resp = client.post("/resolve", json={"url": "localhost/admin", "network": False}, headers=AUTH)
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "pasted",
+    [
+        "2130706433/",  # decimal 127.0.0.1
+        "0x7f000001/",  # hex 127.0.0.1
+        "127.1/",  # short-form loopback
+        "127.000.000.001/",  # zero-padded octets
+    ],
+)
+def test_resolve_does_not_coerce_encoded_internal_ips(signed_in, pasted):
+    """These have no scheme, so pre-coercion they hard-400'd at the syntactic gate.
+    Coercion must not rescue them into hosts the fast gate can't recognise as IPs —
+    they don't look like hostnames, so they stay rejected with a clean 400 rather
+    than reaching the fetch layer as the sole line of defence."""
+    resp = client.post("/resolve", json={"url": pasted, "network": False}, headers=AUTH)
+    assert resp.status_code == 400
+
+
+def test_posts_with_fields_coerces_bare_doi(monkeypatch):
+    """A bare DOI posted with fields (e.g. from a non-web client) must be stored as its
+    doi.org URL, so it dedupes against the same paper added via /resolve — the fields
+    path used to store the raw '10.x/y' string verbatim."""
+    import api.app as app_mod
+
+    seen: dict = {}
+    monkeypatch.setattr(app_mod, "_require_member", lambda _t, _team: "user-1")
+    monkeypatch.setattr(
+        app_mod,
+        "_upsert_paper",
+        lambda meta, url, url_norm: (seen.update(url=url, url_norm=url_norm), ("paper-1", False))[1],
+    )
+    monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
+
+    resp = client.post(
+        "/posts",
+        json={
+            "url": "10.1016/j.cell.2011.02.013",
+            "team_id": "t",
+            "fields": {"title": "Hallmarks of Cancer", "source": "manual"},
+        },
+        headers=AUTH,
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen["url"] == "https://doi.org/10.1016/j.cell.2011.02.013"
+    assert seen["url_norm"] == "//doi.org/10.1016/j.cell.2011.02.013"
+
+
 def test_posts_requires_bearer_token():
     # No Authorization header → 401 before any Supabase call.
     resp = client.post("/posts", json={"url": "https://arxiv.org/abs/2401.01234", "team_id": "x"})

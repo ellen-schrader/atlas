@@ -56,6 +56,31 @@ function doiUrl(input: string): string | null {
   return doi ? `https://doi.org/${doi}` : null;
 }
 
+/** A PubMed article link, or an explicit `pmid:12345`, normalised to the canonical
+ *  page — the resolver reads the PMID out of exactly this URL shape. A bare number
+ *  is deliberately NOT accepted: "2023" is a valid PMID, so treating stray digits as
+ *  one would silently resolve an unrelated paper instead of erroring. */
+function pubmedUrl(input: string): string | null {
+  const trimmed = input.trim();
+  const m =
+    trimmed.match(/pubmed\.ncbi\.nlm\.nih\.gov\/([0-9]+)/i) ??
+    trimmed.match(/^pmid:\s*([0-9]+)$/i);
+  return m ? `https://pubmed.ncbi.nlm.nih.gov/${m[1]}/` : null;
+}
+
+/** What people paste is often not a fetchable URL: a bare DOI, a `doi:` handle,
+ *  or a scheme-less `arxiv.org/abs/…` (our own placeholder suggests one). The
+ *  server only fetches http(s), so build that here rather than bouncing the
+ *  paste back with "Only http(s) links can be fetched." */
+function fetchableUrl(input: string): string {
+  const viaDoi = doiUrl(input);
+  if (viaDoi) return viaDoi;
+  const trimmed = input.trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || !trimmed
+    ? trimmed
+    : `https://${trimmed}`;
+}
+
 /** What we'll actually send — the same trimming and DOI normalisation the server sees.
  *  Used both to build the payload and to tell whether the user changed anything. */
 function toPayload(fields: PaperFields, authorsText: string): PaperFields {
@@ -169,8 +194,11 @@ export function AddPaperDialog({
 
   async function lookUp(e: FormEvent) {
     e.preventDefault();
-    const value = url.trim();
+    const value = fetchableUrl(url);
     if (!value) return;
+    // Show (and later save) the URL we actually looked up, so a pasted bare DOI
+    // becomes its doi.org link everywhere downstream — including `postPaper`.
+    setUrl(value);
     setLooking(true);
     setError(null);
     setDuplicate(null);
@@ -200,12 +228,15 @@ export function AddPaperDialog({
     }
   }
 
-  /** The recovery the bot wall leaves open: publishers block the page, not Crossref. */
+  /** The recovery the bot wall leaves open: publishers block the page, not Crossref
+   *  or PubMed — so this step takes a DOI, a PubMed link, or a bare PMID. */
   async function lookUpDoi(e: FormEvent) {
     e.preventDefault();
-    const target = doiUrl(doi);
+    const target = doiUrl(doi) ?? pubmedUrl(doi);
     if (!target) {
-      setError("That doesn’t look like a DOI. It starts with “10.” — for example 10.1016/j.cell.2023.01.001");
+      setError(
+        "That doesn’t look like a DOI or a PubMed link. A DOI starts with “10.” — for example 10.1016/j.cell.2023.01.001 — and a PubMed link looks like pubmed.ncbi.nlm.nih.gov/38278431",
+      );
       return;
     }
     setLooking(true);
@@ -213,7 +244,9 @@ export function AddPaperDialog({
     try {
       const resolved = await resolvePaper(target);
       if (!resolved.title) {
-        setError("That DOI didn’t resolve either. You can still add the paper by hand below.");
+        setError(
+          "That didn’t resolve either. Searching the title on pubmed.ncbi.nlm.nih.gov and pasting the paper’s PubMed link here often works — or add it by hand below.",
+        );
         return;
       }
       // The lab may already hold this paper under its doi.org link rather than the
@@ -253,7 +286,9 @@ export function AddPaperDialog({
     setSaving(true);
     setError(null);
     try {
-      const r = await postPaper(url.trim(), teamId, payload, note);
+      // The review step lets the link be typed by hand, so it can still be a bare
+      // DOI or scheme-less — normalise it the same way the lookup path does.
+      const r = await postPaper(fetchableUrl(url), teamId, payload, note);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["paper-search", teamId] }),
         qc.invalidateQueries({ queryKey: ["paper-count", teamId] }),
@@ -283,7 +318,7 @@ export function AddPaperDialog({
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
             {step === "recover"
-              ? "Try the DOI instead"
+              ? "Try the DOI or PubMed instead"
               : step !== "done"
                 ? "Add a paper"
                 : added?.already
@@ -293,7 +328,7 @@ export function AddPaperDialog({
           <p className="mt-1 text-sm text-muted">
             {step === "url" && "Paste a link — we’ll fill in the details for you."}
             {step === "recover" &&
-              "That publisher blocks automated lookups, but its DOI won’t be blocked."}
+              "That publisher blocks automated lookups — the paper’s DOI or PubMed page won’t be."}
             {step === "review" &&
               (autofilled
                 ? "Check what we found, and fix anything that’s off."
@@ -349,18 +384,27 @@ export function AddPaperDialog({
             <Banner tone="warn" icon={<AlertTriangle size={15} />}>
               We couldn’t read <span className="break-all font-medium">{url.trim()}</span>. Cell,
               ScienceDirect and Wiley block automated lookups of their article pages — but the
-              paper’s DOI resolves through Crossref, which they don’t block.
+              paper’s DOI resolves through Crossref, and its{" "}
+              <a
+                href="https://pubmed.ncbi.nlm.nih.gov/"
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium underline underline-offset-2"
+              >
+                PubMed
+              </a>{" "}
+              page usually works too.
             </Banner>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="paper-doi">DOI</Label>
+              <Label htmlFor="paper-doi">DOI or PubMed link</Label>
               <div className="flex gap-2">
                 <Input
                   id="paper-doi"
                   ref={doiRef}
                   value={doi}
                   onChange={(e) => setDoi(e.target.value)}
-                  placeholder="10.1016/j.cell.2023.01.001"
+                  placeholder="10.1016/j.cell.2023.01.001 or pubmed.ncbi.nlm.nih.gov/38278431"
                   disabled={looking}
                 />
                 <Button type="submit" disabled={looking || !doi.trim()} className="shrink-0">
@@ -369,8 +413,9 @@ export function AddPaperDialog({
                 </Button>
               </div>
               <p className="text-xs text-faint">
-                On the article page it’s usually printed under the title, or in the “Cite this
-                article” panel. It starts with <span className="font-mono">10.</span>
+                The DOI is usually printed under the title, or in the “Cite this article” panel —
+                it starts with <span className="font-mono">10.</span> Or search the title on
+                PubMed and paste the article’s link.
               </p>
             </div>
 
