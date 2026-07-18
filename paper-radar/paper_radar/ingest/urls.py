@@ -92,6 +92,10 @@ _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 # the href — capture it before tag-stripping would discard it.
 _HREF_RE = re.compile(r"""href\s*=\s*["']?(https?://[^"'>\s]+)""", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# A bare DOI typed without a URL, e.g. "10.1016/j.cell.2026.06.027" (optionally
+# prefixed "doi:"). The registrant is 4–9 digits per the DOI spec, which rules
+# out version strings like "10.2.3"; a trailing sentence '.' is trimmed later.
+_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
 
 
 def _unwrap_safelink(url: str) -> str:
@@ -110,13 +114,18 @@ def extract_urls_from_text(text: str | None) -> list[str]:
     Teams sends a pasted link as an HTML anchor whose visible text is the page
     title, so the URL is only in the ``href`` — those are pulled out first, then
     the visible text (with tags stripped) is scanned for bare or markdown-style
-    links. Unescapes entities and unwraps Outlook SafeLinks. This is the live
-    channel-ingest counterpart to ``pdf_extract.extract_urls_from_dir``.
+    links. A bare DOI typed on its own (no URL) is recognized too and returned as
+    a ``https://doi.org/…`` link. Unescapes entities and unwraps Outlook
+    SafeLinks. The live channel-ingest counterpart to ``extract_urls_from_dir``.
     """
     if not text:
         return []
     text = html.unescape(text)
-    candidates = _HREF_RE.findall(text) + _URL_RE.findall(_TAG_RE.sub(" ", text))
+    stripped = _TAG_RE.sub(" ", text)
+    candidates = _HREF_RE.findall(text) + _URL_RE.findall(stripped)
+    # Bare DOIs, scanned in text with URLs removed so a DOI inside a URL path
+    # isn't pulled out again (the full URL is already a candidate).
+    candidates += ["https://doi.org/" + doi for doi in _DOI_RE.findall(_URL_RE.sub(" ", stripped))]
     seen: set[str] = set()
     out: list[str] = []
     for match in candidates:
