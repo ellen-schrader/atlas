@@ -88,6 +88,9 @@ def is_skip_host(url: str) -> bool:
 # URLs in freeform message text: http(s) up to whitespace/quote/angle-bracket.
 # A trailing ')' or '.' from surrounding prose is trimmed by _clean_url.
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+# A link pasted into Teams becomes <a href="URL">Title</a>, so the URL lives in
+# the href — capture it before tag-stripping would discard it.
+_HREF_RE = re.compile(r"""href\s*=\s*["']?(https?://[^"'>\s]+)""", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -104,16 +107,19 @@ def _unwrap_safelink(url: str) -> str:
 def extract_urls_from_text(text: str | None) -> list[str]:
     """Every http(s) URL in a blob of text, cleaned and de-duped in order.
 
-    Strips HTML tags (Teams messages carry ``<at>`` mention markup and may be
-    HTML), unescapes entities, and unwraps Outlook SafeLinks. This is the live
+    Teams sends a pasted link as an HTML anchor whose visible text is the page
+    title, so the URL is only in the ``href`` — those are pulled out first, then
+    the visible text (with tags stripped) is scanned for bare or markdown-style
+    links. Unescapes entities and unwraps Outlook SafeLinks. This is the live
     channel-ingest counterpart to ``pdf_extract.extract_urls_from_dir``.
     """
     if not text:
         return []
-    text = html.unescape(_TAG_RE.sub(" ", text))
+    text = html.unescape(text)
+    candidates = _HREF_RE.findall(text) + _URL_RE.findall(_TAG_RE.sub(" ", text))
     seen: set[str] = set()
     out: list[str] = []
-    for match in _URL_RE.findall(text):
+    for match in candidates:
         url = _clean_url(_unwrap_safelink(_clean_url(match)))
         if url and url not in seen:
             seen.add(url)
