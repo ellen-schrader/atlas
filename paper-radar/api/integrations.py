@@ -281,8 +281,8 @@ async def inbound_webhook(
 
     if plan.status == "no_url":
         return teams_integration.inbound_reply(
-            "I couldn't find a paper link there. Mention me with a link, e.g. "
-            "`@Atlas https://arxiv.org/abs/…`"
+            "I couldn't find a paper there. Mention me with a link or DOI, e.g. "
+            "`@Atlas https://arxiv.org/abs/…` or `@Atlas 10.1016/j.cell.…`"
         )
     if plan.status == "already":
         return teams_integration.inbound_reply("👍 That paper is already in the lab.")
