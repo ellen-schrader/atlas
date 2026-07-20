@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookMarked, Check, Loader2, Search, X } from "lucide-react";
+import { BookMarked, Check, CheckSquare, Loader2, Search, X } from "lucide-react";
 
+import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
 import { usePaperModal } from "@/components/PaperModal";
 import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
+import { type Selection, useSelection } from "@/hooks/useSelection";
+import type { ExportPaper } from "@/lib/paperExport";
 import { supabase } from "@/lib/supabase";
 import { cn, formatAuthors, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -17,8 +20,24 @@ interface Item {
   authors: string[];
   venue: string | null;
   year: number | null;
+  doi: string | null;
+  url: string | null;
+  abstract: string | null;
   added?: string; // when saved (updated_at) — present in "Date added" mode
   similarity?: number; // taste fit — present in "Recommended" mode
+}
+
+function itemToExport(it: Item): ExportPaper {
+  return {
+    id: it.paperId,
+    title: it.title,
+    authors: it.authors,
+    venue: it.venue,
+    year: it.year,
+    doi: it.doi,
+    url: it.url,
+    abstract: it.abstract,
+  };
 }
 
 // A rough "engaged skim" per paper, so the header can size the backlog in time.
@@ -55,6 +74,7 @@ export default function ReadingList() {
   const [sort, setSort] = useState<Sort>("added");
   const [query, setQuery] = useState("");
   const [venue, setVenue] = useState("");
+  const selection = useSelection();
 
   const byDate = useReadingList(userId, team.id);
   const readWeek = useReadThisWeek(userId, team.id);
@@ -70,6 +90,9 @@ export default function ReadingList() {
           authors: r.papers?.authors ?? [],
           venue: r.papers?.venue ?? null,
           year: r.papers?.year ?? null,
+          doi: r.papers?.doi ?? null,
+          url: r.papers?.url ?? null,
+          abstract: r.papers?.abstract ?? null,
           added: r.updated_at,
         }))
       : (byRec.data?.results ?? []).map((r) => ({
@@ -78,6 +101,9 @@ export default function ReadingList() {
           authors: r.post.papers.authors ?? [],
           venue: r.post.papers.venue ?? null,
           year: r.post.papers.year ?? null,
+          doi: r.post.papers.doi ?? null,
+          url: r.post.papers.url ?? null,
+          abstract: r.post.papers.abstract ?? null,
           similarity: r.similarity,
         }));
 
@@ -104,6 +130,11 @@ export default function ReadingList() {
         it.title.toLowerCase().includes(q) ||
         it.authors.some((a) => a.toLowerCase().includes(q))),
   );
+
+  // Multi-select export acts on the currently-shown (filtered) papers.
+  const shownIds = shown.map((it) => it.paperId);
+  const selectedPapers = shown.filter((it) => selection.isSelected(it.paperId)).map(itemToExport);
+  const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selection.isSelected(id));
 
   // Canonical backlog size comes from the date view (always loaded), so the
   // header stays stable even while the ranked view is fetching.
@@ -168,19 +199,37 @@ export default function ReadingList() {
             <p className="mt-1.5 text-sm text-muted">Papers you saved to read in {team.name}.</p>
           )}
         </div>
-        <div className="flex shrink-0 rounded-control border border-border bg-surface p-0.5 text-sm">
-          {(["recommended", "added"] as const).map((s) => (
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="flex rounded-control border border-border bg-surface p-0.5 text-sm">
+            {(["recommended", "added"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSort(s)}
+                className={cn(
+                  "rounded-[7px] px-3 py-1.5 font-medium transition",
+                  sort === s ? "bg-accent-weak text-accent" : "text-muted hover:text-fg",
+                )}
+              >
+                {s === "recommended" ? "Recommended" : "Date added"}
+              </button>
+            ))}
+          </div>
+          {total > 0 && (
             <button
-              key={s}
-              onClick={() => setSort(s)}
+              type="button"
+              onClick={() => (selection.selecting ? selection.stop() : selection.start())}
+              aria-pressed={selection.selecting}
               className={cn(
-                "rounded-[7px] px-3 py-1.5 font-medium transition",
-                sort === s ? "bg-accent-weak text-accent" : "text-muted hover:text-fg",
+                "inline-flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-sm font-medium transition",
+                selection.selecting
+                  ? "border-accent/50 bg-accent-weak text-accent"
+                  : "border-border text-muted hover:border-border-strong hover:text-fg",
               )}
             >
-              {s === "recommended" ? "Recommended" : "Date added"}
+              <CheckSquare size={14} />
+              Select
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -281,14 +330,41 @@ export default function ReadingList() {
                     {b.label}
                     <span className="tabular-nums text-muted/60">{b.items.length}</span>
                   </h2>
-                  <ListCard items={b.items} onOpen={openPaper} onMarkRead={markRead} onRemove={removeFromList} />
+                  <ListCard
+                    items={b.items}
+                    onOpen={openPaper}
+                    onMarkRead={markRead}
+                    onRemove={removeFromList}
+                    selection={selection}
+                  />
                 </section>
               ))}
             </div>
           ) : (
-            <ListCard items={shown} onOpen={openPaper} onMarkRead={markRead} onRemove={removeFromList} />
+            <ListCard
+              items={shown}
+              onOpen={openPaper}
+              onMarkRead={markRead}
+              onRemove={removeFromList}
+              selection={selection}
+            />
           )}
         </>
+      )}
+
+      {/* Space so the floating export bar never hides the last row. */}
+      {selection.selecting && <div aria-hidden className="h-16" />}
+
+      {selection.selecting && (
+        <ExportBar
+          papers={selectedPapers}
+          totalCount={shownIds.length}
+          allSelected={allShownSelected}
+          onSelectAll={() => selection.selectAll(shownIds)}
+          onClear={selection.clear}
+          onExit={selection.stop}
+          heading="Reading list"
+        />
       )}
     </div>
   );
@@ -299,16 +375,25 @@ function ListCard({
   onOpen,
   onMarkRead,
   onRemove,
+  selection,
 }: {
   items: Item[];
   onOpen: (id: string) => void;
   onMarkRead: (id: string) => void;
   onRemove: (id: string) => void;
+  selection: Selection;
 }) {
   return (
     <ul className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
       {items.map((it) => (
-        <Row key={it.paperId} item={it} onOpen={onOpen} onMarkRead={onMarkRead} onRemove={onRemove} />
+        <Row
+          key={it.paperId}
+          item={it}
+          onOpen={onOpen}
+          onMarkRead={onMarkRead}
+          onRemove={onRemove}
+          selection={selection}
+        />
       ))}
     </ul>
   );
@@ -319,11 +404,13 @@ function Row({
   onOpen,
   onMarkRead,
   onRemove,
+  selection,
 }: {
   item: Item;
   onOpen: (id: string) => void;
   onMarkRead: (id: string) => void;
   onRemove: (id: string) => void;
+  selection: Selection;
 }) {
   const meta = [
     item.authors.length ? formatAuthors(item.authors, 1) : null,
@@ -334,9 +421,26 @@ function Row({
     .filter(Boolean)
     .join(" · ");
 
+  const { selecting } = selection;
+  const checked = selection.isSelected(item.paperId);
+
   return (
-    <li className="group flex items-start gap-3 px-4 py-3 transition hover:bg-surface-2">
-      <button onClick={() => onOpen(item.paperId)} className="min-w-0 flex-1 text-left">
+    <li
+      className={cn(
+        "group flex items-start gap-3 px-4 py-3 transition hover:bg-surface-2",
+        selecting && checked && "bg-accent-weak",
+      )}
+    >
+      {selecting && (
+        <div className="pt-0.5">
+          <SelectCheckbox checked={checked} onChange={() => selection.toggle(item.paperId)} />
+        </div>
+      )}
+
+      <button
+        onClick={() => (selecting ? selection.toggle(item.paperId) : onOpen(item.paperId))}
+        className="min-w-0 flex-1 text-left"
+      >
         <span className="block text-sm font-semibold leading-snug text-fg line-clamp-2">{item.title}</span>
         <span className="mt-1 block truncate text-xs text-muted">{meta || "—"}</span>
       </button>
@@ -347,24 +451,28 @@ function Row({
         </span>
       )}
 
-      <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
-        <button
-          onClick={() => onMarkRead(item.paperId)}
-          title="Mark as read"
-          aria-label="Mark as read"
-          className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-accent"
-        >
-          <Check size={15} />
-        </button>
-        <button
-          onClick={() => onRemove(item.paperId)}
-          title="Remove from reading list"
-          aria-label="Remove from reading list"
-          className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-danger"
-        >
-          <X size={15} />
-        </button>
-      </div>
+      {/* In select mode the row's job is picking, not managing — hide the per-row
+          actions so a tap can't accidentally mark-read or remove. */}
+      {!selecting && (
+        <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
+          <button
+            onClick={() => onMarkRead(item.paperId)}
+            title="Mark as read"
+            aria-label="Mark as read"
+            className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-accent"
+          >
+            <Check size={15} />
+          </button>
+          <button
+            onClick={() => onRemove(item.paperId)}
+            title="Remove from reading list"
+            aria-label="Remove from reading list"
+            className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-danger"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
     </li>
   );
 }

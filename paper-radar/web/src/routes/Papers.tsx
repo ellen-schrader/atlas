@@ -1,6 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  CheckSquare,
   LayoutGrid,
   ListFilter,
   Plus,
@@ -13,6 +14,7 @@ import {
 import { AddPaperDialog } from "@/components/AddPaperDialog";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
+import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
 import { PaperCard } from "@/components/PaperCard";
 import { SourceLabel } from "@/components/SourceLabel";
 import { usePaperModal } from "@/components/PaperModal";
@@ -20,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useSelection } from "@/hooks/useSelection";
 import {
   activeFilterCount,
   NO_FILTERS,
@@ -34,9 +37,25 @@ import { useReadPapers } from "@/hooks/useReadPapers";
 import { type TagCount, useTeamTags } from "@/hooks/useTeamTags";
 import { type VenueCount, useTeamVenues } from "@/hooks/useTeamVenues";
 import { semanticSearch } from "@/lib/api";
+import type { ExportPaper } from "@/lib/paperExport";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
+
+/** A shared paper (with its full canonical record) as an exportable row. */
+function postToExport(post: PaperPost): ExportPaper {
+  const p = post.papers;
+  return {
+    id: p.id,
+    title: p.title,
+    authors: p.authors ?? [],
+    venue: p.venue,
+    year: p.year,
+    doi: p.doi,
+    url: p.url,
+    abstract: p.abstract,
+  };
+}
 
 type SearchMode = "keyword" | "semantic";
 
@@ -69,6 +88,7 @@ export default function Papers() {
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
   const [adding, setAdding] = useState(false);
+  const selection = useSelection();
   const searchRef = useRef<HTMLInputElement>(null);
 
   // ⌘K / Ctrl-K focuses the search box.
@@ -113,6 +133,12 @@ export default function Papers() {
   const bookmarked = new Set((reading ?? []).map((r) => r.paper_id));
 
   const { openPaper } = usePaperModal();
+
+  // Multi-select export: selectable ids are the loaded posts; "select all" acts on
+  // what's currently loaded/shown.
+  const allIds = posts.map((p) => p.papers.id);
+  const selectedPapers = posts.filter((p) => selection.isSelected(p.papers.id)).map(postToExport);
+  const allSelected = allIds.length > 0 && allIds.every((id) => selection.isSelected(id));
 
   // Infinite scroll (keyword only; semantic returns a ranked top-N).
   const sentinel = useRef<HTMLDivElement>(null);
@@ -278,6 +304,22 @@ export default function Papers() {
             <Rows3 size={15} />
           </ViewButton>
         </div>
+
+        {/* Enter multi-select to copy or export a set of papers. */}
+        <button
+          type="button"
+          onClick={() => (selection.selecting ? selection.stop() : selection.start())}
+          aria-pressed={selection.selecting}
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-control border px-3 text-sm font-medium transition",
+            selection.selecting
+              ? "border-accent/50 bg-accent-weak text-accent"
+              : "border-border text-muted hover:border-border-strong hover:text-fg",
+          )}
+        >
+          <CheckSquare size={14} />
+          Select
+        </button>
       </div>
 
       {/* What's on screen, and how to undo it. Active filters are chips *here*,
@@ -361,6 +403,9 @@ export default function Papers() {
               // Undefined while the query is in flight — `?? false` would claim every
               // card is unread for a frame, which is the one thing the dot mustn't do.
               read={readIds ? readIds.has(post.papers.id) : undefined}
+              selecting={selection.selecting}
+              selected={selection.isSelected(post.papers.id)}
+              onToggleSelect={() => selection.toggle(post.papers.id)}
             />
           ))}
         </div>
@@ -373,6 +418,9 @@ export default function Papers() {
           userId={userId}
           bookmarked={bookmarked}
           onOpen={(id) => openPaper(id)}
+          selecting={selection.selecting}
+          isSelected={selection.isSelected}
+          onToggleSelect={selection.toggle}
         />
       )}
 
@@ -380,6 +428,21 @@ export default function Papers() {
         <div className="py-4 text-center text-sm text-muted">Loading more…</div>
       )}
       <div ref={sentinel} aria-hidden className="h-px" />
+
+      {/* Space so the floating export bar never hides the last row of results. */}
+      {selection.selecting && <div aria-hidden className="h-16" />}
+
+      {selection.selecting && (
+        <ExportBar
+          papers={selectedPapers}
+          totalCount={allIds.length}
+          allSelected={allSelected}
+          onSelectAll={() => selection.selectAll(allIds)}
+          onClear={selection.clear}
+          onExit={selection.stop}
+          heading={team.name}
+        />
+      )}
 
       <AddPaperDialog
         open={adding}
@@ -714,6 +777,9 @@ function PaperTable({
   userId,
   bookmarked,
   onOpen,
+  selecting = false,
+  isSelected,
+  onToggleSelect,
 }: {
   posts: PaperPost[];
   counts?: Record<string, { reactions: number; comments: number }>;
@@ -722,12 +788,20 @@ function PaperTable({
   teamId: string;
   userId: string;
   bookmarked: Set<string>;
+  selecting?: boolean;
+  isSelected?: (id: string) => boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-card border border-border shadow-sm">
       <table className="w-full min-w-[680px] border-collapse text-sm">
         <thead>
           <tr className="bg-surface-2 text-left text-eyebrow uppercase tracking-eyebrow text-muted">
+            {selecting && (
+              <th className="w-10 px-4 py-2.5 font-semibold">
+                <span className="sr-only">Select</span>
+              </th>
+            )}
             <th className="px-4 py-2.5 font-semibold">Paper</th>
             <th className="px-4 py-2.5 font-semibold">Authors</th>
             <th className="px-4 py-2.5 font-semibold">Engagement</th>
@@ -742,12 +816,21 @@ function PaperTable({
             const p = post.papers;
             const c = counts?.[p.id];
             const read = readIds?.has(p.id) ?? false;
+            const checked = isSelected?.(p.id) ?? false;
             return (
               <tr
                 key={post.id}
-                onClick={() => onOpen(p.id)}
-                className="cursor-pointer border-t border-border align-middle transition hover:bg-surface-2"
+                onClick={() => (selecting ? onToggleSelect?.(p.id) : onOpen(p.id))}
+                className={cn(
+                  "cursor-pointer border-t border-border align-middle transition hover:bg-surface-2",
+                  selecting && checked && "bg-accent-weak",
+                )}
               >
+                {selecting && (
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <SelectCheckbox checked={checked} onChange={() => onToggleSelect?.(p.id)} />
+                  </td>
+                )}
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
                     <span

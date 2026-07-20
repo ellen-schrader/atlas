@@ -11,6 +11,10 @@ export interface ReadingRow {
     venue: string | null;
     year: number | null;
     authors: string[] | null;
+    // Fetched so the list can be exported (BibTeX, links, optional abstracts).
+    doi: string | null;
+    url: string | null;
+    abstract: string | null;
   } | null;
 }
 
@@ -21,7 +25,7 @@ export function useReadingList(userId: string, teamId: string) {
     queryFn: async (): Promise<ReadingRow[]> => {
       const { data, error } = await supabase
         .from("paper_status")
-        .select("paper_id, updated_at, papers(id, title, venue, year, authors)")
+        .select("paper_id, updated_at, papers(id, title, venue, year, authors, doi, url, abstract)")
         .eq("user_id", userId)
         .eq("team_id", teamId)
         .eq("status", "to_read")
