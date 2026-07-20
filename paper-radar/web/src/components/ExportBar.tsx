@@ -162,10 +162,7 @@ function ExportMenu({ papers, heading }: { papers: ExportPaper[]; heading?: stri
                 >
                   {format === f && <span className="h-2 w-2 rounded-full bg-accent" />}
                 </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-fg">{FORMAT_META[f].label}</span>
-                  <span className="block text-xs text-muted">{FORMAT_META[f].hint}</span>
-                </span>
+                <span className="text-sm font-medium text-fg">{FORMAT_META[f].label}</span>
               </button>
             ))}
           </div>

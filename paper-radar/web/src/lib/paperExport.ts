@@ -32,10 +32,10 @@ export interface ExportOptions {
   heading?: string;
 }
 
-export const FORMAT_META: Record<ExportFormat, { label: string; hint: string; ext: string; mime: string }> = {
-  markdown: { label: "Markdown", hint: "for an LLM", ext: "md", mime: "text/markdown" },
-  text: { label: "Plain text", hint: "for chat or email", ext: "txt", mime: "text/plain" },
-  bibtex: { label: "BibTeX", hint: "for Zotero, Mendeley, EndNote", ext: "bib", mime: "application/x-bibtex" },
+export const FORMAT_META: Record<ExportFormat, { label: string; ext: string; mime: string }> = {
+  markdown: { label: "Markdown", ext: "md", mime: "text/markdown" },
+  text: { label: "Plain text", ext: "txt", mime: "text/plain" },
+  bibtex: { label: "BibTeX", ext: "bib", mime: "application/x-bibtex" },
 };
 
 /** Reduce any of the DOI forms our sources store — `10.x/y`, `doi:10.x/y`,
