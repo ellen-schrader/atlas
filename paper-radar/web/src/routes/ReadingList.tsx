@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BookMarked, Check, CheckSquare, Loader2, Search, X } from "lucide-react";
 
@@ -16,7 +16,7 @@ type Sort = "recommended" | "added";
 
 interface Item {
   paperId: string;
-  title: string;
+  title: string | null;
   authors: string[];
   venue: string | null;
   year: number | null;
@@ -86,7 +86,7 @@ export default function ReadingList() {
     sort === "added"
       ? (byDate.data ?? []).map((r) => ({
           paperId: r.paper_id,
-          title: r.papers?.title ?? "Untitled paper",
+          title: r.papers?.title ?? null,
           authors: r.papers?.authors ?? [],
           venue: r.papers?.venue ?? null,
           year: r.papers?.year ?? null,
@@ -97,7 +97,7 @@ export default function ReadingList() {
         }))
       : (byRec.data?.results ?? []).map((r) => ({
           paperId: r.post.papers.id,
-          title: r.post.papers.title ?? "Untitled paper",
+          title: r.post.papers.title ?? null,
           authors: r.post.papers.authors ?? [],
           venue: r.post.papers.venue ?? null,
           year: r.post.papers.year ?? null,
@@ -127,14 +127,23 @@ export default function ReadingList() {
     (it) =>
       (!venue || it.venue === venue) &&
       (!q ||
-        it.title.toLowerCase().includes(q) ||
+        (it.title ?? "").toLowerCase().includes(q) ||
         it.authors.some((a) => a.toLowerCase().includes(q))),
   );
 
   // Multi-select export acts on the currently-shown (filtered) papers.
-  const shownIds = shown.map((it) => it.paperId);
-  const selectedPapers = shown.filter((it) => selection.isSelected(it.paperId)).map(itemToExport);
+  const shownIds = selection.selecting ? shown.map((it) => it.paperId) : [];
+  const selectedPapers = selection.selecting
+    ? shown.filter((it) => selection.isSelected(it.paperId)).map(itemToExport)
+    : [];
   const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selection.isSelected(id));
+
+  // Reset the selection when the filters/sort change, so the count and "select all"
+  // always match what's on screen and the export can't silently drop hidden picks.
+  const { clear: clearSelection } = selection;
+  useEffect(() => {
+    clearSelection();
+  }, [query, venue, sort, clearSelection]);
 
   // Canonical backlog size comes from the date view (always loaded), so the
   // header stays stable even while the ranked view is fetching.
@@ -441,7 +450,9 @@ function Row({
         onClick={() => (selecting ? selection.toggle(item.paperId) : onOpen(item.paperId))}
         className="min-w-0 flex-1 text-left"
       >
-        <span className="block text-sm font-semibold leading-snug text-fg line-clamp-2">{item.title}</span>
+        <span className="block text-sm font-semibold leading-snug text-fg line-clamp-2">
+          {item.title ?? "Untitled paper"}
+        </span>
         <span className="mt-1 block truncate text-xs text-muted">{meta || "—"}</span>
       </button>
 

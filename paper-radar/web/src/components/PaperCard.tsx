@@ -58,6 +58,10 @@ export function PaperCard({
       aria-pressed={selecting ? selected : undefined}
       onClick={activate}
       onKeyDown={(e) => {
+        // Only when the card itself has focus: keydown bubbles, so without this an
+        // Enter/Space on the nested checkbox or bookmark would double-fire (its own
+        // click plus this handler). Same guard PaperListRow uses.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           activate();

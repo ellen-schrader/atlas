@@ -136,9 +136,21 @@ export default function Papers() {
 
   // Multi-select export: selectable ids are the loaded posts; "select all" acts on
   // what's currently loaded/shown.
-  const allIds = posts.map((p) => p.papers.id);
-  const selectedPapers = posts.filter((p) => selection.isSelected(p.papers.id)).map(postToExport);
+  // Only compute the export set while selecting — it's three O(n) passes over the
+  // full (post-infinite-scroll) list, and nothing reads them otherwise.
+  const allIds = selection.selecting ? posts.map((p) => p.papers.id) : [];
+  const selectedPapers = selection.selecting
+    ? posts.filter((p) => selection.isSelected(p.papers.id)).map(postToExport)
+    : [];
   const allSelected = allIds.length > 0 && allIds.every((id) => selection.isSelected(id));
+
+  // Changing what the list shows changes what "select all" and the count refer to,
+  // so reset the selection when the query/filters/sort/mode change — otherwise
+  // picks that leave the view would be silently dropped from the export.
+  const { clear: clearSelection } = selection;
+  useEffect(() => {
+    clearSelection();
+  }, [query, filters, sort, mode, clearSelection]);
 
   // Infinite scroll (keyword only; semantic returns a ranked top-N).
   const sentinel = useRef<HTMLDivElement>(null);
