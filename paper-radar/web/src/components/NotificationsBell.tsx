@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Bell } from "lucide-react";
 
+import { useDismiss } from "@/hooks/useDismiss";
 import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
@@ -24,21 +25,7 @@ export function NotificationsBell({
   const [, setSearchParams] = useSearchParams();
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(ref, open, () => setOpen(false));
 
   function openMention(paperId: string) {
     void markSeen(paperId);

@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,23 +21,10 @@ export function CopyBlock({
   label?: string;
   className?: string;
 }) {
-  const [copied, setCopied] = useState(false);
   // Copy-then-navigate is the expected flow here (you copy a command and leave for
-  // the terminal), so the reset timer routinely outlives the component.
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard blocked (insecure origin, denied permission) — the text is on
-      // screen and selectable, so the user can still copy it by hand.
-    }
-  }
+  // the terminal); the hook clears its reset timer on unmount. When the clipboard is
+  // blocked the text is still on screen and selectable, so a failed copy is a no-op.
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <div
@@ -50,7 +38,7 @@ export function CopyBlock({
       </pre>
       <button
         type="button"
-        onClick={copy}
+        onClick={() => copy(value)}
         aria-label={copied ? "Copied" : label}
         className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 font-sans text-xs font-medium text-muted transition hover:border-accent hover:text-accent"
       >

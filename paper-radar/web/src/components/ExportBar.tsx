@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Copy, Download, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { Check, CheckSquare, ChevronDown, Copy, Download, X } from "lucide-react";
 
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { useDismiss } from "@/hooks/useDismiss";
+import type { Selection } from "@/hooks/useSelection";
 import {
   type ExportFormat,
   type ExportPaper,
@@ -13,10 +16,67 @@ import { cn } from "@/lib/utils";
 
 const FORMATS: ExportFormat[] = ["markdown", "text", "bibtex"];
 
-/** A floating action bar for multi-select export. Shown while a list is in select
- *  mode: it reports the count, toggles select-all, and opens the export popover
- *  (format + "include abstracts", then copy or download). */
-export function ExportBar({
+/** The multi-select export UI for a list: the spacer that keeps the last row clear
+ *  of the floating bar, plus the bar itself. Renders nothing until select mode is on.
+ *  `items` is the list as currently shown; select-all and the count act on it. */
+export function SelectionExportBar<T>({
+  selection,
+  items,
+  idOf,
+  toExport,
+  heading,
+}: {
+  selection: Selection;
+  items: T[];
+  idOf: (item: T) => string;
+  toExport: (item: T) => ExportPaper;
+  heading?: string;
+}) {
+  if (!selection.selecting) return null;
+  const ids = items.map(idOf);
+  const selected = items.filter((it) => selection.isSelected(idOf(it))).map(toExport);
+  const allSelected = ids.length > 0 && ids.every((id) => selection.isSelected(id));
+
+  return (
+    <>
+      {/* Space so the floating bar never hides the last row of the list. */}
+      <div aria-hidden className="h-16" />
+      <ExportBar
+        papers={selected}
+        totalCount={ids.length}
+        allSelected={allSelected}
+        onSelectAll={() => selection.selectAll(ids)}
+        onClear={selection.clear}
+        onExit={selection.stop}
+        heading={heading}
+      />
+    </>
+  );
+}
+
+/** Toolbar button that enters/leaves multi-select mode. */
+export function SelectToggle({ selection, className }: { selection: Selection; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => (selection.selecting ? selection.stop() : selection.start())}
+      aria-pressed={selection.selecting}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-control border px-3 text-sm font-medium transition",
+        selection.selecting
+          ? "border-accent/50 bg-accent-weak text-accent"
+          : "border-border text-muted hover:border-border-strong hover:text-fg",
+        className,
+      )}
+    >
+      <CheckSquare size={14} />
+      Select
+    </button>
+  );
+}
+
+/** The floating action bar: count, select-all/clear, and the export popover. */
+function ExportBar({
   papers,
   totalCount,
   allSelected,
@@ -73,43 +133,19 @@ function ExportMenu({ papers, heading }: { papers: ExportPaper[]; heading?: stri
   const [open, setOpen] = useState(false);
   const [format, setFormat] = useState<ExportFormat>("markdown");
   const [abstracts, setAbstracts] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useCopyToClipboard(1600);
   const ref = useRef<HTMLDivElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const n = papers.length;
   const disabled = n === 0;
 
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(ref, open, () => setOpen(false));
 
   async function copy() {
-    const text = formatPapers(papers, format, { abstracts, heading });
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Clipboard blocked (insecure origin / denied) — fall back to a download so
-      // the user still gets their list out.
-      download();
-    }
+    const ok = await copyToClipboard(formatPapers(papers, format, { abstracts, heading }));
+    // Clipboard blocked (insecure origin / denied) — fall back to a download so the
+    // user still gets their list out.
+    if (!ok) download();
   }
 
   function download() {
