@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookMarked, Check, CheckSquare, Loader2, Search, X } from "lucide-react";
+import { BookMarked, Check, Loader2, Search, X } from "lucide-react";
 
-import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
+import { SelectCheckbox, SelectionExportBar, SelectToggle } from "@/components/ExportBar";
 import { usePaperModal } from "@/components/PaperModal";
 import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
@@ -131,13 +131,6 @@ export default function ReadingList() {
         it.authors.some((a) => a.toLowerCase().includes(q))),
   );
 
-  // Multi-select export acts on the currently-shown (filtered) papers.
-  const shownIds = selection.selecting ? shown.map((it) => it.paperId) : [];
-  const selectedPapers = selection.selecting
-    ? shown.filter((it) => selection.isSelected(it.paperId)).map(itemToExport)
-    : [];
-  const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selection.isSelected(id));
-
   // Reset the selection when the filters/sort change, so the count and "select all"
   // always match what's on screen and the export can't silently drop hidden picks.
   const { clear: clearSelection } = selection;
@@ -223,22 +216,7 @@ export default function ReadingList() {
               </button>
             ))}
           </div>
-          {total > 0 && (
-            <button
-              type="button"
-              onClick={() => (selection.selecting ? selection.stop() : selection.start())}
-              aria-pressed={selection.selecting}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-sm font-medium transition",
-                selection.selecting
-                  ? "border-accent/50 bg-accent-weak text-accent"
-                  : "border-border text-muted hover:border-border-strong hover:text-fg",
-              )}
-            >
-              <CheckSquare size={14} />
-              Select
-            </button>
-          )}
+          {total > 0 && <SelectToggle selection={selection} className="py-1.5" />}
         </div>
       </div>
 
@@ -361,20 +339,13 @@ export default function ReadingList() {
         </>
       )}
 
-      {/* Space so the floating export bar never hides the last row. */}
-      {selection.selecting && <div aria-hidden className="h-16" />}
-
-      {selection.selecting && (
-        <ExportBar
-          papers={selectedPapers}
-          totalCount={shownIds.length}
-          allSelected={allShownSelected}
-          onSelectAll={() => selection.selectAll(shownIds)}
-          onClear={selection.clear}
-          onExit={selection.stop}
-          heading="Reading list"
-        />
-      )}
+      <SelectionExportBar
+        selection={selection}
+        items={shown}
+        idOf={(it) => it.paperId}
+        toExport={itemToExport}
+        heading="Reading list"
+      />
     </div>
   );
 }

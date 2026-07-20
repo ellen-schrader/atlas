@@ -1,26 +1,18 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  CheckSquare,
-  LayoutGrid,
-  ListFilter,
-  Plus,
-  Rows3,
-  Search,
-  Sparkles,
-  X,
-} from "lucide-react";
+import { LayoutGrid, ListFilter, Plus, Rows3, Search, Sparkles, X } from "lucide-react";
 
 import { AddPaperDialog } from "@/components/AddPaperDialog";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
-import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
+import { SelectCheckbox, SelectionExportBar, SelectToggle } from "@/components/ExportBar";
 import { PaperCard } from "@/components/PaperCard";
 import { SourceLabel } from "@/components/SourceLabel";
 import { usePaperModal } from "@/components/PaperModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useDismiss } from "@/hooks/useDismiss";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { useSelection } from "@/hooks/useSelection";
 import {
@@ -133,16 +125,6 @@ export default function Papers() {
   const bookmarked = new Set((reading ?? []).map((r) => r.paper_id));
 
   const { openPaper } = usePaperModal();
-
-  // Multi-select export: selectable ids are the loaded posts; "select all" acts on
-  // what's currently loaded/shown.
-  // Only compute the export set while selecting — it's three O(n) passes over the
-  // full (post-infinite-scroll) list, and nothing reads them otherwise.
-  const allIds = selection.selecting ? posts.map((p) => p.papers.id) : [];
-  const selectedPapers = selection.selecting
-    ? posts.filter((p) => selection.isSelected(p.papers.id)).map(postToExport)
-    : [];
-  const allSelected = allIds.length > 0 && allIds.every((id) => selection.isSelected(id));
 
   // Changing what the list shows changes what "select all" and the count refer to,
   // so reset the selection when the query/filters/sort/mode change — otherwise
@@ -318,20 +300,7 @@ export default function Papers() {
         </div>
 
         {/* Enter multi-select to copy or export a set of papers. */}
-        <button
-          type="button"
-          onClick={() => (selection.selecting ? selection.stop() : selection.start())}
-          aria-pressed={selection.selecting}
-          className={cn(
-            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-control border px-3 text-sm font-medium transition",
-            selection.selecting
-              ? "border-accent/50 bg-accent-weak text-accent"
-              : "border-border text-muted hover:border-border-strong hover:text-fg",
-          )}
-        >
-          <CheckSquare size={14} />
-          Select
-        </button>
+        <SelectToggle selection={selection} className="h-9 shrink-0" />
       </div>
 
       {/* What's on screen, and how to undo it. Active filters are chips *here*,
@@ -441,20 +410,13 @@ export default function Papers() {
       )}
       <div ref={sentinel} aria-hidden className="h-px" />
 
-      {/* Space so the floating export bar never hides the last row of results. */}
-      {selection.selecting && <div aria-hidden className="h-16" />}
-
-      {selection.selecting && (
-        <ExportBar
-          papers={selectedPapers}
-          totalCount={allIds.length}
-          allSelected={allSelected}
-          onSelectAll={() => selection.selectAll(allIds)}
-          onClear={selection.clear}
-          onExit={selection.stop}
-          heading={team.name}
-        />
-      )}
+      <SelectionExportBar
+        selection={selection}
+        items={posts}
+        idOf={(post) => post.papers.id}
+        toExport={postToExport}
+        heading={team.name}
+      />
 
       <AddPaperDialog
         open={adding}
@@ -608,21 +570,7 @@ function Menu({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(ref, open, () => setOpen(false));
 
   // A disabled control that stays open would float over results it can't affect.
   useEffect(() => {
