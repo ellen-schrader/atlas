@@ -492,6 +492,59 @@ def test_inbound_webhook_no_link_replies_with_hint(monkeypatch):
     assert "couldn't find" in resp.json()["text"].lower()
 
 
+def test_inbound_webhook_scans_attachments_for_the_link(monkeypatch):
+    # An unfurled link keeps only the page title in `text`; the URL survives in
+    # the attachment content, and the planner must be handed both (issue #93).
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    seen = {}
+
+    def fake_plan(team_id, text):
+        seen["text"] = text
+        return teams_integration.InboundPlan("new", url="https://doi.org/10.1038/s43018-1")
+
+    monkeypatch.setattr(teams_integration, "plan_inbound_import", fake_plan)
+    monkeypatch.setattr(teams_integration, "import_paper_background", lambda *a: None)
+    body = json.dumps(
+        {
+            "text": "<at>Atlas</at> Combination of paricalcitol with chemotherapy …",
+            "attachments": [
+                {
+                    "contentType": "text/html",
+                    "content": '<a href="https://doi.org/10.1038/s43018-1">Combination …</a>',
+                }
+            ],
+        }
+    ).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert "https://doi.org/10.1038/s43018-1" in seen["text"]
+
+
+def test_inbound_webhook_plan_failure_replies_with_a_message_not_an_error(monkeypatch):
+    # Teams renders any error status as "please fix the bot source code" in the
+    # channel (issue #93) — a planning failure must still answer 200 and say why.
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+
+    def boom(team_id, text):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(teams_integration, "plan_inbound_import", boom)
+    monkeypatch.setattr(
+        teams_integration,
+        "import_paper_background",
+        lambda *a: pytest.fail("nothing may be scheduled when planning fails"),
+    )
+    body = json.dumps({"text": "@Atlas https://arxiv.org/abs/1"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "message"
+    assert "temporary internal error" in resp.json()["text"]
+
+
 def test_inbound_webhook_rejects_oversized_body(monkeypatch):
     # Guard the public endpoint from buffering a huge unauthenticated payload.
     monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)

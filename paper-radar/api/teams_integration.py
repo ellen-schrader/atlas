@@ -35,6 +35,7 @@ from paper_radar.ingest.urls import (
     _clean_url,
     _normalize_key,
     extract_urls_from_text,
+    is_asset_url,
     is_skip_host,
 )
 
@@ -539,6 +540,34 @@ def verify_teams_signature(secret_b64: str, raw_body: bytes, auth_header: str | 
     return hmac.compare_digest(expected, provided)
 
 
+def inbound_message_text(payload: dict) -> str:
+    """Everything in an inbound Teams message worth scanning for a paper link.
+
+    A pasted link that Teams unfurls into a preview card often keeps only the
+    page *title* in the top-level ``text`` — the URL itself survives only in
+    the message's attachments (an HTML rendering of the message, or the card's
+    JSON). Concatenate the text with every attachment's content so the URL
+    extractor sees hrefs wherever Teams put them (issue #93: doi.org links
+    pasted into a channel were answered with "I couldn't find a paper there").
+    """
+    parts = [str(payload.get("text") or "")]
+    attachments = payload.get("attachments")
+    for att in attachments if isinstance(attachments, list) else []:
+        if not isinstance(att, dict):
+            continue
+        content = att.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, dict):
+            # Card JSON: its URLs sit in plain string values, which the
+            # extractor's regexes find without knowing the card's shape.
+            parts.append(json.dumps(content))
+        content_url = att.get("contentUrl")
+        if isinstance(content_url, str):
+            parts.append(content_url)
+    return "\n".join(p for p in parts if p)
+
+
 @dataclass
 class InboundPlan:
     """The fast (no-network) decision for the synchronous reply."""
@@ -554,7 +583,7 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     well inside the Outgoing Webhook's ~5 s reply window. The slow resolve +
     insert happens afterwards in a background task.
     """
-    urls = [u for u in extract_urls_from_text(text) if not is_skip_host(u)]
+    urls = [u for u in extract_urls_from_text(text) if not (is_skip_host(u) or is_asset_url(u))]
     if not urls:
         return InboundPlan("no_url")
     url = _clean_url(urls[0])

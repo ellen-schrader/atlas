@@ -272,14 +272,35 @@ async def inbound_webhook(
         payload = json.loads(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Malformed payload") from exc
-    text = payload.get("text") or ""
+    # Scan the attachments too, not just `text`: an unfurled link's URL often
+    # survives only in the attachment content (the title replaces it in text).
+    text = teams_integration.inbound_message_text(payload)
     sender = (payload.get("from") or {}).get("name") or None
 
     # The plan is cheap DB-only work (link present? already in the lab?) — well
     # inside Teams' ~5 s reply window. Offloaded so it never blocks the event loop.
-    plan = await run_in_threadpool(teams_integration.plan_inbound_import, team_id, text)
+    try:
+        plan = await run_in_threadpool(teams_integration.plan_inbound_import, team_id, text)
+    except Exception:
+        # Past the HMAC check this is a genuine Teams message, so any failure
+        # must still reply 200 with an explanation: an error status makes Teams
+        # post "please fix the bot source code" into the channel (issue #93).
+        log.exception("inbound plan failed for team %s", team_id)
+        return teams_integration.inbound_reply(
+            "⚠️ Atlas could not process this mention because of a temporary internal "
+            "error. The paper has not been added — please try again in a few minutes."
+        )
 
     if plan.status == "no_url":
+        # Signed request, no link found: leave a trace with enough shape to tell
+        # "user mentioned with no link" from "extraction missed one" (no content —
+        # channel messages stay out of the logs).
+        log.info(
+            "inbound: no paper link for team %s (text %d chars, %d attachments)",
+            team_id,
+            len(payload.get("text") or ""),
+            len(payload.get("attachments") or []),
+        )
         return teams_integration.inbound_reply(
             "I couldn't find a paper there. Mention me with a link or DOI, e.g. "
             "`@Atlas https://arxiv.org/abs/…` or `@Atlas 10.1016/j.cell.…`"
