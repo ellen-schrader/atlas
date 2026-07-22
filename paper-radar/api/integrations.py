@@ -272,10 +272,19 @@ async def inbound_webhook(
         payload = json.loads(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Malformed payload") from exc
+    if not isinstance(payload, dict):
+        # Valid JSON but not a message object — same caller error as unparseable
+        # JSON (real Teams always sends an object).
+        raise HTTPException(status_code=400, detail="Malformed payload")
     # Scan the attachments too, not just `text`: an unfurled link's URL often
     # survives only in the attachment content (the title replaces it in text).
     text = teams_integration.inbound_message_text(payload)
-    sender = (payload.get("from") or {}).get("name") or None
+    # Teams sends `from` as an object with a string name; any other shape (a
+    # signer poking the endpoint) degrades to anonymous attribution, not a 500.
+    from_field = payload.get("from")
+    sender = from_field.get("name") if isinstance(from_field, dict) else None
+    if not isinstance(sender, str) or not sender:
+        sender = None
 
     # The plan is cheap DB-only work (link present? already in the lab?) — well
     # inside Teams' ~5 s reply window. Offloaded so it never blocks the event loop.
@@ -294,12 +303,15 @@ async def inbound_webhook(
     if plan.status == "no_url":
         # Signed request, no link found: leave a trace with enough shape to tell
         # "user mentioned with no link" from "extraction missed one" (no content —
-        # channel messages stay out of the logs).
+        # channel messages stay out of the logs). isinstance, not truthiness: an
+        # unexpected field shape must degrade to 0 rather than crash len().
+        raw_text = payload.get("text")
+        attachments = payload.get("attachments")
         log.info(
             "inbound: no paper link for team %s (text %d chars, %d attachments)",
             team_id,
-            len(payload.get("text") or ""),
-            len(payload.get("attachments") or []),
+            len(raw_text) if isinstance(raw_text, str) else 0,
+            len(attachments) if isinstance(attachments, list) else 0,
         )
         return teams_integration.inbound_reply(
             "I couldn't find a paper there. Mention me with a link or DOI, e.g. "

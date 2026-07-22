@@ -569,6 +569,17 @@ def test_inbound_message_text_finds_url_in_card_json():
     assert "https://doi.org/10.1016/j.cell.2026.06.027" in text
 
 
+def test_inbound_message_text_preserves_non_ascii_urls():
+    # json.dumps must not \uXXXX-escape card URLs: the URL regex would capture
+    # the escape sequence verbatim and the mangled link would never resolve.
+    payload = {
+        "text": "Atlas check this out",
+        "attachments": [{"content": {"url": "https://link.springer.com/article/café"}}],
+    }
+    text = teams_integration.inbound_message_text(payload)
+    assert extract_urls_from_text(text) == ["https://link.springer.com/article/café"]
+
+
 def test_inbound_message_text_tolerates_junk_shapes():
     assert teams_integration.inbound_message_text({}) == ""
     assert teams_integration.inbound_message_text({"text": None, "attachments": "nope"}) == ""
@@ -598,6 +609,38 @@ def test_plan_asset_only_message_is_no_url(monkeypatch):
         "t1", "@Atlas https://statics.teams.cdn.office.net/thumb.png"
     )
     assert plan.status == "no_url"
+
+
+def test_plan_retries_once_when_the_pooled_connection_is_stale(monkeypatch):
+    # After a Fly suspend/resume the cached client's first request can hit a
+    # socket the server closed during the idle window; one retry must recover.
+    import httpx
+
+    calls = {"n": 0}
+
+    class _FlakyQuery:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return types.SimpleNamespace(data=[])
+
+    class _FlakyClient:
+        def table(self, name):
+            return _FlakyQuery()
+
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _FlakyClient())
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
+    assert plan.status == "new" and calls["n"] == 2
 
 
 def test_inbound_secret_for_team(monkeypatch):

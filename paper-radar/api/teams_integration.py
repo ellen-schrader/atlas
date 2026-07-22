@@ -29,6 +29,8 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
+
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import (
@@ -509,15 +511,33 @@ def normalize_inbound_secret(secret: str) -> str:
     return token
 
 
+def _retry_stale_connection(query):
+    """Run one idempotent DB read, retrying once on a transport-level error.
+
+    The Fly machine suspends (RAM snapshot) between requests, so the cached
+    Supabase client can resume holding keep-alive sockets the server closed
+    during the idle window. The first request then dies with a connection
+    error, not an HTTP status — postgrest retries only 503/520 — and on the
+    webhook reply path that would surface as a user-visible failure. One
+    retry checks out a fresh connection.
+    """
+    try:
+        return query()
+    except (httpx.TransportError, ConnectionError):
+        return query()
+
+
 def inbound_secret_for_team(team_id: str) -> str | None:
     """The lab's inbound HMAC token, or None if inbound isn't configured (service role)."""
-    found = (
-        service_client()
-        .table("team_integrations")
-        .select("inbound_secret")
-        .eq("team_id", team_id)
-        .limit(1)
-        .execute()
+    found = _retry_stale_connection(
+        lambda: (
+            service_client()
+            .table("team_integrations")
+            .select("inbound_secret")
+            .eq("team_id", team_id)
+            .limit(1)
+            .execute()
+        )
     )
     return found.data[0]["inbound_secret"] if found.data else None
 
@@ -561,7 +581,10 @@ def inbound_message_text(payload: dict) -> str:
         elif isinstance(content, dict):
             # Card JSON: its URLs sit in plain string values, which the
             # extractor's regexes find without knowing the card's shape.
-            parts.append(json.dumps(content))
+            # ensure_ascii=False keeps non-ASCII URL characters literal — the
+            # default \uXXXX escapes would be captured verbatim by the URL
+            # regex and mangle the link.
+            parts.append(json.dumps(content, ensure_ascii=False))
         content_url = att.get("contentUrl")
         if isinstance(content_url, str):
             parts.append(content_url)
@@ -589,18 +612,29 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     url = _clean_url(urls[0])
     svc = service_client()
     papers = (
-        svc.table("papers").select("id").eq("url_norm", _normalize_key(url)).limit(1).execute().data
+        _retry_stale_connection(
+            lambda: (
+                svc.table("papers")
+                .select("id")
+                .eq("url_norm", _normalize_key(url))
+                .limit(1)
+                .execute()
+            )
+        ).data
         or []
     )
     if papers:
         posted = (
-            svc.table("paper_posts")
-            .select("id")
-            .eq("paper_id", papers[0]["id"])
-            .eq("team_id", team_id)
-            .limit(1)
-            .execute()
-            .data
+            _retry_stale_connection(
+                lambda: (
+                    svc.table("paper_posts")
+                    .select("id")
+                    .eq("paper_id", papers[0]["id"])
+                    .eq("team_id", team_id)
+                    .limit(1)
+                    .execute()
+                )
+            ).data
             or []
         )
         if posted:

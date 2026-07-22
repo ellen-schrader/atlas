@@ -545,6 +545,29 @@ def test_inbound_webhook_plan_failure_replies_with_a_message_not_an_error(monkey
     assert "temporary internal error" in resp.json()["text"]
 
 
+def test_inbound_webhook_rejects_non_object_json(monkeypatch):
+    # Valid JSON that isn't a message object must be a clean 400, not an
+    # AttributeError-driven 500 (real Teams always sends an object).
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    body = b"[]"
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 400
+
+
+def test_inbound_webhook_tolerates_junk_field_shapes(monkeypatch):
+    # Non-string text, non-list attachments, non-dict from: every field shape
+    # a signer could send must degrade gracefully (the no_url reply), never 500.
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    body = json.dumps({"text": 5, "attachments": 7, "from": "someone"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert "couldn't find" in resp.json()["text"].lower()
+
+
 def test_inbound_webhook_rejects_oversized_body(monkeypatch):
     # Guard the public endpoint from buffering a huge unauthenticated payload.
     monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
