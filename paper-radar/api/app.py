@@ -42,6 +42,15 @@ from .config import get_api_settings
 from .deps import require_token
 from .supa import get_user_id, service_client, user_client
 
+# Uvicorn configures only its own loggers, so without a root handler the app's
+# INFO-level diagnostics (inbound webhook traces, import skips) never reach the
+# container logs — Python's last-resort handler emits WARNING and above only.
+# basicConfig is a no-op when a root handler already exists (e.g. under pytest).
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+# One line per Supabase round-trip is noise, not signal, at INFO.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Atlas API", version="0.1.0")
