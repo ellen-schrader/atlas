@@ -1911,6 +1911,7 @@ dependencies = [
 api = [
     { name = "bibtexparser" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "supabase" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1943,6 +1944,7 @@ requires-dist = [
     { name = "faiss-cpu", marker = "extra == 'legacy'", specifier = ">=1.8" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'api'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "matplotlib", marker = "extra == 'mcp'", specifier = ">=3.8" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2" },

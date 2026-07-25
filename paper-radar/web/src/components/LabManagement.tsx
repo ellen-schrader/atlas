@@ -79,7 +79,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
       await run(
         "inbound-save",
         () => saveTeamsInboundSecret(teamId, value),
-        "Inbound on — @Atlas a paper link in the channel to add it.",
+        "Done. Anyone can now post @Atlas <link> in the channel to add a paper.",
       )
     )
       setToken("");
@@ -132,7 +132,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
         </div>
 
         <div className="mt-1 border-t border-border pt-3">
-          <div className="font-medium">Pull papers from Teams</div>
+          <div className="font-medium">Add papers from Teams</div>
           {teams.inbound_configured ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-2 text-muted">
               <span>
@@ -211,7 +211,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
   }
 
   return (
-    <Panel title="Post to Teams" desc="Mirror new papers into a Microsoft Teams channel.">
+    <Panel title="Send new papers to Teams" desc="Post every paper added to the lab into a Microsoft Teams channel.">
       {body}
       {notice && (
         <p className={cn("mt-3 text-xs", notice.ok ? "text-muted" : "text-danger")}>{notice.text}</p>

@@ -797,6 +797,9 @@ def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
     monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm: ("p1", False))
     cap = _InsertCapture()
     monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+    # The post-insert channel confirmation is exercised separately; stub it so this
+    # test's fake client only ever sees the paper_posts table.
+    monkeypatch.setattr(teams_integration, "_notify_added_to_lab", lambda *a: None)
 
     teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen Schrader")
 
@@ -816,6 +819,7 @@ def test_import_background_truncates_a_long_sender_label(monkeypatch):
     monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
     cap = _InsertCapture()
     monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+    monkeypatch.setattr(teams_integration, "_notify_added_to_lab", lambda *a: None)
 
     teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "z" * 500)
     assert len(cap.inserted["posted_by_label"]) == teams_integration._INBOUND_LABEL_MAX
@@ -830,7 +834,15 @@ def test_import_background_skips_unresolved_and_never_inserts(monkeypatch):
         "service_client",
         lambda: pytest.fail("must not write an unresolved link"),
     )
+    notified = {}
+    monkeypatch.setattr(
+        teams_integration,
+        "_notify_could_not_add",
+        lambda team_id: notified.update(team_id=team_id),
+    )
     teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+    # Nothing is written, but the channel still hears the promised outcome.
+    assert notified == {"team_id": "t1"}
 
 
 def test_import_background_never_raises(monkeypatch):
@@ -839,3 +851,200 @@ def test_import_background_never_raises(monkeypatch):
     )
     # A resolve failure is logged, not raised (it runs as a fire-and-forget task).
     teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")
+
+
+# --- import_paper_background: the three channel confirmations ------------------
+
+
+class _ExistingPostClient:
+    """A fake service client where the paper is already posted to the team, so
+    the existing-check returns a row and no insert should ever run."""
+
+    def __init__(self):
+        self.inserted = False
+
+    def table(self, name):
+        assert name == "paper_posts"
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def insert(self, row):
+        self.inserted = True
+        return self
+
+    def execute(self):
+        return types.SimpleNamespace(data=[{"id": "pp1"}])
+
+
+def test_import_background_new_paper_confirms_in_channel(monkeypatch):
+    # A genuinely new paper is inserted, then confirmed in the channel with a deep link.
+    import api.app as app_mod
+
+    monkeypatch.setattr(
+        teams_integration,
+        "fetch_metadata",
+        lambda url: _fake_meta(title="Fresh", venue="Cell", year=2024),
+    )
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p9", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+    confirmed = {}
+    monkeypatch.setattr(
+        teams_integration,
+        "_notify_added_to_lab",
+        lambda team_id, meta, paper_id: confirmed.update(
+            team_id=team_id, title=meta.title, paper_id=paper_id
+        ),
+    )
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")
+
+    assert cap.inserted is not None  # the paper was actually inserted
+    assert confirmed == {"team_id": "t1", "title": "Fresh", "paper_id": "p9"}
+
+
+def test_import_background_duplicate_after_metadata_notifies_not_inserts(monkeypatch):
+    # The DOI resolved to a paper already posted here — the fast reply matched on
+    # URL and missed it. Post the "already in the lab" follow-up; never insert.
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta(title="Dup"))
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
+    client = _ExistingPostClient()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: client)
+    notified = {}
+    monkeypatch.setattr(
+        teams_integration,
+        "_notify_already_in_lab",
+        lambda team_id, title, paper_id: notified.update(
+            team_id=team_id, title=title, paper_id=paper_id
+        ),
+    )
+
+    teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")
+
+    assert client.inserted is False
+    assert notified == {"team_id": "t1", "title": "Dup", "paper_id": "p1"}
+
+
+# --- _post_channel_notice (shared send helper for the inbound notices) --------
+
+
+def test_post_channel_notice_noop_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(teams_integration, "service_client", _client_without_row)
+    monkeypatch.setattr(
+        teams_integration,
+        "post_to_teams",
+        lambda *a, **k: pytest.fail("must not post without config"),
+    )
+    # The card is built lazily, inside the guard — it must not be built either.
+    teams_integration._post_channel_notice(
+        "t1", lambda: pytest.fail("card must not be built without config"), "x"
+    )
+
+
+def test_post_channel_notice_refuses_invalid_stored_webhook(monkeypatch):
+    # Send-time SSRF re-validation: a stored non-allowlisted URL must never be posted to.
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient(
+            {"team_integrations": [{"webhook_url": "https://internal.example/x", "enabled": True}]}
+        ),
+    )
+    monkeypatch.setattr(
+        teams_integration,
+        "post_to_teams",
+        lambda *a, **k: pytest.fail("must not post to a non-allowlisted URL"),
+    )
+    teams_integration._post_channel_notice("t1", lambda: {"card": True}, "x")
+
+
+def test_post_channel_notice_posts_built_card_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"team_integrations": [{"webhook_url": GOOD_URL, "enabled": True}]}),
+    )
+    sent = {}
+    monkeypatch.setattr(
+        teams_integration,
+        "post_to_teams",
+        lambda webhook_url, card: sent.update(webhook_url=webhook_url, card=card) or True,
+    )
+    teams_integration._post_channel_notice("t1", lambda: {"marker": "built"}, "x")
+    assert sent == {"webhook_url": GOOD_URL, "card": {"marker": "built"}}
+
+
+def test_post_channel_notice_swallows_card_build_errors(monkeypatch):
+    # A card-construction failure is logged, never propagated past a successful insert.
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"team_integrations": [{"webhook_url": GOOD_URL, "enabled": True}]}),
+    )
+    monkeypatch.setattr(teams_integration, "post_to_teams", lambda *a, **k: True)
+
+    def boom():
+        raise RuntimeError("bad card")
+
+    teams_integration._post_channel_notice("t1", boom, "x")  # must not raise
+
+
+# --- follow-up card builders --------------------------------------------------
+
+
+def test_added_to_lab_card_names_paper_with_meta_and_deep_link():
+    card = teams_integration.build_added_to_lab_card(
+        "A Fresh Paper", "Cell", 2024, "https://atlas.example/?paper=p1"
+    )
+    texts = " ".join(b.get("text", "") for b in card["body"])
+    assert "Added to the lab" in texts and "A Fresh Paper" in texts and "Cell · 2024" in texts
+    assert card["actions"][0] == {
+        "type": "Action.OpenUrl",
+        "title": "Open in Atlas",
+        "url": "https://atlas.example/?paper=p1",
+    }
+
+
+def test_added_to_lab_card_drops_unsafe_deep_link():
+    # A non-http(s) atlas_url must never become a clickable action.
+    card = teams_integration.build_added_to_lab_card("X", None, None, "javascript:alert(1)")
+    assert "actions" not in card
+
+
+def test_could_not_add_card_is_a_well_formed_adaptive_card():
+    card = teams_integration.build_could_not_add_card()
+    assert card["type"] == "AdaptiveCard"
+    assert "couldn't pull paper details" in card["body"][0]["text"]
+    assert "actions" not in card
+
+
+_INJECT = "[x](https://evil)"
+_INJECT_ESCAPED = "\\[x\\]\\(https://evil\\)"
+
+
+def _card_text(card) -> str:
+    # Join the raw TextBlock strings (not json.dumps, which double-escapes backslashes).
+    return " ".join(b.get("text", "") for b in card["body"])
+
+
+def test_added_to_lab_card_escapes_markdown_in_title_and_venue():
+    card = teams_integration.build_added_to_lab_card(_INJECT, _INJECT, 2024, None)
+    text = _card_text(card)
+    assert _INJECT not in text  # neither title nor venue survives unescaped
+    assert text.count(_INJECT_ESCAPED) == 2
+
+
+def test_already_in_lab_card_escapes_markdown_in_title():
+    card = teams_integration.build_already_in_lab_card(_INJECT, None)
+    text = _card_text(card)
+    assert _INJECT not in text and _INJECT_ESCAPED in text
