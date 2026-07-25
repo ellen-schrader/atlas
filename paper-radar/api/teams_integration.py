@@ -29,12 +29,15 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
+
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import (
     _clean_url,
     _normalize_key,
     extract_urls_from_text,
+    is_asset_url,
     is_skip_host,
 )
 
@@ -508,15 +511,33 @@ def normalize_inbound_secret(secret: str) -> str:
     return token
 
 
+def _retry_stale_connection(query):
+    """Run one idempotent DB read, retrying once on a transport-level error.
+
+    The Fly machine suspends (RAM snapshot) between requests, so the cached
+    Supabase client can resume holding keep-alive sockets the server closed
+    during the idle window. The first request then dies with a connection
+    error, not an HTTP status — postgrest retries only 503/520 — and on the
+    webhook reply path that would surface as a user-visible failure. One
+    retry checks out a fresh connection.
+    """
+    try:
+        return query()
+    except (httpx.TransportError, ConnectionError):
+        return query()
+
+
 def inbound_secret_for_team(team_id: str) -> str | None:
     """The lab's inbound HMAC token, or None if inbound isn't configured (service role)."""
-    found = (
-        service_client()
-        .table("team_integrations")
-        .select("inbound_secret")
-        .eq("team_id", team_id)
-        .limit(1)
-        .execute()
+    found = _retry_stale_connection(
+        lambda: (
+            service_client()
+            .table("team_integrations")
+            .select("inbound_secret")
+            .eq("team_id", team_id)
+            .limit(1)
+            .execute()
+        )
     )
     return found.data[0]["inbound_secret"] if found.data else None
 
@@ -539,6 +560,37 @@ def verify_teams_signature(secret_b64: str, raw_body: bytes, auth_header: str | 
     return hmac.compare_digest(expected, provided)
 
 
+def inbound_message_text(payload: dict) -> str:
+    """Everything in an inbound Teams message worth scanning for a paper link.
+
+    A pasted link that Teams unfurls into a preview card often keeps only the
+    page *title* in the top-level ``text`` — the URL itself survives only in
+    the message's attachments (an HTML rendering of the message, or the card's
+    JSON). Concatenate the text with every attachment's content so the URL
+    extractor sees hrefs wherever Teams put them (issue #93: doi.org links
+    pasted into a channel were answered with "I couldn't find a paper there").
+    """
+    parts = [str(payload.get("text") or "")]
+    attachments = payload.get("attachments")
+    for att in attachments if isinstance(attachments, list) else []:
+        if not isinstance(att, dict):
+            continue
+        content = att.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, dict):
+            # Card JSON: its URLs sit in plain string values, which the
+            # extractor's regexes find without knowing the card's shape.
+            # ensure_ascii=False keeps non-ASCII URL characters literal — the
+            # default \uXXXX escapes would be captured verbatim by the URL
+            # regex and mangle the link.
+            parts.append(json.dumps(content, ensure_ascii=False))
+        content_url = att.get("contentUrl")
+        if isinstance(content_url, str):
+            parts.append(content_url)
+    return "\n".join(p for p in parts if p)
+
+
 @dataclass
 class InboundPlan:
     """The fast (no-network) decision for the synchronous reply."""
@@ -554,24 +606,35 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     well inside the Outgoing Webhook's ~5 s reply window. The slow resolve +
     insert happens afterwards in a background task.
     """
-    urls = [u for u in extract_urls_from_text(text) if not is_skip_host(u)]
+    urls = [u for u in extract_urls_from_text(text) if not (is_skip_host(u) or is_asset_url(u))]
     if not urls:
         return InboundPlan("no_url")
     url = _clean_url(urls[0])
     svc = service_client()
     papers = (
-        svc.table("papers").select("id").eq("url_norm", _normalize_key(url)).limit(1).execute().data
+        _retry_stale_connection(
+            lambda: (
+                svc.table("papers")
+                .select("id")
+                .eq("url_norm", _normalize_key(url))
+                .limit(1)
+                .execute()
+            )
+        ).data
         or []
     )
     if papers:
         posted = (
-            svc.table("paper_posts")
-            .select("id")
-            .eq("paper_id", papers[0]["id"])
-            .eq("team_id", team_id)
-            .limit(1)
-            .execute()
-            .data
+            _retry_stale_connection(
+                lambda: (
+                    svc.table("paper_posts")
+                    .select("id")
+                    .eq("paper_id", papers[0]["id"])
+                    .eq("team_id", team_id)
+                    .limit(1)
+                    .execute()
+                )
+            ).data
             or []
         )
         if posted:

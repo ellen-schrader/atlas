@@ -5,6 +5,7 @@ from __future__ import annotations
 from paper_radar.ingest.urls import (
     _normalize_key,
     extract_urls_from_text,
+    is_asset_url,
     is_skip_host,
 )
 
@@ -103,6 +104,20 @@ def test_is_skip_host():
     assert is_skip_host("https://www.youtube.com/watch?v=x")
     assert not is_skip_host("https://arxiv.org/abs/1")
     assert not is_skip_host("https://www.nature.com/articles/x")
+
+
+def test_is_asset_url():
+    assert is_asset_url("https://statics.teams.cdn.office.net/evergreen-assets/thumb.png")
+    assert is_asset_url("https://marlin-prod.literatumonline.com/cms/COVER.JPG")
+    assert not is_asset_url("https://doi.org/10.1016/j.cell.2026.06.027")
+    assert not is_asset_url("https://arxiv.org/abs/2401.01234")
+
+
+def test_extract_survives_a_malformed_url_candidate():
+    # "https://[oops" matches the URL regex but urlsplit refuses it — the bad
+    # candidate is skipped and must not take down the good one with it.
+    text = "see https://[oops and https://arxiv.org/abs/2401.01234"
+    assert extract_urls_from_text(text) == ["https://arxiv.org/abs/2401.01234"]
 
 
 def test_extracted_safelink_target_normalizes_like_a_direct_share():

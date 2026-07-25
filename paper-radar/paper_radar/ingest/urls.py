@@ -27,6 +27,8 @@ _SKIP_HOSTS = (
     "youtu.be",
     "teams.cloud.microsoft",
     "teams.microsoft.com",
+    # Teams asset CDN: preview-card thumbnails in message attachments live here.
+    "cdn.office.net",
 )
 
 # Query params that are pure tracking/analytics noise: dropping them (plus any
@@ -129,6 +131,17 @@ def is_skip_host(url: str) -> bool:
     return any(h in host for h in _SKIP_HOSTS)
 
 
+# Paths that mark a URL as a page asset, never a paper. An unfurled link's
+# preview card carries the page's og:image (and similar) alongside the real
+# link, and whichever URL is picked first gets the metadata fetch.
+_ASSET_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".css", ".js")
+
+
+def is_asset_url(url: str) -> bool:
+    """True for a URL whose path is an image or static asset (thumbnail, og:image)."""
+    return urlsplit(url).path.lower().endswith(_ASSET_EXTENSIONS)
+
+
 # URLs in freeform message text: http(s) up to whitespace/quote/angle-bracket.
 # A trailing ')' or '.' from surrounding prose is trimmed by _clean_url.
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
@@ -173,7 +186,12 @@ def extract_urls_from_text(text: str | None) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for match in candidates:
-        url = _clean_url(_unwrap_safelink(_clean_url(match)))
+        try:
+            url = _clean_url(_unwrap_safelink(_clean_url(match)))
+        except ValueError:
+            # urlsplit rejects some regex matches (e.g. "https://[oops") —
+            # not a usable URL, and one bad candidate must not sink the rest.
+            continue
         if url and url not in seen:
             seen.add(url)
             out.append(url)

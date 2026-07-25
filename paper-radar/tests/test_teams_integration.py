@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("supabase")
 
 from api import teams_integration  # noqa: E402
+from paper_radar.ingest.urls import extract_urls_from_text  # noqa: E402
 
 
 class _FakeQuery:
@@ -529,6 +530,117 @@ def test_plan_already_when_posted_to_this_team(monkeypatch):
     assert plan.status == "already"
     # The dedup lookup is scoped to this team, not global.
     assert client.eqs["paper_posts"]["team_id"] == "t1"
+
+
+def test_inbound_message_text_finds_url_only_in_html_attachment():
+    # Teams unfurls a pasted link into a preview card: the top-level text keeps
+    # only the page title, and the URL survives only in the attachment (issue #93).
+    payload = {
+        "text": "<at>Atlas</at> Combination of paricalcitol with chemotherapy …",
+        "attachments": [
+            {
+                "contentType": "text/html",
+                "content": '<div><a href="https://doi.org/10.1038/s43018-1">Combination…</a></div>',
+            }
+        ],
+    }
+    text = teams_integration.inbound_message_text(payload)
+    assert "https://doi.org/10.1038/s43018-1" in text
+    assert extract_urls_from_text(text) == ["https://doi.org/10.1038/s43018-1"]
+
+
+def test_inbound_message_text_finds_url_in_card_json():
+    # Preview-card JSON: URLs sit in plain string values (thumbnail first here,
+    # to prove the planner still picks the paper link over the image).
+    payload = {
+        "text": "Atlas Some Paper Title",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.thumbnail",
+                "content": {
+                    "images": [{"url": "https://marlin-prod.literatumonline.com/cover.jpg"}],
+                    "title": "Some Paper Title",
+                    "url": "https://doi.org/10.1016/j.cell.2026.06.027",
+                },
+            }
+        ],
+    }
+    text = teams_integration.inbound_message_text(payload)
+    assert "https://doi.org/10.1016/j.cell.2026.06.027" in text
+
+
+def test_inbound_message_text_preserves_non_ascii_urls():
+    # json.dumps must not \uXXXX-escape card URLs: the URL regex would capture
+    # the escape sequence verbatim and the mangled link would never resolve.
+    payload = {
+        "text": "Atlas check this out",
+        "attachments": [{"content": {"url": "https://link.springer.com/article/café"}}],
+    }
+    text = teams_integration.inbound_message_text(payload)
+    assert extract_urls_from_text(text) == ["https://link.springer.com/article/café"]
+
+
+def test_inbound_message_text_tolerates_junk_shapes():
+    assert teams_integration.inbound_message_text({}) == ""
+    assert teams_integration.inbound_message_text({"text": None, "attachments": "nope"}) == ""
+    assert (
+        teams_integration.inbound_message_text(
+            {"text": "hi", "attachments": [None, {"content": 7}, {}]}
+        )
+        == "hi"
+    )
+
+
+def test_plan_skips_thumbnail_assets_and_picks_the_paper_link(monkeypatch):
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
+    plan = teams_integration.plan_inbound_import(
+        "t1",
+        "https://marlin-prod.literatumonline.com/cover.jpg then "
+        "https://doi.org/10.1016/j.cell.2026.06.027",
+    )
+    assert plan.status == "new" and plan.url == "https://doi.org/10.1016/j.cell.2026.06.027"
+
+
+def test_plan_asset_only_message_is_no_url(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "service_client", lambda: pytest.fail("an image is not a paper")
+    )
+    plan = teams_integration.plan_inbound_import(
+        "t1", "@Atlas https://statics.teams.cdn.office.net/thumb.png"
+    )
+    assert plan.status == "no_url"
+
+
+def test_plan_retries_once_when_the_pooled_connection_is_stale(monkeypatch):
+    # After a Fly suspend/resume the cached client's first request can hit a
+    # socket the server closed during the idle window; one retry must recover.
+    import httpx
+
+    calls = {"n": 0}
+
+    class _FlakyQuery:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return types.SimpleNamespace(data=[])
+
+    class _FlakyClient:
+        def table(self, name):
+            return _FlakyQuery()
+
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _FlakyClient())
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
+    assert plan.status == "new" and calls["n"] == 2
 
 
 def test_inbound_secret_for_team(monkeypatch):
