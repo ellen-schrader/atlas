@@ -26,14 +26,13 @@ import hmac
 import json
 import logging
 import urllib.request
-from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 
 from paper_radar.ingest import url_guard
-from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
+from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import (
     _clean_url,
     _normalize_key,
@@ -362,109 +361,6 @@ def build_test_card(team_name: str | None) -> dict:
                 "isSubtle": True,
                 "wrap": True,
             },
-        ],
-    }
-
-
-# --- inbound follow-up cards (posted after an @Atlas mention is processed) ----
-#
-# These acknowledge one mention with a small card carrying only the Atlas deep
-# link — deliberately NOT the full new-paper mirror (build_paper_card via
-# notify_paper_posted), which stays off for source='teams' posts so a paper
-# added from the channel is never pushed back into it (the echo loop).
-
-
-def build_already_in_lab_card(title: str | None, atlas_url: str | None) -> dict:
-    """A short card telling the channel a mentioned paper was already in the lab.
-
-    Posted from the background importer when a link only turns out to be a
-    duplicate after its metadata resolves (matched on DOI, so the fast reply
-    couldn't know). It corrects the optimistic "adding it now" ack and links to
-    the paper already in Atlas. Title is markdown-escaped like every other
-    metadata-derived string on a card.
-    """
-    headline = (
-        f"Already in the lab: “{_md_escape(title)}”"
-        if title
-        else "That paper is already in the lab."
-    )
-    card = {
-        "type": "AdaptiveCard",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.4",
-        "msteams": {"width": "Full"},
-        "body": [
-            {
-                "type": "TextBlock",
-                "text": headline,
-                "weight": "Bolder",
-                "wrap": True,
-            }
-        ],
-    }
-    link = _click_safe(atlas_url)
-    if link:
-        card["actions"] = [{"type": "Action.OpenUrl", "title": "Open in Atlas", "url": link}]
-    return card
-
-
-def build_added_to_lab_card(
-    title: str | None, venue: str | None, year: int | None, atlas_url: str | None
-) -> dict:
-    """A short confirmation card for a paper just added to the lab from a mention.
-
-    Closes the loop the "adding it now" ack opened — the paper's title, its
-    venue/year, and a deep link into Atlas. Not the source='teams' mirror.
-    """
-    headline = f"Added to the lab: “{_md_escape(title)}”" if title else "Added to the lab."
-    body: list[dict] = [
-        {"type": "TextBlock", "text": f"✅ {headline}", "weight": "Bolder", "wrap": True}
-    ]
-    venue_year = " · ".join(str(p) for p in (venue, year) if p)
-    if venue_year:
-        body.append(
-            {
-                "type": "TextBlock",
-                "text": _md_escape(venue_year),
-                "isSubtle": True,
-                "wrap": True,
-                "spacing": "None",
-            }
-        )
-    card = {
-        "type": "AdaptiveCard",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.4",
-        "msteams": {"width": "Full"},
-        "body": body,
-    }
-    link = _click_safe(atlas_url)
-    if link:
-        card["actions"] = [{"type": "Action.OpenUrl", "title": "Open in Atlas", "url": link}]
-    return card
-
-
-def build_could_not_add_card() -> dict:
-    """Tell the channel a mentioned link couldn't be resolved to a paper.
-
-    Closes the loop the "adding it now" ack opened when the metadata fetch comes
-    back empty — a link that looked like a paper but didn't resolve. Static text
-    (no user data), so nothing to escape.
-    """
-    return {
-        "type": "AdaptiveCard",
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.4",
-        "msteams": {"width": "Full"},
-        "body": [
-            {
-                "type": "TextBlock",
-                "text": (
-                    "⚠️ I couldn't pull paper details from that link, so nothing was added. "
-                    "Try the DOI or the publisher's article page."
-                ),
-                "wrap": True,
-            }
         ],
     }
 
@@ -802,9 +698,6 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
         meta = fetch_metadata(url)
         if not (meta.title or meta.doi):
             log.info("inbound: %s did not resolve to a paper; skipping", url)
-            # The fast reply promised the paper would appear; deliver the honest
-            # outcome instead of going silent.
-            _notify_could_not_add(team_id)
             return
         paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
         svc = service_client()
@@ -819,12 +712,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             or []
         )
         if existing:
-            # Discovered only now, after the metadata fetch resolved the DOI to a
-            # paper already posted here (the fast reply matched on URL and missed
-            # it). The synchronous ack already went out, so correct it in the
-            # channel and link to the paper it duplicates.
-            _notify_already_in_lab(team_id, meta.title, paper_id)
-            return
+            return  # already in the lab (e.g. matched by DOI under another URL)
         try:
             svc.table("paper_posts").insert(
                 {
@@ -842,62 +730,12 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             if getattr(insert_exc, "code", None) == "23505":
                 return
             raise
-        # The paper is now in the lab. Confirm it in the channel with a deep link,
-        # closing the loop the ack opened. Targeted acknowledgement, NOT the
-        # source='teams' mirror (which stays disabled to prevent the echo).
-        _notify_added_to_lab(team_id, meta, paper_id)
         if needs_embedding and get_api_settings().voyage_api_key:
             _embed_and_store(paper_id, meta.title, meta.abstract)
         if needs_embedding:
             _enrich_and_store(paper_id, meta.title, meta.abstract)
     except Exception as exc:
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
-
-
-def _post_channel_notice(team_id: str, build_card: Callable[[], dict], what: str) -> None:
-    """POST a one-off notice card to the lab's channel, if outbound is configured.
-
-    Fire-and-forget: a disabled/absent webhook is a silent no-op and nothing here
-    raises into the importer. The card is BUILT inside this guard (via ``build_card``),
-    so even a construction error is logged rather than propagated past a successful
-    insert — matching ``notify_paper_posted``, which likewise defers its card build
-    beyond the no-webhook check. This is a targeted acknowledgement of an inbound
-    @mention — never the source='teams' mirror, which stays disabled so a paper added
-    from the channel is never pushed back into it (the echo loop).
-    """
-    try:
-        webhook_url = webhook_url_for_team(team_id)
-        if not webhook_url:
-            return
-        webhook_url = validate_webhook_url(webhook_url)
-        post_to_teams(webhook_url, build_card())
-    except Exception as exc:
-        log.warning("%s notice for team %s failed: %s", what, team_id, exc)
-
-
-def _notify_already_in_lab(team_id: str, title: str | None, paper_id: str | None) -> None:
-    """Tell the channel a mentioned paper was already in the lab, with a deep link."""
-    _post_channel_notice(
-        team_id,
-        lambda: build_already_in_lab_card(title, _atlas_paper_url(paper_id)),
-        "already-in-lab",
-    )
-
-
-def _notify_added_to_lab(team_id: str, meta: PaperMetadata, paper_id: str | None) -> None:
-    """Confirm in the channel that a mentioned paper was just added, with a deep link."""
-
-    def _card() -> dict:
-        return build_added_to_lab_card(
-            meta.title, meta.venue, meta.year, _atlas_paper_url(paper_id)
-        )
-
-    _post_channel_notice(team_id, _card, "added-to-lab")
-
-
-def _notify_could_not_add(team_id: str) -> None:
-    """Tell the channel a mentioned link didn't resolve to a paper."""
-    _post_channel_notice(team_id, build_could_not_add_card, "could-not-add")
 
 
 def _atlas_papers_url() -> str | None:
