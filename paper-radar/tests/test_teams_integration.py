@@ -631,6 +631,20 @@ def test_plan_matches_existing_paper_by_doi(monkeypatch):
     assert plan.title == "TLS harbour T cells" and plan.authors == ["Jane Smith", "Bob Lee"]
 
 
+def test_doi_from_url_resolver_hosts_only():
+    # The path of a resolver URL IS the DOI — folded, decoded, slash-trimmed.
+    f = teams_integration._doi_from_url
+    assert f("https://doi.org/10.1038/S41586-026-10808-W") == "10.1038/s41586-026-10808-w"
+    assert f("https://www.doi.org/10.1038/x/") == "10.1038/x"
+    assert f("https://dx.doi.org/10.1002/(SICI)1097-0258") == "10.1002/(sici)1097-0258"
+    assert f("https://doi.org/10.1002/anie%2F2020") == "10.1002/anie/2020"
+    # Publisher paths are deliberately out of scope: a regex can't tell where
+    # the DOI ends or whose DOI it found, and a wrong dedup answer is worse
+    # than a hedged "adding" reply.
+    assert f("https://link.springer.com/article/10.1007/s00248-1/tables/1") is None
+    assert f("https://www.nature.com/articles/s41586-026-10808-w") is None
+
+
 def test_already_reply_names_the_paper_and_links_it(monkeypatch):
     monkeypatch.setattr(
         teams_integration,

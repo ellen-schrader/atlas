@@ -27,19 +27,19 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import (
-    _DOI_RE,
     _clean_url,
     _normalize_key,
     extract_urls_from_text,
     is_asset_url,
     is_skip_host,
+    norm_doi,
 )
 
 from .config import get_api_settings
@@ -608,15 +608,21 @@ class InboundPlan:
 
 
 def _doi_from_url(url: str) -> str | None:
-    """The DOI embedded in a URL, in the papers.doi storage form, or None.
+    """The DOI of a doi.org/dx.doi.org resolver URL, in papers.doi form, or None.
 
-    Offline on purpose (this runs inside the reply-window budget): a doi.org
-    resolver path IS the DOI, and many publishers (Springer, PLOS, Wiley)
-    embed the DOI in their article paths. Lowercased to match _norm_doi's
-    casefolded storage key.
+    Restricted to resolver hosts on purpose: there the decoded path IS the DOI,
+    exactly (and a bare-DOI mention arrives here as a doi.org link, courtesy of
+    extract_urls_from_text). Fishing DOI-shaped substrings out of arbitrary
+    publisher paths was tried and reverted — a regex can't tell where the DOI
+    ends (".../abstract", "/tables/1" tails) or whose DOI it found (citation
+    and dataset DOIs), which made the dedup answer wrong in both directions.
+    norm_doi is the same folding every papers.doi writer uses.
     """
-    m = _DOI_RE.search(url)
-    return _clean_url(m.group(0)).lower() if m else None
+    parts = urlsplit(url)
+    host = parts.netloc.lower().removeprefix("www.")
+    if host not in ("doi.org", "dx.doi.org"):
+        return None
+    return norm_doi(unquote(parts.path))
 
 
 def plan_inbound_import(team_id: str, text: str) -> InboundPlan:

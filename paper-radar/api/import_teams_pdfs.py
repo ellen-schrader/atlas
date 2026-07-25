@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.pdf_extract import extract_urls_from_dir  # needs the `legacy` extra
-from paper_radar.ingest.urls import _clean_url, _normalize_key, is_skip_host
+from paper_radar.ingest.urls import _clean_url, _normalize_key, is_skip_host, norm_doi
 from supabase import Client, create_client
 
 from .config import get_api_settings
@@ -69,14 +69,17 @@ def _upsert_paper(svc: Client, meta, url: str, url_norm: str) -> str:
     found = svc.table("papers").select("id").eq("url_norm", url_norm).limit(1).execute()
     if found.data:
         return found.data[0]["id"]
-    if meta.doi:
-        by_doi = svc.table("papers").select("id").eq("doi", meta.doi).limit(1).execute()
+    # Fold the DOI like every other papers.doi writer (norm_doi), or a
+    # mixed-case source DOI is stored verbatim and no later lookup matches it.
+    doi = norm_doi(meta.doi)
+    if doi:
+        by_doi = svc.table("papers").select("id").eq("doi", doi).limit(1).execute()
         if by_doi.data:
             return by_doi.data[0]["id"]
     row = {
         "url": url,
         "url_norm": url_norm,
-        "doi": meta.doi,
+        "doi": doi,
         "title": meta.title,
         "authors": meta.authors,
         "abstract": meta.abstract,

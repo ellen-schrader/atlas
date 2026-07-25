@@ -142,6 +142,30 @@ def is_asset_url(url: str) -> bool:
     return urlsplit(url).path.lower().endswith(_ASSET_EXTENSIONS)
 
 
+def norm_doi(doi: str | None) -> str | None:
+    """The papers.doi storage/lookup key: casefolded, resolver prefix stripped.
+
+    DOIs are case-insensitive (ISO 26324) — AACR registers
+    "10.1158/2159-8290.CD-25-1745" while PubMed reports it lowercased, and
+    matching case-sensitively let the same paper in twice. The single source of
+    truth for the folding: every writer AND every reader of papers.doi must go
+    through this function, or lookups silently miss.
+    """
+    if not doi:
+        return None
+    d = doi.strip().lower()
+    for prefix in (
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+        "doi:",
+    ):
+        if d.startswith(prefix):
+            d = d[len(prefix) :]
+    return d.strip("/") or None
+
+
 # URLs in freeform message text: http(s) up to whitespace/quote/angle-bracket.
 # A trailing ')' or '.' from surrounding prose is trimmed by _clean_url.
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
