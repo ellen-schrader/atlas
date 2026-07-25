@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
-from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url
+from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url, norm_doi
 
 from . import embeddings, enrichment, integrations, maps, teams_integration
 from . import map_summary as map_summary_mod
@@ -345,21 +345,10 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
     return True
 
 
-def _norm_doi(doi: str | None) -> str | None:
-    """DOIs are case-insensitive (ISO 26324), so store and compare them folded.
-
-    AACR registers "10.1158/2159-8290.CD-25-1745" while PubMed reports it
-    lowercased; matching case-sensitively let the same paper in twice — once via
-    the publisher link, once via PubMed. Strip the resolver prefix too, so
-    "https://doi.org/10.x/y" and "10.x/y" are the same key.
-    """
-    if not doi:
-        return None
-    d = doi.strip().lower()
-    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
-        if d.startswith(prefix):
-            d = d[len(prefix) :]
-    return d.strip("/") or None
+# The folding moved to paper_radar.ingest.urls so every reader and writer of
+# papers.doi (this module, the inbound-webhook fast path, the PDF importer)
+# shares one normalizer; the old name stays for this module's many call sites.
+_norm_doi = norm_doi
 
 
 def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:

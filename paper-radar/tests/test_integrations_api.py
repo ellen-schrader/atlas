@@ -450,7 +450,7 @@ def test_inbound_webhook_new_paper_schedules_import_and_acks(monkeypatch):
         "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
     )
     assert resp.status_code == 200
-    assert resp.json()["type"] == "message" and "Adding" in resp.json()["text"]
+    assert resp.json()["type"] == "message" and "appear shortly" in resp.json()["text"]
     # The signed sender is passed through for attribution.
     assert scheduled == {"team_id": "t1", "url": "https://arxiv.org/abs/1", "sender": "Ellen"}
 

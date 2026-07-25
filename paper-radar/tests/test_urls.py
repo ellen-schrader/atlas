@@ -7,6 +7,7 @@ from paper_radar.ingest.urls import (
     extract_urls_from_text,
     is_asset_url,
     is_skip_host,
+    norm_doi,
 )
 
 
@@ -118,6 +119,17 @@ def test_extract_survives_a_malformed_url_candidate():
     # candidate is skipped and must not take down the good one with it.
     text = "see https://[oops and https://arxiv.org/abs/2401.01234"
     assert extract_urls_from_text(text) == ["https://arxiv.org/abs/2401.01234"]
+
+
+def test_norm_doi_folds_case_prefixes_and_slashes():
+    # One normalizer for every papers.doi writer and reader.
+    assert norm_doi("10.1158/2159-8290.CD-25-1745") == "10.1158/2159-8290.cd-25-1745"
+    assert norm_doi("https://doi.org/10.1038/S41586-1") == "10.1038/s41586-1"
+    assert norm_doi("http://dx.doi.org/10.1038/s41586-1") == "10.1038/s41586-1"
+    assert norm_doi("doi:10.1038/s41586-1") == "10.1038/s41586-1"
+    assert norm_doi("/10.1038/s41586-1/") == "10.1038/s41586-1"
+    assert norm_doi(None) is None
+    assert norm_doi("  ") is None
 
 
 def test_extracted_safelink_target_normalizes_like_a_direct_share():
