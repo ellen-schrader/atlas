@@ -591,6 +591,81 @@ def test_inbound_message_text_tolerates_junk_shapes():
     )
 
 
+def test_plan_matches_existing_paper_by_doi(monkeypatch):
+    # A doi.org mention of a paper originally added via its publisher URL must
+    # be answered "already in the lab", not "adding" (url_norm alone can't see
+    # they're the same paper; the DOI can). Casefolded: mention is uppercase.
+    paper = {"id": "p1", "title": "TLS harbour T cells", "authors": ["Jane Smith", "Bob Lee"]}
+
+    class _Query:
+        def __init__(self, table):
+            self.table = table
+            self.filters = {}
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            self.filters[col] = val
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            if self.table == "papers":
+                hit = self.filters.get("doi") == "10.1038/s41586-026-10808-w"
+                return types.SimpleNamespace(data=[paper] if hit else [])
+            return types.SimpleNamespace(data=[{"id": "pp1"}])
+
+    class _Client:
+        def table(self, name):
+            return _Query(name)
+
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _Client())
+    plan = teams_integration.plan_inbound_import(
+        "t1", "@Atlas https://doi.org/10.1038/S41586-026-10808-W"
+    )
+    assert plan.status == "already"
+    assert plan.paper_id == "p1"
+    assert plan.title == "TLS harbour T cells" and plan.authors == ["Jane Smith", "Bob Lee"]
+
+
+def test_already_reply_names_the_paper_and_links_it(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: types.SimpleNamespace(atlas_web_url="https://atlas.example.com/"),
+    )
+    plan = teams_integration.InboundPlan(
+        "already", url="u", paper_id="p1", title="A Paper", authors=["Jane Smith", "Bob Lee"]
+    )
+    text = teams_integration.already_reply_text(plan)
+    assert "Jane Smith et al." in text
+    assert "A Paper" in text
+    assert "[Open in Atlas](https://atlas.example.com/?paper=p1)" in text
+
+
+def test_already_reply_degrades_without_metadata_or_web_url(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "get_api_settings", lambda: types.SimpleNamespace(atlas_web_url="")
+    )
+    text = teams_integration.already_reply_text(teams_integration.InboundPlan("already", url="u"))
+    assert text == "👍 That paper is already in the lab."
+
+
+def test_new_reply_is_hedged_and_links_the_papers_feed(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: types.SimpleNamespace(atlas_web_url="https://atlas.example.com"),
+    )
+    text = teams_integration.new_reply_text()
+    # Must stay true whether the background dedup finds the paper or not.
+    assert "isn't in the lab yet" in text
+    assert "[Atlas](https://atlas.example.com/papers)" in text
+
+
 def test_plan_skips_thumbnail_assets_and_picks_the_paper_link(monkeypatch):
     monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
     plan = teams_integration.plan_inbound_import(

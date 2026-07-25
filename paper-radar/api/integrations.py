@@ -318,10 +318,10 @@ async def inbound_webhook(
             "`@Atlas https://arxiv.org/abs/…` or `@Atlas 10.1016/j.cell.…`"
         )
     if plan.status == "already":
-        return teams_integration.inbound_reply("👍 That paper is already in the lab.")
+        return teams_integration.inbound_reply(teams_integration.already_reply_text(plan))
 
     background.add_task(teams_integration.import_paper_background, team_id, plan.url, sender)
-    return teams_integration.inbound_reply("⏳ Adding that paper to Atlas — it'll appear shortly.")
+    return teams_integration.inbound_reply(teams_integration.new_reply_text())
 
 
 @router.post("/test")

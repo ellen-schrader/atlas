@@ -34,6 +34,7 @@ import httpx
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import (
+    _DOI_RE,
     _clean_url,
     _normalize_key,
     extract_urls_from_text,
@@ -593,43 +594,72 @@ def inbound_message_text(payload: dict) -> str:
 
 @dataclass
 class InboundPlan:
-    """The fast (no-network) decision for the synchronous reply."""
+    """The fast (no-network) decision for the synchronous reply.
+
+    On "already" the matched paper's identity rides along so the reply can name
+    it and deep-link it instead of a bare acknowledgement.
+    """
 
     status: str  # "no_url" | "already" | "new"
     url: str | None = None
+    paper_id: str | None = None
+    title: str | None = None
+    authors: list[str] | None = None
+
+
+def _doi_from_url(url: str) -> str | None:
+    """The DOI embedded in a URL, in the papers.doi storage form, or None.
+
+    Offline on purpose (this runs inside the reply-window budget): a doi.org
+    resolver path IS the DOI, and many publishers (Springer, PLOS, Wiley)
+    embed the DOI in their article paths. Lowercased to match _norm_doi's
+    casefolded storage key.
+    """
+    m = _DOI_RE.search(url)
+    return _clean_url(m.group(0)).lower() if m else None
 
 
 def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     """Decide the reply without a metadata fetch: is there a link, and is it new?
 
-    Only cheap DB lookups (url_norm → paper → this team's posts), so it returns
-    well inside the Outgoing Webhook's ~5 s reply window. The slow resolve +
-    insert happens afterwards in a background task.
+    Only cheap DB lookups, so it returns well inside the Outgoing Webhook's
+    ~5 s reply window: url_norm → paper, falling back to the DOI when the URL
+    carries one (a doi.org mention of a paper originally added via its
+    publisher page must not be answered "adding" — the dedup would silently
+    drop it). Different-host aliases without a DOI in the URL (PubMed vs
+    publisher) can only be resolved by the slow metadata fetch, which happens
+    afterwards in a background task — the "new" reply stays hedged for that.
     """
     urls = [u for u in extract_urls_from_text(text) if not (is_skip_host(u) or is_asset_url(u))]
     if not urls:
         return InboundPlan("no_url")
     url = _clean_url(urls[0])
     svc = service_client()
-    papers = (
-        _retry_stale_connection(
+
+    def _paper_by(column: str, value: str) -> dict | None:
+        rows = _retry_stale_connection(
             lambda: (
                 svc.table("papers")
-                .select("id")
-                .eq("url_norm", _normalize_key(url))
+                .select("id, title, authors")
+                .eq(column, value)
                 .limit(1)
                 .execute()
             )
         ).data
-        or []
-    )
-    if papers:
+        return rows[0] if rows else None
+
+    paper = _paper_by("url_norm", _normalize_key(url))
+    if paper is None:
+        doi = _doi_from_url(url)
+        if doi:
+            paper = _paper_by("doi", doi)
+    if paper:
         posted = (
             _retry_stale_connection(
                 lambda: (
                     svc.table("paper_posts")
                     .select("id")
-                    .eq("paper_id", papers[0]["id"])
+                    .eq("paper_id", paper["id"])
                     .eq("team_id", team_id)
                     .limit(1)
                     .execute()
@@ -638,7 +668,13 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
             or []
         )
         if posted:
-            return InboundPlan("already", url=url)
+            return InboundPlan(
+                "already",
+                url=url,
+                paper_id=paper["id"],
+                title=paper.get("title"),
+                authors=paper.get("authors"),
+            )
     return InboundPlan("new", url=url)
 
 
@@ -696,6 +732,52 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
 
 
+def _atlas_papers_url() -> str | None:
+    """Link to the lab's papers feed in the web app, or None if unconfigured."""
+    base = get_api_settings().atlas_web_url.strip()
+    return f"{base.rstrip('/')}/papers" if base else None
+
+
+# Paper titles can be a full sentence; keep the one-line reply scannable.
+_REPLY_TITLE_CHARS = 80
+
+
+def already_reply_text(plan: InboundPlan) -> str:
+    """One line naming the existing paper and deep-linking it, e.g.
+    '👍 Jane Smith et al. — “Tertiary lymphoid…” is already in the lab. [Open in Atlas](…)'.
+
+    Degrades field by field: no authors → title only, no metadata at all → the
+    generic acknowledgement, no web URL configured → no link. Metadata is
+    paper-sourced text, so it is markdown-escaped like the outbound cards.
+    """
+    authors = [a for a in (plan.authors or []) if isinstance(a, str) and a.strip()]
+    who = None
+    if authors:
+        who = _md_escape(authors[0]) + (" et al." if len(authors) > 1 else "")
+    what = f"“{_md_escape(_truncate(plan.title, _REPLY_TITLE_CHARS))}”" if plan.title else None
+    subject = " — ".join(p for p in (who, what) if p) or "That paper"
+    link = _atlas_paper_url(plan.paper_id)
+    tail = f" [Open in Atlas]({link})" if link else ""
+    return f"👍 {subject} is already in the lab.{tail}"
+
+
+def new_reply_text() -> str:
+    """The ack for a link the fast checks didn't recognize.
+
+    Hedged on purpose: a different-host alias of an existing paper (PubMed vs
+    publisher) is only detected by the background import's dedup, and an
+    Outgoing Webhook gets exactly one reply — this line must be true whether
+    the paper turns out to be new or known.
+    """
+    feed = _atlas_papers_url()
+    where = f"[Atlas]({feed})" if feed else "Atlas"
+    return f"⏳ On it — if this paper isn't in the lab yet, it'll appear shortly in {where}."
+
+
 def inbound_reply(text: str) -> dict:
-    """A Teams Outgoing Webhook response: a plain message the bot posts back."""
-    return {"type": "message", "text": text}
+    """A Teams Outgoing Webhook response: one message the bot posts back.
+
+    textFormat is explicit so the [label](url) links in the reply texts render
+    as links rather than surviving as literal brackets.
+    """
+    return {"type": "message", "textFormat": "markdown", "text": text}
