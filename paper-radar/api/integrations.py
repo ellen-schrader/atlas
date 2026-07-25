@@ -296,8 +296,8 @@ async def inbound_webhook(
         # post "please fix the bot source code" into the channel (issue #93).
         log.exception("inbound plan failed for team %s", team_id)
         return teams_integration.inbound_reply(
-            "⚠️ Atlas could not process this mention because of a temporary internal "
-            "error. The paper has not been added — please try again in a few minutes."
+            "Something went wrong on my end, so I couldn't add that paper. Nothing was "
+            "saved — mention me again in a minute and I'll retry."
         )
 
     if plan.status == "no_url":
@@ -314,8 +314,8 @@ async def inbound_webhook(
             len(attachments) if isinstance(attachments, list) else 0,
         )
         return teams_integration.inbound_reply(
-            "I couldn't find a paper there. Mention me with a link or DOI, e.g. "
-            "`@Atlas https://arxiv.org/abs/…` or `@Atlas 10.1016/j.cell.…`"
+            "I don't see a paper link in that message. Mention me with a DOI or a link — "
+            "for example `@Atlas 10.1016/j.cell.2024.01.001` or `@Atlas arxiv.org/abs/2401.01234`."
         )
     if plan.status == "already":
         return teams_integration.inbound_reply(teams_integration.already_reply_text(plan))

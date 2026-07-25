@@ -489,7 +489,7 @@ def test_inbound_webhook_no_link_replies_with_hint(monkeypatch):
         "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
     )
     assert resp.status_code == 200
-    assert "couldn't find" in resp.json()["text"].lower()
+    assert "paper link" in resp.json()["text"].lower()
 
 
 def test_inbound_webhook_scans_attachments_for_the_link(monkeypatch):
@@ -542,7 +542,7 @@ def test_inbound_webhook_plan_failure_replies_with_a_message_not_an_error(monkey
     )
     assert resp.status_code == 200
     assert resp.json()["type"] == "message"
-    assert "temporary internal error" in resp.json()["text"]
+    assert "something went wrong" in resp.json()["text"].lower()
 
 
 def test_inbound_webhook_rejects_non_object_json(monkeypatch):
@@ -565,7 +565,7 @@ def test_inbound_webhook_tolerates_junk_field_shapes(monkeypatch):
         "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
     )
     assert resp.status_code == 200
-    assert "couldn't find" in resp.json()["text"].lower()
+    assert "paper link" in resp.json()["text"].lower()
 
 
 def test_inbound_webhook_rejects_oversized_body(monkeypatch):
