@@ -799,10 +799,9 @@ _OVERVIEW_COLS = (
     "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
 )
 
-# Cap on members pulled per map surface (scatter / list / summary). A map with
-# more members than this is truncated to the top by seed similarity; kept in one
-# place so the three endpoints agree and the bound is documented.
-_MAP_MEMBER_LIMIT = 500
+# Cap on members pulled per map surface — shared with the layout job, which must
+# fetch the same member set as these endpoints (see api/maps.py).
+_MAP_MEMBER_LIMIT = maps.MAP_MEMBER_LIMIT
 
 
 def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:

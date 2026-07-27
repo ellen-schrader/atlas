@@ -22,6 +22,13 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/maps", tags=["maps"])
 
+# Cap on members pulled per map surface (scatter / list / summary / layout job).
+# A map with more members than this is truncated to the top by seed similarity;
+# kept in one place so every consumer agrees and the bound is documented — the
+# layout job (api/layout_job.py) must fetch the same set as the serving
+# endpoints or their signatures won't match.
+MAP_MEMBER_LIMIT = 500
+
 # Columns returned to the client — deliberately excludes seed_embedding (a 1024-dim
 # vector), config, and ai_summary, which the list/detail views don't need.
 _COLUMNS = "id, team_id, created_by, name, seed, visibility, created_at, updated_at"
