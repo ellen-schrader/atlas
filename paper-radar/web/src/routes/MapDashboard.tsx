@@ -284,7 +284,13 @@ export default function MapDashboard() {
                       onPick={(_, tone) =>
                         setActiveCluster((cur) => (cur === (tone ?? null) ? null : (tone ?? null)))
                       }
-                      empty="Too few papers to cluster."
+                      // While the layout job runs, clusters are empty because
+                      // they're being computed, not because the map is small.
+                      empty={
+                        data.status === "computing"
+                          ? "Sub-themes are computing…"
+                          : "Too few papers to cluster."
+                      }
                     />
                   </RankPanel>
                   {(papers.data?.labs.length ?? 0) > 0 && (

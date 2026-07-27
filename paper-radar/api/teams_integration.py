@@ -732,6 +732,13 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             raise
         if needs_embedding and get_api_settings().voyage_api_key:
             _embed_and_store(paper_id, meta.title, meta.abstract)
+        # The new post changed the lab's embedded set (even when the paper was
+        # already embedded by another lab) — same proactive layout refresh as
+        # the web-post and bibtex paths, so Teams-heavy labs don't hit a
+        # "computing" wait on every Insights visit. Non-blocking spawn/flag.
+        from .overview import refresh_lab_layout
+
+        refresh_lab_layout(team_id)
         if needs_embedding:
             _enrich_and_store(paper_id, meta.title, meta.abstract)
     except Exception as exc:
