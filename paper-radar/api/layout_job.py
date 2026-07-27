@@ -24,48 +24,26 @@ import argparse
 import logging
 import subprocess
 import sys
+from pathlib import Path
 
 from . import overview as ov
 from .layout_store import load_layout, store_layout
 from .maps import MAP_MEMBER_LIMIT
-from .supa import service_client
+from .supa import fetch_all, service_client
 
 log = logging.getLogger(__name__)
-
-_PAGE = 500
 
 # The paper fields the layout needs: id + embedded_at form the signature,
 # embedding feeds t-SNE/KMeans, title feeds cluster naming.
 _JOB_COLS = "paper_id, papers(id, title, embedding, embedded_at)"
 
 
-def _embedded_papers(rows: list[dict]) -> list[dict]:
-    """The joined papers that have an embedding, in the same deterministic order
-    as app._build_overview — the signatures must agree or serving never hits."""
-    papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
-    papers.sort(key=lambda p: p["id"])
-    return papers
-
-
 def _fetch_lab_papers(svc, team_id: str) -> list[dict]:
     """Every embedded paper posted to the lab (paged; stable order)."""
-    rows: list[dict] = []
-    start = 0
-    while True:
-        page = (
-            svc.table("paper_posts")
-            .select(_JOB_COLS)
-            .eq("team_id", team_id)
-            .order("id")
-            .range(start, start + _PAGE - 1)
-            .execute()
-            .data
-            or []
-        )
-        if not page:
-            return _embedded_papers(rows)
-        rows.extend(page)
-        start += len(page)
+    rows = fetch_all(
+        lambda: svc.table("paper_posts").select(_JOB_COLS).eq("team_id", team_id).order("id")
+    )
+    return ov.embedded_papers(rows)
 
 
 def _fetch_map_papers(svc, map_id: str) -> tuple[str, list[dict]]:
@@ -91,7 +69,7 @@ def _fetch_map_papers(svc, map_id: str) -> tuple[str, list[dict]]:
         .data
         or []
     )
-    return team_id, _embedded_papers(rows)
+    return team_id, ov.embedded_papers(rows)
 
 
 def compute_and_store(team_id: str, papers: list[dict], *, force: bool = False) -> str:
@@ -104,8 +82,9 @@ def compute_and_store(team_id: str, papers: list[dict], *, force: bool = False) 
     signature = ov._signature(papers)
     if not force and load_layout(team_id, signature) is not None:
         return "skipped"
-    point_by_id, _clusters = ov.compute_layout(team_id, papers)
-    store_layout(team_id, signature, point_by_id)
+    point_by_id = ov.compute_layout(team_id, papers)
+    if not store_layout(team_id, signature, point_by_id):
+        raise SystemExit("computed the layout but could not persist it (see log)")
     return "stored"
 
 
@@ -116,7 +95,10 @@ def spawn(mode: str, target_id: str, *, force: bool = False) -> subprocess.Popen
     cmd = [sys.executable, "-m", "api.layout_job", mode, target_id]
     if force:
         cmd.append("--force")
-    return subprocess.Popen(cmd)
+    # Explicit cwd: `-m api.layout_job` resolves via cwd (the api package isn't
+    # installed into the venv), and the serving process's own cwd isn't
+    # guaranteed to be the project root under every launcher.
+    return subprocess.Popen(cmd, cwd=str(Path(__file__).resolve().parents[1]))
 
 
 def main(argv: list[str] | None = None) -> None:

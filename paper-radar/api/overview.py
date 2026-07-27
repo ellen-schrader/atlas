@@ -18,13 +18,16 @@ import hashlib
 import json
 import logging
 import subprocess
+import threading
+import time
 from collections import OrderedDict, defaultdict
+from dataclasses import dataclass
 
 import numpy as np
 
 from paper_radar.config import get_settings as get_llm_settings
 
-from .layout_store import load_layout
+from .layout_store import delete_layout, load_layout
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -37,32 +40,79 @@ class _LayoutCache:
 
     A handful of entries so the lab overview and a few open maps coexist —
     the old one-entry-per-team cache made every lab ↔ map switch a full miss.
+    Locked: requests run on FastAPI's threadpool, and an unguarded
+    move_to_end can race another thread's eviction into a KeyError.
     """
 
     def __init__(self, maxsize: int = 8) -> None:
         self._d: OrderedDict[tuple[str, str], tuple] = OrderedDict()
         self._maxsize = maxsize
+        self._lock = threading.Lock()
 
     def get(self, key: tuple[str, str]):
-        value = self._d.get(key)
-        if value is not None:
-            self._d.move_to_end(key)
-        return value
+        with self._lock:
+            value = self._d.get(key)
+            if value is not None:
+                self._d.move_to_end(key)
+            return value
 
     def put(self, key: tuple[str, str], value: tuple) -> None:
-        self._d[key] = value
-        self._d.move_to_end(key)
-        while len(self._d) > self._maxsize:
-            self._d.popitem(last=False)
+        with self._lock:
+            self._d[key] = value
+            self._d.move_to_end(key)
+            while len(self._d) > self._maxsize:
+                self._d.popitem(last=False)
 
 
 _layout_cache = _LayoutCache()
 
+
+# --- layout-job supervision -------------------------------------------------
+#
 # One tracked recompute per (mode, target): "lab"/team_id or "map"/map_id. The
 # job re-fetches its paper set on start and skips signatures already stored, so
-# the worst a stale entry costs is one wasted spawn; the guard exists to stop a
-# poll-refresh from stacking N identical children.
-_layout_jobs: dict[tuple[str, str], subprocess.Popen] = {}
+# supervision only has to answer "should we spawn right now?", bounded by:
+#   * dedupe   — never two children for the same target;
+#   * rerun    — an embed landing mid-job marks the record, and the next call
+#                respawns once the child exits (the running child fetched
+#                *before* the change, so its layout may be one signature stale);
+#   * cooldown — a child that exited without producing a servable layout
+#                (crash, missing migration, parity bug) may only be respawned
+#                every _JOB_COOLDOWN_S, so the client's 3 s poll can't turn a
+#                deterministic failure into a t-SNE-per-poll loop;
+#   * cap      — at most _MAX_CONCURRENT_JOBS children at once, so a burst of
+#                misses (lab + several maps in tabs) can't stack sklearn spikes
+#                and OOM the small VM. Skipped spawns retry on the next poll.
+# Records are tiny and bounded by the number of labs+maps ever computed;
+# finished Popen handles are reaped (poll()ed and dropped) on every call.
+
+_JOB_COOLDOWN_S = 30.0
+_MAX_CONCURRENT_JOBS = 2
+
+
+@dataclass
+class _Job:
+    proc: subprocess.Popen | None = None
+    spawned_at: float = 0.0  # time.monotonic() of the last spawn
+    rerun: bool = False  # data changed while proc ran (or spawn was capped)
+
+
+_jobs_lock = threading.Lock()
+_layout_jobs: dict[tuple[str, str], _Job] = {}
+
+
+def _reap_and_count_running() -> int:
+    """poll() every child, drop exited handles (frees the zombie), count live."""
+    running = 0
+    for rec in _layout_jobs.values():
+        if rec.proc is not None:
+            if rec.proc.poll() is None:
+                running += 1
+            else:
+                if rec.proc.returncode != 0:
+                    log.warning("layout job exited with rc=%s", rec.proc.returncode)
+                rec.proc = None
+    return running
 
 
 def _parse_vec(value: object) -> list[float]:
@@ -132,6 +182,23 @@ def _signature(papers: list[dict]) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def embedded_papers(rows: list[dict]) -> list[dict]:
+    """The joined papers that are embedded, in deterministic order.
+
+    This filter+sort *defines* the layout signature's input, and it is the one
+    function both sides call: the serving path (app._build_overview) and the
+    layout job's fetches. If the two ever computed the set differently, the
+    job would persist layouts under signatures serving never asks for and
+    every view would poll "computing" forever — so any change to the predicate
+    must stay here, not at a call site. ``embedded_at`` is the marker (always
+    written together with the vector); serving doesn't fetch the vectors
+    themselves, the job does.
+    """
+    papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedded_at")]
+    papers.sort(key=lambda p: p["id"])
+    return papers
+
+
 def _load_names(team_id: str, signature: str) -> dict[int, dict] | None:
     """Reuse persisted theme names for this signature, or None to (re)compute.
 
@@ -187,13 +254,14 @@ def _store_names(
         log.warning("trends write failed (names not persisted): %s", exc)
 
 
-def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
-    """2-D layout + clusters + names for ``papers`` (each with id, title, embedding).
+def compute_layout(team_id: str, papers: list[dict]) -> dict[str, dict]:
+    """2-D layout + clusters for ``papers`` (each with id, title, embedding).
 
-    Returns ``(point_by_id, clusters)`` where ``point_by_id[id] = {x, y, cluster}``
-    and ``clusters = [{id, label, description, size}]``. Layout + KMeans are
-    deterministic; the LLM names are reused from ``trends`` when the embedded set
-    is unchanged, so Claude is only called when the clustering actually changes.
+    Returns ``point_by_id[id] = {x, y, cluster}``; the cluster *names* are
+    persisted to `trends` as a side effect (reused when the embedded set is
+    unchanged, so Claude is only called when the clustering actually changes).
+    The serving-side clusters list is always rebuilt from the assignment +
+    trends by :func:`_clusters_summary` — the single place that formats it.
 
     This is the compute core and it imports scikit-learn — only the layout job
     (api/layout_job.py) may call it; the serving path reads stored layouts via
@@ -219,54 +287,59 @@ def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], l
         )
         _store_names(team_id, signature, names, ids_by_cluster)
 
-    point_by_id = {
+    return {
         p["id"]: {"x": float(x), "y": float(y), "cluster": int(c)}
         for p, (x, y), c in zip(papers, coords, labels, strict=True)
     }
-    clusters = [
-        {
-            "id": cid,
-            "label": names.get(cid, {}).get("label", f"Theme {cid + 1}"),
-            "description": names.get(cid, {}).get("description", ""),
-            "size": len(ts),
-        }
-        for cid, ts in sorted(titles_by_cluster.items())
-    ]
-    return point_by_id, clusters
 
 
-def ensure_layout_job(mode: str, target_id: str, *, force: bool = False) -> None:
-    """Spawn the layout job for a lab or map unless one is already running.
+def ensure_layout_job(mode: str, target_id: str, *, refresh: bool = False) -> None:
+    """Make sure a layout job runs (or will run) for a lab or map.
 
-    Imported lazily to break the cycle (layout_job imports this module for the
-    compute core). ``force`` recomputes even a persisted signature — used when
-    a stored layout turns out not to match its paper set.
+    Never blocks. ``refresh`` marks that the underlying data just changed: it
+    bypasses the failure cooldown, and if a child is already mid-flight the
+    record is flagged so the *next* call (typically a client's 3 s poll)
+    respawns once that child exits — the running child fetched before the
+    change, so its layout may be one signature stale. The layout_job import is
+    lazy to break the cycle (layout_job imports this module for the compute
+    core).
     """
     key = (mode, target_id)
-    running = _layout_jobs.get(key)
-    if running is not None and running.poll() is None:
-        return
-    from .layout_job import spawn
+    with _jobs_lock:
+        running = _reap_and_count_running()
+        rec = _layout_jobs.setdefault(key, _Job())
+        if rec.proc is not None:  # a child is mid-flight
+            rec.rerun = rec.rerun or refresh
+            return
+        on_cooldown = (
+            not refresh
+            and not rec.rerun
+            and rec.spawned_at
+            and time.monotonic() - rec.spawned_at < _JOB_COOLDOWN_S
+        )
+        if on_cooldown or running >= _MAX_CONCURRENT_JOBS:
+            # Capped spawns keep their intent: rerun makes the next poll (or
+            # trigger) spawn immediately once a slot frees / the child exits.
+            rec.rerun = rec.rerun or refresh
+            return
 
-    _layout_jobs[key] = spawn(mode, target_id, force=force)
+        from .layout_job import spawn
+
+        rec.proc = spawn(mode, target_id)
+        rec.spawned_at = time.monotonic()
+        rec.rerun = False
 
 
 def refresh_lab_layout(team_id: str) -> None:
-    """Recompute the lab layout after embeddings change (a background task).
+    """Recompute the lab layout after the embedded set changed (background task).
 
-    If a job is mid-flight it fetched *before* this change landed, so wait for
-    it and spawn once more — the rerun skips in seconds when the earlier job
-    already covered the final set. This is what keeps the persisted layout
-    converging to the latest signature without any queue infrastructure.
+    Non-blocking: spawns the job, or — when one is already mid-flight — flags
+    the record so the next ensure call respawns over the final set. The rerun
+    respawn skips in seconds when the earlier job already covered that set,
+    which is what keeps the persisted layout converging to the latest
+    signature without queue infrastructure or blocked threadpool workers.
     """
-    running = _layout_jobs.get(("lab", team_id))
-    if running is not None and running.poll() is None:
-        try:
-            running.wait(timeout=300)
-        except Exception as exc:
-            log.warning("waiting for lab layout job (%s) failed: %s", team_id, exc)
-            return
-    ensure_layout_job("lab", team_id)
+    ensure_layout_job("lab", team_id, refresh=True)
 
 
 def _clusters_summary(
@@ -313,9 +386,14 @@ def cached_layout(
     if point_by_id is not None:
         if set(point_by_id) != {p["id"] for p in papers}:
             # A stored row that doesn't cover exactly this set can only be
-            # corruption (the signature *is* the set) — recompute it.
+            # corruption (the signature *is* the set). Delete it so the forced
+            # recompute converges in one pass — if the job's fetch reproduces a
+            # different signature (a parity bug), leaving the row would respawn
+            # a force job on every poll without ever repairing anything (the
+            # spawn cooldown bounds that loop either way).
             log.warning("stored layout %s/%s doesn't match its papers", team_id, signature[:12])
-            ensure_layout_job(*job, force=True)
+            delete_layout(team_id, signature)
+            ensure_layout_job(*job, refresh=True)
             return None
         result = (point_by_id, _clusters_summary(team_id, signature, point_by_id))
         _layout_cache.put(key, result)

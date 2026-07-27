@@ -52,8 +52,25 @@ def load_layout(team_id: str, signature: str) -> dict[str, dict] | None:
     }
 
 
-def store_layout(team_id: str, signature: str, point_by_id: dict[str, dict]) -> None:
-    """Upsert this signature's layout and GC the team's ancient rows."""
+def delete_layout(team_id: str, signature: str) -> None:
+    """Drop one stored layout (used when a row fails the serving-side sanity
+    check) so the recompute's upsert starts from a clean slate."""
+    try:
+        service_client().table("map_layouts").delete().eq("team_id", team_id).eq(
+            "signature", signature
+        ).execute()
+    except Exception as exc:
+        log.warning("map_layouts delete failed: %s", exc)
+
+
+def store_layout(team_id: str, signature: str, point_by_id: dict[str, dict]) -> bool:
+    """Upsert this signature's layout and GC the team's ancient rows.
+
+    Returns False when the upsert failed (e.g. the migration isn't applied) so
+    the layout job can exit non-zero — the failure then shows up in its exit
+    code and log instead of masquerading as a successful run that stored
+    nothing. A failed GC is only logged; the layout itself landed.
+    """
     coords = {
         pid: [p["x"], p["y"], p["cluster"]] for pid, p in point_by_id.items()
     }
@@ -63,9 +80,14 @@ def store_layout(team_id: str, signature: str, point_by_id: dict[str, dict]) -> 
             {"team_id": team_id, "signature": signature, "coords": coords},
             on_conflict="team_id,signature",
         ).execute()
+    except Exception as exc:
+        log.warning("map_layouts write failed (layout not persisted): %s", exc)
+        return False
+    try:
         cutoff = (datetime.now(UTC) - timedelta(days=_GC_DAYS)).isoformat()
         svc.table("map_layouts").delete().eq("team_id", team_id).lt(
             "created_at", cutoff
         ).execute()
     except Exception as exc:
-        log.warning("map_layouts write failed (layout not persisted): %s", exc)
+        log.warning("map_layouts GC failed (stale rows kept): %s", exc)
+    return True

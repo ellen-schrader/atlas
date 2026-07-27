@@ -43,3 +43,22 @@ def user_client(access_token: str) -> Client:
     client = create_client(s.supabase_url, s.supabase_anon_key)
     client.postgrest.auth(access_token)
     return client
+
+
+_PAGE_SIZE = 1000
+
+
+def fetch_all(make_query) -> list[dict]:
+    """Collect every row of a PostgREST select, one page at a time. `make_query`
+    returns a fresh (unexecuted) query builder each call and must impose a stable
+    order so pages don't overlap or skip. Advances by the number of rows actually
+    returned (not by _PAGE_SIZE) so it stays correct even if the server's max-rows
+    is below _PAGE_SIZE, and stops only on an empty page."""
+    out: list[dict] = []
+    start = 0
+    while True:
+        page = make_query().range(start, start + _PAGE_SIZE - 1).execute().data or []
+        if not page:
+            return out
+        out.extend(page)
+        start += len(page)

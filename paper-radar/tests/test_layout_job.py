@@ -3,25 +3,28 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from api import layout_job as lj
 from api import overview as ov
 
 
 def test_embedded_papers_filters_and_sorts():
+    # The shared helper (ov.embedded_papers) is what both serving and the job
+    # feed the signature — embedded_at is the presence marker.
     rows = [
         {"papers": {"id": "b", "embedding": "[1]", "embedded_at": "t"}},
         {"papers": {"id": "c", "embedding": None, "embedded_at": None}},  # not embedded
         {"papers": None},                                                  # dangling join
         {"papers": {"id": "a", "embedding": "[2]", "embedded_at": "t"}},
     ]
-    papers = lj._embedded_papers(rows)
+    papers = ov.embedded_papers(rows)
     assert [p["id"] for p in papers] == ["a", "b"]
 
 
 def test_compute_and_store_empty_set_stores_nothing(monkeypatch):
     stored = []
-    monkeypatch.setattr(lj, "store_layout", lambda *a: stored.append(a))
+    monkeypatch.setattr(lj, "store_layout", lambda *a: stored.append(a) or True)
     assert lj.compute_and_store("team", []) == "empty"
     assert stored == []
 
@@ -39,11 +42,11 @@ def test_compute_and_store_skips_persisted_and_forces(monkeypatch):
 
     def fake_compute(team_id, papers):
         computed["n"] += 1
-        return points, []
+        return points
 
     stored: list[tuple] = []
     monkeypatch.setattr(ov, "compute_layout", fake_compute)
-    monkeypatch.setattr(lj, "store_layout", lambda *a: stored.append(a))
+    monkeypatch.setattr(lj, "store_layout", lambda *a: stored.append(a) or True)
 
     # miss → computes and stores under the papers' signature
     monkeypatch.setattr(lj, "load_layout", lambda *a: None)
@@ -60,16 +63,32 @@ def test_compute_and_store_skips_persisted_and_forces(monkeypatch):
     assert computed["n"] == 2
 
 
+def test_compute_and_store_fails_loudly_when_persist_fails(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(ov, "compute_layout", lambda t, p: {})
+    monkeypatch.setattr(lj, "load_layout", lambda *a: None)
+    monkeypatch.setattr(lj, "store_layout", lambda *a: False)
+    # A job that computed but could not persist must exit non-zero, not
+    # masquerade as success (that's how a missing migration shows up in logs).
+    with pytest.raises(SystemExit):
+        lj.compute_and_store("team", _papers())
+
+
 def test_spawn_launches_this_module(monkeypatch):
     launched = {}
 
     class _P:
-        def __init__(self, argv):
+        def __init__(self, argv, cwd=None):
             launched["argv"] = argv
+            launched["cwd"] = cwd
 
     monkeypatch.setattr(lj.subprocess, "Popen", _P)
     lj.spawn("lab", "team-1")
     assert launched["argv"] == [sys.executable, "-m", "api.layout_job", "lab", "team-1"]
+    # cwd is pinned to the project root so `-m api.layout_job` resolves no
+    # matter what cwd the serving process was launched with.
+    assert launched["cwd"] == str(Path(lj.__file__).resolve().parents[1])
 
 
 def test_main_lab_mode_wires_fetch_to_compute(monkeypatch):

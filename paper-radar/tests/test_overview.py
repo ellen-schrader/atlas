@@ -148,28 +148,30 @@ _POINTS = {"p1": {"x": 0.0, "y": 1.0, "cluster": 0}, "p2": {"x": 2.0, "y": 3.0, 
 
 def _fresh_serving_state(monkeypatch, *, stored=None, names=None):
     """Reset cache/job state and stub the DB tiers + job spawn; returns the
-    list of (mode, target, force) spawns."""
+    list of (mode, target, refresh) ensure calls."""
     spawns: list[tuple] = []
+    deleted: list[tuple] = []
     ov._layout_cache._d.clear()
     ov._layout_jobs.clear()
     monkeypatch.setattr(ov, "load_layout", lambda t, s: stored)
+    monkeypatch.setattr(ov, "delete_layout", lambda t, s: deleted.append((t, s)))
     monkeypatch.setattr(ov, "_load_names", lambda t, s: names)
 
-    def fake_ensure(mode, target, *, force=False):
-        spawns.append((mode, target, force))
+    def fake_ensure(mode, target, *, refresh=False):
+        spawns.append((mode, target, refresh))
 
     monkeypatch.setattr(ov, "ensure_layout_job", fake_ensure)
-    return spawns
+    return spawns, deleted
 
 
 def test_cached_layout_miss_spawns_job_and_reports_computing(monkeypatch):
-    spawns = _fresh_serving_state(monkeypatch, stored=None)
+    spawns, _ = _fresh_serving_state(monkeypatch, stored=None)
     assert ov.cached_layout("team", _PAPERS, job=("lab", "team")) is None
     assert spawns == [("lab", "team", False)]
 
 
 def test_cached_layout_serves_stored_layout_and_memoizes(monkeypatch):
-    spawns = _fresh_serving_state(
+    spawns, _ = _fresh_serving_state(
         monkeypatch, stored=_POINTS, names={0: {"label": "A", "description": "d"}}
     )
     result = ov.cached_layout("team", _PAPERS, job=("lab", "team"))
@@ -190,36 +192,98 @@ def test_cached_layout_falls_back_to_generic_names(monkeypatch):
     assert clusters == [{"id": 0, "label": "Theme 1", "description": "", "size": 2}]
 
 
-def test_cached_layout_mismatched_stored_layout_forces_recompute(monkeypatch):
-    # stored row covers different paper ids than the request's set → corruption
-    bad = {"zz": {"x": 0.0, "y": 0.0, "cluster": 0}}
-    spawns = _fresh_serving_state(monkeypatch, stored=bad)
-    assert ov.cached_layout("team", _PAPERS, job=("map", "m1")) is None
-    assert spawns == [("map", "m1", True)]
+class _Proc:
+    """Stand-in for a Popen child: rc None while 'running'."""
+
+    def __init__(self, rc):
+        self._rc = rc
+        self.returncode = rc
+
+    def poll(self):
+        self.returncode = self._rc
+        return self._rc
+
+
+def _stub_spawn(monkeypatch):
+    import api.layout_job as lj
+
+    spawned = []
+
+    def fake_spawn(mode, tid):
+        spawned.append((mode, tid))
+        return _Proc(None)
+
+    monkeypatch.setattr(lj, "spawn", fake_spawn)
+    return spawned
 
 
 def test_ensure_layout_job_dedupes_running(monkeypatch):
     ov._layout_jobs.clear()
-    spawned = []
-
-    class _Proc:
-        def __init__(self, rc):
-            self._rc = rc
-
-        def poll(self):
-            return self._rc
-
-    import api.layout_job as lj
-
-    monkeypatch.setattr(
-        lj, "spawn", lambda mode, tid, force=False: spawned.append((mode, tid)) or _Proc(None)
-    )
+    spawned = _stub_spawn(monkeypatch)
     ov.ensure_layout_job("lab", "team")
     ov.ensure_layout_job("lab", "team")  # still running → deduped
     assert spawned == [("lab", "team")]
-    ov._layout_jobs[("lab", "team")] = _Proc(0)  # finished → respawn allowed
+
+
+def test_ensure_layout_job_cooldown_bounds_crash_loops(monkeypatch):
+    ov._layout_jobs.clear()
+    spawned = _stub_spawn(monkeypatch)
     ov.ensure_layout_job("lab", "team")
-    assert spawned == [("lab", "team"), ("lab", "team")]
+    # child crashed; a client poll seconds later must NOT respawn (cooldown)…
+    ov._layout_jobs[("lab", "team")].proc = _Proc(1)
+    ov.ensure_layout_job("lab", "team")
+    assert spawned == [("lab", "team")]
+    # …but once the cooldown has elapsed, the next poll may retry
+    ov._layout_jobs[("lab", "team")].spawned_at -= ov._JOB_COOLDOWN_S + 1
+    ov.ensure_layout_job("lab", "team")
+    assert spawned == [("lab", "team")] * 2
+
+
+def test_ensure_layout_job_refresh_reruns_after_running_child_exits(monkeypatch):
+    ov._layout_jobs.clear()
+    spawned = _stub_spawn(monkeypatch)
+    ov.ensure_layout_job("lab", "team")
+    # data changes while the child runs: the record is flagged, not respawned
+    ov.ensure_layout_job("lab", "team", refresh=True)
+    assert spawned == [("lab", "team")]
+    # child exits; the next call (a poll) respawns immediately, no cooldown
+    ov._layout_jobs[("lab", "team")].proc._rc = 0
+    ov.ensure_layout_job("lab", "team")
+    assert spawned == [("lab", "team")] * 2
+
+
+def test_ensure_layout_job_caps_concurrent_children(monkeypatch):
+    ov._layout_jobs.clear()
+    spawned = _stub_spawn(monkeypatch)
+    ov.ensure_layout_job("map", "m1")
+    ov.ensure_layout_job("map", "m2")
+    ov.ensure_layout_job("map", "m3")  # over the cap → deferred, not spawned
+    assert spawned == [("map", "m1"), ("map", "m2")]
+    # a slot frees; the deferred target spawns on its next poll
+    ov._layout_jobs[("map", "m1")].proc._rc = 0
+    ov.ensure_layout_job("map", "m3")
+    assert spawned == [("map", "m1"), ("map", "m2"), ("map", "m3")]
+
+
+def test_zombies_are_reaped(monkeypatch):
+    ov._layout_jobs.clear()
+    spawned = _stub_spawn(monkeypatch)
+    ov.ensure_layout_job("map", "m1")
+    ov._layout_jobs[("map", "m1")].proc._rc = 0  # child exits
+    ov.ensure_layout_job("map", "m2")  # any later call reaps finished handles
+    assert spawned == [("map", "m1"), ("map", "m2")]
+    assert ov._layout_jobs[("map", "m1")].proc is None  # handle dropped → no zombie
+
+
+def test_cached_layout_mismatched_stored_layout_forces_recompute(monkeypatch):
+    # stored row covers different paper ids than the request's set → corruption:
+    # the bad row is deleted (so the recompute's upsert starts clean) and the
+    # job is ensured with refresh (bypassing the failure cooldown once)
+    bad = {"zz": {"x": 0.0, "y": 0.0, "cluster": 0}}
+    spawns, deleted = _fresh_serving_state(monkeypatch, stored=bad)
+    assert ov.cached_layout("team", _PAPERS, job=("map", "m1")) is None
+    assert spawns == [("map", "m1", True)]
+    assert deleted == [("team", ov._signature(_PAPERS))]
 
 
 def test_serving_modules_never_import_sklearn():

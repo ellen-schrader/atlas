@@ -66,9 +66,12 @@ harmless.
 
 The API spawns it with `subprocess.Popen([sys.executable, "-m", ...])`. The
 child imports sklearn, works for a few seconds, exits — the serving RSS never
-grows. An in-process running-set keyed by `(team_id, signature)` stops
-duplicate spawns; when a job finishes, the trigger re-checks whether the
-signature moved again meanwhile (papers posted mid-job) and reruns once.
+grows. A small in-process supervisor (one record per lab/map target) provides:
+dedupe (never two children per target), a rerun flag (data changed mid-job →
+the next poll respawns once over the final set), a 30 s failure cooldown (a
+crashing job can't become a t-SNE-per-poll loop), a concurrency cap (2
+children, so parallel misses can't stack sklearn spikes and OOM the VM), and
+reaping (finished handles are poll()ed and dropped — no zombies).
 
 Why subprocess and not a separate Fly worker/scheduled job: smallest change,
 no new infra or tokens, triggers stay in-process, and it fully achieves the
