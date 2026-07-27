@@ -209,6 +209,9 @@ class OverviewResponse(BaseModel):
     stats: OverviewStats
     total: int  # posts in the lab
     embedded: int  # posts whose paper has an embedding (points returned)
+    # "computing": this signature's layout isn't persisted yet; a job is running
+    # and the client should poll. Stats/total/embedded are still live above.
+    status: Literal["ready", "computing"] = "ready"
 
 
 # The token dependency lives in `deps.py` (imported above) so routers can share it
@@ -565,6 +568,10 @@ def create_post(
     # its key, and the backfill scripts cover anything skipped.
     if needs_embedding and get_api_settings().voyage_api_key:
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
+        # Background tasks run in order, so this refreshes the persisted lab
+        # layout after the embed above lands — the next Insights view is a
+        # warm read instead of a "computing" wait.
+        background.add_task(overview_mod.refresh_lab_layout, req.team_id)
     if needs_embedding:
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
 
@@ -804,10 +811,15 @@ _OVERVIEW_COLS = (
 _MAP_MEMBER_LIMIT = maps.MAP_MEMBER_LIMIT
 
 
-def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:
+def _build_overview(
+    uc: object, team_id: str, rows: list[dict], *, job: tuple[str, str]
+) -> OverviewResponse:
     """Turn paper_posts rows (with joined papers) into the 2-D layout + clusters +
     stats. `cached_layout` keys on the papers' content signature, so passing a
-    *subset* (a map's members) yields that subset's own layout and sub-themes."""
+    *subset* (a map's members) yields that subset's own layout and sub-themes.
+    ``job`` names the layout job to spawn on a miss (("lab", team_id) or
+    ("map", map_id)); a miss returns ``status="computing"`` for the client to
+    poll — the serving process never runs t-SNE itself (issue #103)."""
     total = len(rows)
     stats = _compute_stats(rows)
     papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
@@ -815,7 +827,13 @@ def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewRespo
         return OverviewResponse(points=[], clusters=[], stats=stats, total=total, embedded=0)
     papers.sort(key=lambda p: p["id"])  # deterministic layout/cluster order
 
-    point_by_id, clusters = overview_mod.cached_layout(team_id, papers)
+    layout = overview_mod.cached_layout(team_id, papers, job=job)
+    if layout is None:
+        return OverviewResponse(
+            points=[], clusters=[], stats=stats, total=total,
+            embedded=len(papers), status="computing",
+        )
+    point_by_id, clusters = layout
     eng = _engagement_counts(uc, team_id, [p["id"] for p in papers])
     points = [
         OverviewPoint(
@@ -856,7 +874,7 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     rows = _fetch_all(
         lambda: uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).order("id")
     )
-    return _build_overview(uc, team_id, rows)
+    return _build_overview(uc, team_id, rows, job=("lab", team_id))
 
 
 # Only for *displaying* the effective floor when a map hasn't overridden it; the
@@ -926,7 +944,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         .eq("team_id", m["team_id"]).in_("paper_id", member_ids)
         .execute().data or []
     )
-    base = _build_overview(uc, m["team_id"], post_rows)
+    base = _build_overview(uc, m["team_id"], post_rows, job=("map", map_id))
     cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
     new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
     return MapOverviewResponse(
@@ -1094,7 +1112,8 @@ def make_map_summary(
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("team_id, seed, ai_summary").eq("id", map_id).limit(1).execute().data
+        uc.table("maps").select("team_id, seed, ai_summary")
+        .eq("id", map_id).limit(1).execute().data
         or []
     )
     if not rows:
@@ -1752,6 +1771,8 @@ def bibtex_import(
     # would otherwise fire 400 separate embedding requests.
     if to_embed and get_api_settings().voyage_api_key:
         background.add_task(_embed_batch, to_embed)
+        # In-order, so the lab layout refreshes once after the whole batch embeds.
+        background.add_task(overview_mod.refresh_lab_layout, req.team_id)
 
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
 

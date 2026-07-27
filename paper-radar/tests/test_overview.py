@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import numpy as np
 
 from api import overview as ov
@@ -139,19 +142,93 @@ def test_signature_stable_regardless_of_input_order():
     assert ov._signature(a) != ov._signature(c)
 
 
-def test_cached_layout_memoizes(monkeypatch):
-    calls = {"n": 0}
+_PAPERS = [{"id": "p1", "embedded_at": "t1"}, {"id": "p2", "embedded_at": "t1"}]
+_POINTS = {"p1": {"x": 0.0, "y": 1.0, "cluster": 0}, "p2": {"x": 2.0, "y": 3.0, "cluster": 0}}
 
-    def fake_compute(team_id, papers):
-        calls["n"] += 1
-        return ({p["id"]: {"x": 0.0, "y": 0.0, "cluster": 0} for p in papers}, [])
 
-    monkeypatch.setattr(ov, "compute_layout", fake_compute)
+def _fresh_serving_state(monkeypatch, *, stored=None, names=None):
+    """Reset cache/job state and stub the DB tiers + job spawn; returns the
+    list of (mode, target, force) spawns."""
+    spawns: list[tuple] = []
     ov._layout_cache._d.clear()
-    papers = [{"id": "p1", "embedded_at": "t1"}, {"id": "p2", "embedded_at": "t1"}]
-    ov.cached_layout("team", papers)
-    ov.cached_layout("team", papers)
-    assert calls["n"] == 1  # second call served from cache
-    # a re-embed (new embedded_at) busts the cache
-    ov.cached_layout("team", [{"id": "p1", "embedded_at": "t2"}, {"id": "p2", "embedded_at": "t1"}])
-    assert calls["n"] == 2
+    ov._layout_jobs.clear()
+    monkeypatch.setattr(ov, "load_layout", lambda t, s: stored)
+    monkeypatch.setattr(ov, "_load_names", lambda t, s: names)
+
+    def fake_ensure(mode, target, *, force=False):
+        spawns.append((mode, target, force))
+
+    monkeypatch.setattr(ov, "ensure_layout_job", fake_ensure)
+    return spawns
+
+
+def test_cached_layout_miss_spawns_job_and_reports_computing(monkeypatch):
+    spawns = _fresh_serving_state(monkeypatch, stored=None)
+    assert ov.cached_layout("team", _PAPERS, job=("lab", "team")) is None
+    assert spawns == [("lab", "team", False)]
+
+
+def test_cached_layout_serves_stored_layout_and_memoizes(monkeypatch):
+    spawns = _fresh_serving_state(
+        monkeypatch, stored=_POINTS, names={0: {"label": "A", "description": "d"}}
+    )
+    result = ov.cached_layout("team", _PAPERS, job=("lab", "team"))
+    assert result is not None
+    point_by_id, clusters = result
+    assert point_by_id == _POINTS
+    assert clusters == [{"id": 0, "label": "A", "description": "d", "size": 2}]
+    assert spawns == []  # nothing to compute
+
+    # second call is the hot tier: no DB reads at all
+    monkeypatch.setattr(ov, "load_layout", lambda t, s: (_ for _ in ()).throw(AssertionError))
+    assert ov.cached_layout("team", _PAPERS, job=("lab", "team")) == result
+
+
+def test_cached_layout_falls_back_to_generic_names(monkeypatch):
+    _fresh_serving_state(monkeypatch, stored=_POINTS, names=None)
+    _points, clusters = ov.cached_layout("team", _PAPERS, job=("lab", "team"))
+    assert clusters == [{"id": 0, "label": "Theme 1", "description": "", "size": 2}]
+
+
+def test_cached_layout_mismatched_stored_layout_forces_recompute(monkeypatch):
+    # stored row covers different paper ids than the request's set → corruption
+    bad = {"zz": {"x": 0.0, "y": 0.0, "cluster": 0}}
+    spawns = _fresh_serving_state(monkeypatch, stored=bad)
+    assert ov.cached_layout("team", _PAPERS, job=("map", "m1")) is None
+    assert spawns == [("map", "m1", True)]
+
+
+def test_ensure_layout_job_dedupes_running(monkeypatch):
+    ov._layout_jobs.clear()
+    spawned = []
+
+    class _Proc:
+        def __init__(self, rc):
+            self._rc = rc
+
+        def poll(self):
+            return self._rc
+
+    import api.layout_job as lj
+
+    monkeypatch.setattr(
+        lj, "spawn", lambda mode, tid, force=False: spawned.append((mode, tid)) or _Proc(None)
+    )
+    ov.ensure_layout_job("lab", "team")
+    ov.ensure_layout_job("lab", "team")  # still running → deduped
+    assert spawned == [("lab", "team")]
+    ov._layout_jobs[("lab", "team")] = _Proc(0)  # finished → respawn allowed
+    ov.ensure_layout_job("lab", "team")
+    assert spawned == [("lab", "team"), ("lab", "team")]
+
+
+def test_serving_modules_never_import_sklearn():
+    """The whole point of issue #103: importing the serving stack must not pull
+    scikit-learn (its ~300 MB resident set is why the VM needed 1 GB). Run in a
+    child interpreter so other tests' imports can't contaminate the check."""
+    code = (
+        "import sys; import api.app, api.overview, api.layout_job, api.layout_store; "
+        "bad = [m for m in sys.modules if m.split('.')[0] in ('sklearn', 'scipy')]; "
+        "assert not bad, f'serving imports pulled in {bad}'"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=120)

@@ -1,9 +1,12 @@
 """Insights overview for a lab: t-SNE 2-D layout + KMeans clusters (LLM-named).
 
-The layout + cluster assignment + Claude names are cached in-process per team,
-keyed by the exact set of embedded papers, so they recompute only when that
-set changes (a recompute is a few seconds — numba-free t-SNE, no JIT). The
-names are additionally persisted to the `trends` table (see _load_names /
+Serving is read-only (issue #103): coordinates come from the `map_layouts`
+table (written by the ephemeral ``api/layout_job.py`` — the only process that
+ever imports scikit-learn), fronted by a small in-process LRU keyed by
+``(team_id, signature)``. On a miss the serving process *spawns* the job and
+reports "computing" instead of running t-SNE itself, so its resident set stays
+numpy-light — that is what lets the always-on VM shrink (fly.toml memory).
+Cluster names are persisted to `trends` by signature (see _load_names /
 _store_names), so Claude is not re-asked after a restart. Point attributes
 (year/venue) and engagement are fetched fresh on each request by the caller,
 so they stay live.
@@ -14,12 +17,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections import defaultdict
+import subprocess
+from collections import OrderedDict, defaultdict
 
 import numpy as np
 
 from paper_radar.config import get_settings as get_llm_settings
 
+from .layout_store import load_layout
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -28,20 +33,36 @@ _MAX_TITLES_PER_CLUSTER = 25  # cap the prompt size when naming
 
 
 class _LayoutCache:
-    """Per-team cache of (2-D layout coords + cluster ids + cluster names)."""
+    """LRU of (point_by_id, clusters) keyed by (team_id, signature).
 
-    def __init__(self) -> None:
-        self._d: dict[str, tuple[frozenset, tuple]] = {}
+    A handful of entries so the lab overview and a few open maps coexist —
+    the old one-entry-per-team cache made every lab ↔ map switch a full miss.
+    """
 
-    def get(self, team_id: str, key: frozenset):
-        entry = self._d.get(team_id)
-        return entry[1] if entry and entry[0] == key else None
+    def __init__(self, maxsize: int = 8) -> None:
+        self._d: OrderedDict[tuple[str, str], tuple] = OrderedDict()
+        self._maxsize = maxsize
 
-    def put(self, team_id: str, key: frozenset, value: tuple) -> None:
-        self._d[team_id] = (key, value)
+    def get(self, key: tuple[str, str]):
+        value = self._d.get(key)
+        if value is not None:
+            self._d.move_to_end(key)
+        return value
+
+    def put(self, key: tuple[str, str], value: tuple) -> None:
+        self._d[key] = value
+        self._d.move_to_end(key)
+        while len(self._d) > self._maxsize:
+            self._d.popitem(last=False)
 
 
 _layout_cache = _LayoutCache()
+
+# One tracked recompute per (mode, target): "lab"/team_id or "map"/map_id. The
+# job re-fetches its paper set on start and skips signatures already stored, so
+# the worst a stale entry costs is one wasted spawn; the guard exists to stop a
+# poll-refresh from stacking N identical children.
+_layout_jobs: dict[tuple[str, str], subprocess.Popen] = {}
 
 
 def _parse_vec(value: object) -> list[float]:
@@ -173,6 +194,10 @@ def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], l
     and ``clusters = [{id, label, description, size}]``. Layout + KMeans are
     deterministic; the LLM names are reused from ``trends`` when the embedded set
     is unchanged, so Claude is only called when the clustering actually changes.
+
+    This is the compute core and it imports scikit-learn — only the layout job
+    (api/layout_job.py) may call it; the serving path reads stored layouts via
+    :func:`cached_layout`.
     """
     from paper_radar.embed.index import cluster_embeddings, compute_layout_2d
 
@@ -210,12 +235,91 @@ def compute_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], l
     return point_by_id, clusters
 
 
-def cached_layout(team_id: str, papers: list[dict]) -> tuple[dict[str, dict], list[dict]]:
-    """:func:`compute_layout`, memoized per team by the embedded-paper set."""
-    key = frozenset((p["id"], p["embedded_at"]) for p in papers)
-    cached = _layout_cache.get(team_id, key)
+def ensure_layout_job(mode: str, target_id: str, *, force: bool = False) -> None:
+    """Spawn the layout job for a lab or map unless one is already running.
+
+    Imported lazily to break the cycle (layout_job imports this module for the
+    compute core). ``force`` recomputes even a persisted signature — used when
+    a stored layout turns out not to match its paper set.
+    """
+    key = (mode, target_id)
+    running = _layout_jobs.get(key)
+    if running is not None and running.poll() is None:
+        return
+    from .layout_job import spawn
+
+    _layout_jobs[key] = spawn(mode, target_id, force=force)
+
+
+def refresh_lab_layout(team_id: str) -> None:
+    """Recompute the lab layout after embeddings change (a background task).
+
+    If a job is mid-flight it fetched *before* this change landed, so wait for
+    it and spawn once more — the rerun skips in seconds when the earlier job
+    already covered the final set. This is what keeps the persisted layout
+    converging to the latest signature without any queue infrastructure.
+    """
+    running = _layout_jobs.get(("lab", team_id))
+    if running is not None and running.poll() is None:
+        try:
+            running.wait(timeout=300)
+        except Exception as exc:
+            log.warning("waiting for lab layout job (%s) failed: %s", team_id, exc)
+            return
+    ensure_layout_job("lab", team_id)
+
+
+def _clusters_summary(
+    team_id: str, signature: str, point_by_id: dict[str, dict]
+) -> list[dict]:
+    """Rebuild the clusters list (label/description/size) for a stored layout.
+
+    Sizes come from the stored assignment; names from `trends`. A layout row
+    written by the job always has its names persisted alongside, so the generic
+    fallback only shows if the trends rows were lost independently.
+    """
+    sizes: dict[int, int] = defaultdict(int)
+    for p in point_by_id.values():
+        sizes[p["cluster"]] += 1
+    names = _load_names(team_id, signature) or {}
+    return [
+        {
+            "id": cid,
+            "label": names.get(cid, {}).get("label", f"Theme {cid + 1}"),
+            "description": names.get(cid, {}).get("description", ""),
+            "size": n,
+        }
+        for cid, n in sorted(sizes.items())
+    ]
+
+
+def cached_layout(
+    team_id: str, papers: list[dict], *, job: tuple[str, str]
+) -> tuple[dict[str, dict], list[dict]] | None:
+    """The layout for this paper set, without ever computing it in-process.
+
+    Hot tier: in-process LRU. Warm tier: the `map_layouts` row for this
+    signature. Miss: spawn the layout job described by ``job`` (("lab",
+    team_id) or ("map", map_id)) and return None — the caller reports
+    ``status="computing"`` and the client polls until the job's row lands.
+    """
+    signature = _signature(papers)
+    key = (team_id, signature)
+    cached = _layout_cache.get(key)
     if cached is not None:
         return cached
-    result = compute_layout(team_id, papers)
-    _layout_cache.put(team_id, key, result)
-    return result
+
+    point_by_id = load_layout(team_id, signature)
+    if point_by_id is not None:
+        if set(point_by_id) != {p["id"] for p in papers}:
+            # A stored row that doesn't cover exactly this set can only be
+            # corruption (the signature *is* the set) — recompute it.
+            log.warning("stored layout %s/%s doesn't match its papers", team_id, signature[:12])
+            ensure_layout_job(*job, force=True)
+            return None
+        result = (point_by_id, _clusters_summary(team_id, signature, point_by_id))
+        _layout_cache.put(key, result)
+        return result
+
+    ensure_layout_job(*job)
+    return None

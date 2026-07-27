@@ -109,11 +109,14 @@ def compute_and_store(team_id: str, papers: list[dict], *, force: bool = False) 
     return "stored"
 
 
-def spawn(mode: str, target_id: str) -> subprocess.Popen:
+def spawn(mode: str, target_id: str, *, force: bool = False) -> subprocess.Popen:
     """Fire-and-forget recompute in a child process (stdio inherited, so its
     logs land in the API's stream). The caller dedupes; the job itself is
     idempotent, so a stray duplicate only wastes a few seconds of CPU."""
-    return subprocess.Popen([sys.executable, "-m", "api.layout_job", mode, target_id])
+    cmd = [sys.executable, "-m", "api.layout_job", mode, target_id]
+    if force:
+        cmd.append("--force")
+    return subprocess.Popen(cmd)
 
 
 def main(argv: list[str] | None = None) -> None:
