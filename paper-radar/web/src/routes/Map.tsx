@@ -33,12 +33,21 @@ const LOADING_STAGES = [
   "Still working. The first load after a quiet spell can take up to a minute.",
 ];
 
-function MapLoadingSkeleton() {
+// Shown while the server reports status:"computing" — the service is awake and
+// a background job is laying out a changed paper set (we poll until it lands).
+const COMPUTING_STAGES = [
+  "New papers changed the map — recomputing the layout…",
+  "Placing papers and naming the themes…",
+  "Still computing — a bigger change takes a little longer.",
+];
+
+function MapLoadingSkeleton({ computing = false }: { computing?: boolean }) {
   const [stage, setStage] = useState(0);
   useEffect(() => {
     const timers = [setTimeout(() => setStage(1), 6_000), setTimeout(() => setStage(2), 20_000)];
     return () => timers.forEach(clearTimeout);
   }, []);
+  const stages = computing ? COMPUTING_STAGES : LOADING_STAGES;
 
   return (
     <>
@@ -65,7 +74,7 @@ function MapLoadingSkeleton() {
           ))}
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Loader2 className="animate-spin text-muted" size={22} aria-hidden />
-            <p className="max-w-sm px-6 text-center text-sm text-muted">{LOADING_STAGES[stage]}</p>
+            <p className="max-w-sm px-6 text-center text-sm text-muted">{stages[stage]}</p>
           </div>
         </div>
       </div>
@@ -80,7 +89,11 @@ export default function MapView() {
     queryFn: () => fetchOverview(team.id),
     staleTime: 5 * 60 * 1000,
     // Cold-boot-aware retry comes from the QueryClient default (main.tsx).
+    // While the server reports status:"computing" (a background job is laying
+    // out a changed paper set), poll until the points land.
+    refetchInterval: (query) => (query.state.data?.status === "computing" ? 3000 : false),
   });
+  const computing = data?.status === "computing";
 
   const [colorBy, setColorBy] = useState<ColorMode>("cluster");
   const [sizeBy, setSizeBy] = useState<SizeMode>("uniform");
@@ -154,7 +167,7 @@ export default function MapView() {
         </p>
       </div>
 
-      {isLoading && <MapLoadingSkeleton />}
+      {(isLoading || computing) && <MapLoadingSkeleton computing={computing} />}
       {error && !data && (
         <p className="text-sm text-danger">
           {isTransientApiError(error)
@@ -164,7 +177,7 @@ export default function MapView() {
         </p>
       )}
 
-      {data && points.length === 0 && (
+      {data && !computing && points.length === 0 && (
         <p className="text-sm text-muted">
           {data.total === 0
             ? "No papers yet — post some first."
@@ -172,7 +185,7 @@ export default function MapView() {
         </p>
       )}
 
-      {data && points.length > 0 && (
+      {data && !computing && points.length > 0 && (
         <>
           <KpiStrip data={data} />
 
