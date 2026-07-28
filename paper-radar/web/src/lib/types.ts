@@ -140,6 +140,9 @@ export interface OverviewData {
   stats: OverviewStats;
   total: number; // posts in the lab
   embedded: number; // posts with an embedded paper (points returned)
+  /** "computing": the server is building this layout in the background —
+   *  points/clusters are empty and the client should poll until "ready". */
+  status: "ready" | "computing";
 }
 
 /** A saved topic map (its definition + metadata; not its members). The list

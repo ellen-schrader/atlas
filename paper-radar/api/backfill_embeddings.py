@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {done}/{len(todo)}")
         time.sleep(args.delay)
     print(f"Done. embedded={done} failed={failed}")
+    if done:
+        print(
+            "Embeddings changed every affected lab's layout signature; warm the "
+            "persisted layouts with: uv run python -m api.layout_job lab <team_id> "
+            "(otherwise the next Insights view shows a brief 'computing' state)."
+        )
 
 
 if __name__ == "__main__":

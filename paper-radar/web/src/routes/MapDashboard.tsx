@@ -60,6 +60,9 @@ export default function MapDashboard() {
     queryFn: () => fetchMapOverview(mapId!),
     enabled: !!mapId,
     retry: (n, e) => isTransientApiError(e) && n < 5,
+    // status:"computing" means a background job is laying out this map's
+    // member set (first view after membership changed) — poll until it lands.
+    refetchInterval: (query) => (query.state.data?.status === "computing" ? 3000 : false),
   });
   const papers = useQuery({
     queryKey: ["map-papers", mapId, sort],
@@ -232,7 +235,12 @@ export default function MapDashboard() {
                   items-start keeps the map at its natural (fixed-aspect) size. */}
               <div className="grid items-start gap-4 lg:grid-cols-[1.5fr_1fr]">
                 <div className="lg:order-1">
-                  {data.points.length >= 2 ? (
+                  {data.status === "computing" ? (
+                    <div className="flex min-h-[200px] items-center justify-center gap-2 rounded-card border border-dashed border-border p-8 text-sm text-muted">
+                      <Loader2 size={16} className="animate-spin" aria-hidden /> Computing this
+                      topic’s map — it’ll appear in a few seconds…
+                    </div>
+                  ) : data.points.length >= 2 ? (
                     <section className="rounded-card border border-border bg-surface p-5">
                       <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
                         The map
@@ -276,7 +284,13 @@ export default function MapDashboard() {
                       onPick={(_, tone) =>
                         setActiveCluster((cur) => (cur === (tone ?? null) ? null : (tone ?? null)))
                       }
-                      empty="Too few papers to cluster."
+                      // While the layout job runs, clusters are empty because
+                      // they're being computed, not because the map is small.
+                      empty={
+                        data.status === "computing"
+                          ? "Sub-themes are computing…"
+                          : "Too few papers to cluster."
+                      }
                     />
                   </RankPanel>
                   {(papers.data?.labs.length ?? 0) > 0 && (

@@ -40,7 +40,7 @@ from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .config import get_api_settings
 from .deps import require_token
-from .supa import get_user_id, service_client, user_client
+from .supa import fetch_all, get_user_id, service_client, user_client
 
 # Uvicorn configures only its own loggers, so without a root handler the app's
 # INFO-level diagnostics (inbound webhook traces, import skips) never reach the
@@ -209,6 +209,9 @@ class OverviewResponse(BaseModel):
     stats: OverviewStats
     total: int  # posts in the lab
     embedded: int  # posts whose paper has an embedding (points returned)
+    # "computing": this signature's layout isn't persisted yet; a job is running
+    # and the client should poll. Stats/total/embedded are still live above.
+    status: Literal["ready", "computing"] = "ready"
 
 
 # The token dependency lives in `deps.py` (imported above) so routers can share it
@@ -565,6 +568,13 @@ def create_post(
     # its key, and the backfill scripts cover anything skipped.
     if needs_embedding and get_api_settings().voyage_api_key:
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
+    if not already:
+        # Any new post changes the lab's embedded set — including a paper some
+        # other lab already embedded (needs_embedding False). Tasks run in
+        # order, so this fires after the embed above lands; refresh itself is a
+        # non-blocking spawn/flag, so the next Insights view is a warm read
+        # instead of a "computing" wait.
+        background.add_task(overview_mod.refresh_lab_layout, req.team_id)
     if needs_embedding:
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
 
@@ -703,10 +713,9 @@ def _last_author_lab(authors: list) -> str | None:
     return authors[-1] if authors else None
 
 
-# PostgREST caps a single response at max_rows (supabase/config.toml: 1000). Page
-# through so aggregates see every row instead of a silent first-1000 slice once a
-# lab grows past that. _IN_BATCH keeps a paper_id `in_` list within URL limits.
-_PAGE_SIZE = 1000
+# PostgREST caps a single response at max_rows (supabase/config.toml: 1000);
+# supa.fetch_all pages through so aggregates see every row instead of a silent
+# first-1000 slice. _IN_BATCH keeps a paper_id `in_` list within URL limits.
 _IN_BATCH = 300
 
 
@@ -714,22 +723,6 @@ def _chunks(seq: list, n: int):
     """Yield `seq` in lists of at most n."""
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
-
-
-def _fetch_all(make_query) -> list[dict]:
-    """Collect every row of a PostgREST select, one page at a time. `make_query`
-    returns a fresh (unexecuted) query builder each call and must impose a stable
-    order so pages don't overlap or skip. Advances by the number of rows actually
-    returned (not by _PAGE_SIZE) so it stays correct even if the server's max-rows
-    is below _PAGE_SIZE, and stops only on an empty page."""
-    out: list[dict] = []
-    start = 0
-    while True:
-        page = make_query().range(start, start + _PAGE_SIZE - 1).execute().data or []
-        if not page:
-            return out
-        out.extend(page)
-        start += len(page)
 
 
 def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tuple[int, int]]:
@@ -742,7 +735,7 @@ def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tupl
     # PostgREST max-rows. Scoping to paper_ids keeps a map (which shows a subset)
     # from scanning the whole lab's engagement.
     for batch in _chunks(paper_ids, _IN_BATCH):
-        for r in _fetch_all(
+        for r in fetch_all(
             lambda b=batch: uc.table("reactions")
             .select("paper_id")
             .eq("team_id", team_id)
@@ -751,7 +744,7 @@ def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tupl
         ):
             if r["paper_id"] in counts:
                 counts[r["paper_id"]][0] += 1
-        for c in _fetch_all(
+        for c in fetch_all(
             lambda b=batch: uc.table("comments")
             .select("paper_id")
             .eq("team_id", team_id)
@@ -792,31 +785,43 @@ def _compute_stats(rows: list[dict]) -> OverviewStats:
     )
 
 
-# Explicit columns for the overview: the post date + the paper's metadata and
-# embedding. Shared by the whole-lab overview and the scoped map overview.
+# Explicit columns for the overview: the post date + the paper's metadata.
+# embedded_at (not the vector — the layout job alone fetches those) marks a
+# paper as embedded. Shared by the whole-lab overview and the scoped map overview.
 _OVERVIEW_COLS = (
     "paper_id, posted_at, "
-    "papers(id, title, venue, year, keywords, tags, authors, embedding, embedded_at)"
+    "papers(id, title, venue, year, keywords, tags, authors, embedded_at)"
 )
 
-# Cap on members pulled per map surface (scatter / list / summary). A map with
-# more members than this is truncated to the top by seed similarity; kept in one
-# place so the three endpoints agree and the bound is documented.
-_MAP_MEMBER_LIMIT = 500
 
-
-def _build_overview(uc: object, team_id: str, rows: list[dict]) -> OverviewResponse:
+def _build_overview(
+    uc: object, team_id: str, rows: list[dict], *, job: tuple[str, str]
+) -> OverviewResponse:
     """Turn paper_posts rows (with joined papers) into the 2-D layout + clusters +
     stats. `cached_layout` keys on the papers' content signature, so passing a
-    *subset* (a map's members) yields that subset's own layout and sub-themes."""
+    *subset* (a map's members) yields that subset's own layout and sub-themes.
+    ``job`` names the layout job to spawn on a miss (("lab", team_id) or
+    ("map", map_id)); a miss returns ``status="computing"`` for the client to
+    poll — the serving process never runs t-SNE itself (issue #103)."""
     total = len(rows)
     stats = _compute_stats(rows)
-    papers = [r["papers"] for r in rows if r.get("papers") and r["papers"].get("embedding")]
+    # The shared filter+sort defines the layout signature's input — both this
+    # serving path and the layout job's fetches go through it, so the two can't
+    # drift (drift would mean a signature the job never persists → an endless
+    # "computing" poll). Serving no longer fetches the embedding vectors
+    # themselves (~1024 floats × paper — megabytes per request the layout job
+    # alone needs); embedded_at is the presence marker.
+    papers = overview_mod.embedded_papers(rows)
     if not papers:
         return OverviewResponse(points=[], clusters=[], stats=stats, total=total, embedded=0)
-    papers.sort(key=lambda p: p["id"])  # deterministic layout/cluster order
 
-    point_by_id, clusters = overview_mod.cached_layout(team_id, papers)
+    layout = overview_mod.cached_layout(team_id, papers, job=job)
+    if layout is None:
+        return OverviewResponse(
+            points=[], clusters=[], stats=stats, total=total,
+            embedded=len(papers), status="computing",
+        )
+    point_by_id, clusters = layout
     eng = _engagement_counts(uc, team_id, [p["id"] for p in papers])
     points = [
         OverviewPoint(
@@ -854,10 +859,10 @@ def overview(team_id: str, token: str = Depends(require_token)) -> OverviewRespo
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     uc = user_client(token)
-    rows = _fetch_all(
+    rows = fetch_all(
         lambda: uc.table("paper_posts").select(_OVERVIEW_COLS).eq("team_id", team_id).order("id")
     )
-    return _build_overview(uc, team_id, rows)
+    return _build_overview(uc, team_id, rows, job=("lab", team_id))
 
 
 # Only for *displaying* the effective floor when a map hasn't overridden it; the
@@ -908,7 +913,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     below = (stat[0].get("below", 0) if stat else 0) or 0
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": maps.MAP_MEMBER_LIMIT})
         .execute().data or []
     )
     member_ids = [x["paper_id"] for x in members]
@@ -927,7 +932,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
         .eq("team_id", m["team_id"]).in_("paper_id", member_ids)
         .execute().data or []
     )
-    base = _build_overview(uc, m["team_id"], post_rows)
+    base = _build_overview(uc, m["team_id"], post_rows, job=("map", map_id))
     cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
     new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
     return MapOverviewResponse(
@@ -977,7 +982,7 @@ def map_papers(
     team_id = rows[0]["team_id"]
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": maps.MAP_MEMBER_LIMIT})
         .execute().data or []
     )
     if not members:
@@ -1095,7 +1100,8 @@ def make_map_summary(
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("team_id, seed, ai_summary").eq("id", map_id).limit(1).execute().data
+        uc.table("maps").select("team_id, seed, ai_summary")
+        .eq("id", map_id).limit(1).execute().data
         or []
     )
     if not rows:
@@ -1110,7 +1116,7 @@ def make_map_summary(
     _summary_limiter.check(user_id)  # bound the paid LLM call
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": maps.MAP_MEMBER_LIMIT})
         .execute().data or []
     )
     sim = {m["paper_id"]: m["similarity"] for m in members}
@@ -1753,6 +1759,11 @@ def bibtex_import(
     # would otherwise fire 400 separate embedding requests.
     if to_embed and get_api_settings().voyage_api_key:
         background.add_task(_embed_batch, to_embed)
+    if imported:
+        # Any newly imported post changes the lab's embedded set even when
+        # nothing needed embedding (papers other labs already embedded).
+        # In-order, so this runs once after the whole batch embeds.
+        background.add_task(overview_mod.refresh_lab_layout, req.team_id)
 
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
 
