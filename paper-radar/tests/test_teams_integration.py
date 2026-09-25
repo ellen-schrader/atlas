@@ -678,6 +678,9 @@ def test_new_reply_is_hedged_and_links_the_papers_feed(monkeypatch):
     # Must stay true whether the background dedup finds the paper or not.
     assert "isn't in the lab yet" in text
     assert "[Atlas](https://atlas.example.com/papers)" in text
+    # The reply promises nothing about readability: that could only be a guess
+    # made before the fetch, and it would be wrong in both directions.
+    assert "recognize" not in text
 
 
 def test_plan_skips_thumbnail_assets_and_picks_the_paper_link(monkeypatch):
@@ -688,6 +691,23 @@ def test_plan_skips_thumbnail_assets_and_picks_the_paper_link(monkeypatch):
         "https://doi.org/10.1016/j.cell.2026.06.027",
     )
     assert plan.status == "new" and plan.url == "https://doi.org/10.1016/j.cell.2026.06.027"
+
+
+def test_import_background_closes_the_queue_row_once_the_link_resolves(monkeypatch):
+    # A link queued months ago and re-driven after a resolver fix must not stay
+    # in the queue; the same close runs whether it was queued a minute ago or not.
+    import api.app as app_mod
+
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url, **kw: _fake_meta())
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
+    cap = _InsertCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    out = teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")
+
+    assert out == "p1"  # the retry script uses this to tell recovered from still-failing
+    assert cap.updated is not None and cap.updated["resolved_paper_id"] == "p1"
+    assert cap.updated["resolved_at"]
 
 
 def test_plan_asset_only_message_is_no_url(monkeypatch):
@@ -752,9 +772,21 @@ class _InsertCapture:
 
     def __init__(self):
         self.inserted = None
+        self.updated = None
+        self.last_table = None
 
     def table(self, name):
-        assert name == "paper_posts"
+        # The success path also closes any queue row for the link; the fake has to
+        # allow that, or close_unresolved's own except would swallow the assert.
+        assert name in ("paper_posts", "inbound_unresolved")
+        self.last_table = name
+        return self
+
+    def update(self, row):
+        self.updated = row
+        return self
+
+    def is_(self, *a, **k):
         return self
 
     def select(self, *a, **k):
@@ -793,7 +825,7 @@ def _fake_meta(**kw):
 def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
     import api.app as app_mod
 
-    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url, **kw: _fake_meta())
     monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm: ("p1", False))
     cap = _InsertCapture()
     monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
@@ -812,7 +844,7 @@ def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
 def test_import_background_truncates_a_long_sender_label(monkeypatch):
     import api.app as app_mod
 
-    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url: _fake_meta())
+    monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url, **kw: _fake_meta())
     monkeypatch.setattr(app_mod, "_upsert_paper", lambda *a: ("p1", False))
     cap = _InsertCapture()
     monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
@@ -821,22 +853,117 @@ def test_import_background_truncates_a_long_sender_label(monkeypatch):
     assert len(cap.inserted["posted_by_label"]) == teams_integration._INBOUND_LABEL_MAX
 
 
-def test_import_background_skips_unresolved_and_never_inserts(monkeypatch):
+class _QueueCapture:
+    """Fake service client that records inbound_unresolved writes and fails the
+    test if anything tries to insert a paper or a post."""
+
+    def __init__(self, existing=None):
+        self.existing = existing or []
+        self.inserted = None
+        self.updated = None
+        self._table = None
+
+    def table(self, name):
+        if name != "inbound_unresolved":
+            pytest.fail(f"must not write {name} for an unresolved link")
+        self._table = name
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def insert(self, row):
+        self.inserted = row
+        return self
+
+    def update(self, row):
+        self.updated = row
+        return self
+
+    def execute(self):
+        if self.inserted is not None or self.updated is not None:
+            return types.SimpleNamespace(data=[])
+        return types.SimpleNamespace(data=self.existing)
+
+
+def test_import_background_queues_an_unresolved_link_instead_of_dropping_it(monkeypatch):
+    # The whole point: a link the resolver can't read used to vanish, leaving only
+    # a log line that Fly keeps for about a week.
     monkeypatch.setattr(
-        teams_integration, "fetch_metadata", lambda url: _fake_meta(title=None, doi=None)
+        teams_integration,
+        "fetch_metadata",
+        lambda url, **kw: _fake_meta(title=None, doi=None, source="unknown"),
+    )
+    cap = _QueueCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    out = teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+
+    assert out is None
+    assert cap.inserted["team_id"] == "t1"
+    assert cap.inserted["url"] == "https://paywalled.example/x"
+    assert cap.inserted["sender_label"] == "Ellen"
+    # No id in the URL -> a publisher shape we don't know, not a derivation bug.
+    assert cap.inserted["reason"] == "no_identifier"
+
+
+def test_queue_reason_separates_an_unknown_publisher_from_a_bad_identifier(monkeypatch):
+    # The distinction is what says whether to write code or just retry later.
+    monkeypatch.setattr(
+        teams_integration,
+        "fetch_metadata",
+        lambda url, **kw: _fake_meta(title=None, doi=None, source="crossref"),
+    )
+    cap = _QueueCapture()
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+    teams_integration.import_paper_background("t1", "https://doi.org/10.1/nope", "Ellen")
+    assert cap.inserted["reason"] == "identifier_unresolved"
+
+
+def test_repeat_mention_bumps_attempts_rather_than_duplicating(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "fetch_metadata",
+        lambda url, **kw: _fake_meta(title=None, doi=None, source="unknown"),
+    )
+    cap = _QueueCapture(existing=[{"id": 7, "attempts": 2}])
+    monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
+
+    teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+
+    assert cap.inserted is None  # unique(team_id, url_norm) means one row per link
+    assert cap.updated["attempts"] == 3
+
+
+def test_recording_failure_never_breaks_the_import(monkeypatch):
+    # Failing to record a failure must not escalate a dropped paper into a 500.
+    monkeypatch.setattr(
+        teams_integration,
+        "fetch_metadata",
+        lambda url, **kw: _fake_meta(title=None, doi=None, source="unknown"),
     )
     monkeypatch.setattr(
         teams_integration,
         "service_client",
-        lambda: pytest.fail("must not write an unresolved link"),
+        lambda: (_ for _ in ()).throw(RuntimeError("db down")),
     )
-    teams_integration.import_paper_background("t1", "https://paywalled.example/x", "Ellen")
+    assert teams_integration.import_paper_background("t1", "https://x.example/y", "Ellen") is None
 
 
 def test_import_background_never_raises(monkeypatch):
     monkeypatch.setattr(
-        teams_integration, "fetch_metadata", lambda url: (_ for _ in ()).throw(RuntimeError("boom"))
+        teams_integration,
+        "fetch_metadata",
+        lambda url, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     # A resolve failure is logged, not raised (it runs as a fire-and-forget task).
     teams_integration.import_paper_background("t1", "https://arxiv.org/abs/1", "Ellen")
-

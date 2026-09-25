@@ -27,6 +27,7 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
@@ -684,7 +685,79 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     return InboundPlan("new", url=url)
 
 
-def import_paper_background(team_id: str, url: str, sender_name: str | None) -> None:
+def _classify_failure(url: str) -> str:
+    """Why this URL didn't resolve, in inbound_unresolved.reason terms.
+
+    ``network=False`` is pure string work — it reports which id scheme the URL
+    carries without fetching anything — so this costs nothing on the failure path.
+    No scheme at all means the only route was the landing-page scrape, i.e. a
+    publisher shape the resolver doesn't know; a scheme that still came back empty
+    means the identifier we derived was wrong or unregistered.
+    """
+    if fetch_metadata(url, network=False).source == "unknown":
+        return "no_identifier"
+    return "identifier_unresolved"
+
+
+def record_unresolved(
+    team_id: str, url: str, url_norm: str, sender_name: str | None, reason: str
+) -> None:
+    """Remember a link Atlas couldn't read, so it can be retried later.
+
+    Upsert by hand rather than via ``on_conflict``: the point of a repeat mention
+    is to bump ``attempts``, which needs the old value. The insert can still lose
+    a race with a concurrent mention of the same link, so 23505 falls through to
+    the same update. Never raises — failing to record a failure must not turn a
+    dropped paper into a 500 on the webhook path.
+    """
+    try:
+        svc = service_client()
+        found = (
+            svc.table("inbound_unresolved")
+            .select("id, attempts")
+            .eq("team_id", team_id)
+            .eq("url_norm", url_norm)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        now = datetime.now(UTC).isoformat()
+        if found:
+            svc.table("inbound_unresolved").update(
+                {"attempts": found[0]["attempts"] + 1, "last_seen_at": now, "reason": reason}
+            ).eq("id", found[0]["id"]).execute()
+            return
+        row = {
+            "team_id": team_id,
+            "url": url,
+            "url_norm": url_norm,
+            "sender_label": (sender_name or "Teams")[:_INBOUND_LABEL_MAX],
+            "reason": reason,
+        }
+        try:
+            svc.table("inbound_unresolved").insert(row).execute()
+        except Exception as insert_exc:
+            if getattr(insert_exc, "code", None) != "23505":
+                raise
+            svc.table("inbound_unresolved").update({"last_seen_at": now, "reason": reason}).eq(
+                "team_id", team_id
+            ).eq("url_norm", url_norm).execute()
+    except Exception as exc:
+        log.warning("recording unresolved inbound %s for team %s failed: %s", url, team_id, exc)
+
+
+def close_unresolved(team_id: str, url_norm: str, paper_id: str) -> None:
+    """Mark the queue row for this link done. Never raises — the paper is already in."""
+    try:
+        service_client().table("inbound_unresolved").update(
+            {"resolved_at": datetime.now(UTC).isoformat(), "resolved_paper_id": paper_id}
+        ).eq("team_id", team_id).eq("url_norm", url_norm).is_("resolved_at", "null").execute()
+    except Exception as exc:
+        log.warning("closing unresolved inbound %s for team %s failed: %s", url_norm, team_id, exc)
+
+
+def import_paper_background(team_id: str, url: str, sender_name: str | None) -> str | None:
     """Resolve one URL and add it to the lab as source='teams'. Runs off the reply
     path, so it may take the full metadata-fetch budget. Idempotent (dedup on
     url_norm/DOI and unique(paper_id, team_id)); failures are logged, not raised."""
@@ -697,9 +770,14 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
         url_norm = _normalize_key(url)
         meta = fetch_metadata(url)
         if not (meta.title or meta.doi):
-            log.info("inbound: %s did not resolve to a paper; skipping", url)
-            return
+            reason = _classify_failure(url)
+            log.info("inbound: %s did not resolve to a paper (%s); queued", url, reason)
+            record_unresolved(team_id, url, url_norm, sender_name, reason)
+            return None
         paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
+        # It resolved, so any queue row for this link is done -- whether it was
+        # queued a minute ago or is being re-driven months later.
+        close_unresolved(team_id, url_norm, paper_id)
         svc = service_client()
         existing = (
             svc.table("paper_posts")
@@ -712,7 +790,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             or []
         )
         if existing:
-            return  # already in the lab (e.g. matched by DOI under another URL)
+            return paper_id  # already in the lab (matched by DOI under another URL)
         try:
             svc.table("paper_posts").insert(
                 {
@@ -728,14 +806,20 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             # check; the unique(paper_id, team_id) constraint (23505) is the
             # backstop — a benign no-op, not a failure worth warning about.
             if getattr(insert_exc, "code", None) == "23505":
-                return
+                return paper_id
             raise
         if needs_embedding and get_api_settings().voyage_api_key:
             _embed_and_store(paper_id, meta.title, meta.abstract)
         if needs_embedding:
             _enrich_and_store(paper_id, meta.title, meta.abstract)
+        return paper_id
     except Exception as exc:
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
+        # Transient by assumption (network, DB), so it belongs in the queue too --
+        # a link lost to a blip is as gone as one lost to an unknown publisher.
+        norm = _normalize_key(_clean_url(url))
+        record_unresolved(team_id, url, norm, sender_name, "fetch_failed")
+        return None
 
 
 def _atlas_papers_url() -> str | None:
@@ -774,6 +858,15 @@ def new_reply_text() -> str:
     publisher) is only detected by the background import's dedup, and an
     Outgoing Webhook gets exactly one reply — this line must be true whether
     the paper turns out to be new or known.
+
+    Deliberately says nothing about whether the link looks readable. That could
+    only be a guess: the resolution happens after the reply, so the best signal
+    available here is whether the URL carries a known identifier, which is wrong
+    in both directions — publishers whose landing page does scrape would be
+    warned about needlessly, and a wrongly-derived identifier (the OUP suffix
+    truncation) looks fine and still fails. A reply that is only true sometimes
+    is worse than one that promises nothing. Links that do not resolve are
+    recorded in inbound_unresolved and re-driven from there instead.
     """
     feed = _atlas_papers_url()
     where = f"[Atlas]({feed})" if feed else "Atlas"
