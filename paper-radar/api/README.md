@@ -75,6 +75,35 @@ resolver actually produced, and reports — rather than merges — a row whose
 corrected DOI another row already holds, since merging means moving that paper's
 posts, reactions and comments.
 
+## Links Atlas couldn't read
+
+An `@Atlas` mention whose URL doesn't resolve to a paper is recorded in
+`inbound_unresolved` rather than dropped — one row per (team, normalized URL),
+bumped on a re-mention, closed when the link finally imports. It exists because
+four publisher gaps (Elsevier PIIs, JCI, OUP, Lancet) were each found only when
+someone noticed a paper missing, and the links already dropped were
+unrecoverable: a log line, and Fly keeps logs about a week.
+
+`reason` says whether to write code or just retry:
+
+| reason | meaning |
+| --- | --- |
+| `no_identifier` | nothing in the URL to look up — a publisher shape we don't know |
+| `identifier_unresolved` | an id was found but no registry had it — usually a derivation bug |
+| `fetch_failed` | the import raised — transient |
+
+After teaching the resolver a new publisher, re-drive the queue:
+
+```bash
+uv run python -m api.retry_unresolved --dry-run   # counts, plus the host histogram
+uv run python -m api.retry_unresolved
+```
+
+The histogram is the other half of the point: it says which publisher is costing
+the lab the most papers, i.e. what to teach the resolver next. Nothing is posted
+to Teams by a retry — the inbound import writes to the lab, it does not mirror a
+card back to the channel.
+
 ## Teams integration (see `../../docs/teams-integration-plan.md`)
 
 Outbound mirror: connected labs get an Adaptive Card in their Teams channel
