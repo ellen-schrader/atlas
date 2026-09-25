@@ -11,6 +11,7 @@ from paper_radar.ingest.metadata import (
     _elsevier_pii,
     _jci_doi,
     _nature_doi,
+    _oup_doi,
     _pmid,
     _preprint_doi,
     _url_doi,
@@ -162,6 +163,55 @@ def test_elsevier_pii_extraction():
     assert _elsevier_pii("https://www.nature.com/articles/s41586-023-06124-2") is None
 
 
+def test_nature_share_link_strips_the_epdf_rendition():
+    # "Share this article" hands out a .epdf link; removesuffix(".pdf") does not
+    # match it, so the extension used to ride along into the derived DOI.
+    assert (
+        _nature_doi(
+            "https://www.nature.com/articles/s41586-026-10269-1.epdf?sharing_token=Xaguunp0"
+        )
+        == "10.1038/s41586-026-10269-1"
+    )
+    assert _nature_doi("https://www.nature.com/articles/s41592-025-02926-6.pdf") == (
+        "10.1038/s41592-025-02926-6"
+    )
+
+
+def test_oup_url_keeps_both_doi_suffix_segments():
+    # OUP DOI suffixes have two segments of their own, so the generic trimmer
+    # (which keeps 10.<reg>/<one segment>) cut them down to the journal and
+    # Crossref 404'd. The trailing number is OUP's internal article id.
+    assert (
+        _oup_doi(
+            "https://academic.oup.com/bioinformatics/advance-article/doi/"
+            "10.1093/bioinformatics/btag137/8533243"
+        )
+        == "10.1093/bioinformatics/btag137"
+    )
+    assert (
+        _oup_doi(
+            "https://academic.oup.com/neuro-oncology/advance-article/doi/"
+            "10.1093/neuonc/noag128/8697700"
+        )
+        == "10.1093/neuonc/noag128"
+    )
+    # The /doi/full/ and /doi/pdf/ renditions carry the same DOI.
+    assert (
+        _oup_doi("https://academic.oup.com/bioadv/article/doi/full/10.1093/bioadv/vbaf327/8497163")
+        == "10.1093/bioadv/vbaf327"
+    )
+    assert _oup_doi("https://www.nature.com/articles/x") is None
+
+
+def test_preprint_rendition_suffix_allows_a_plus():
+    # bioRxiv's inline-PDF view appends "+html"; '+' was missing from the
+    # rendition charset, so it survived into the DOI.
+    assert (
+        _preprint_doi("https://www.biorxiv.org/content/10.1101/2025.06.04.657781v4.full.pdf+html")
+        == "10.1101/2025.06.04.657781"
+    )
+
+
 def test_url_doi_prefers_the_specific_publisher_rules():
     # Order matters: the generic path matcher would return the versioned bioRxiv
     # string, and would find no DOI at all in a JCI or Nature URL.
@@ -174,6 +224,21 @@ def test_url_doi_prefers_the_specific_publisher_rules():
     )
     # Anything without a publisher rule still falls through to the generic match.
     assert _url_doi("https://doi.org/10.1126/science.adz9353") == "10.1126/science.adz9353"
+    # OUP must win over the generic matcher, which would drop the second segment.
+    assert (
+        _url_doi(
+            "https://academic.oup.com/bioinformatics/advance-article/doi/"
+            "10.1093/bioinformatics/btag137/8533243"
+        )
+        == "10.1093/bioinformatics/btag137"
+    )
+    # ...while a publisher with a one-segment suffix and a trailing slug is unaffected.
+    assert (
+        _url_doi(
+            "https://aacrjournals.org/cd/article/doi/10.1158/2159-8290.CD-25-1459/781787/HER2-x"
+        )
+        == "10.1158/2159-8290.CD-25-1459"
+    )
     assert _url_doi("https://example.org/thing") is None
 
 

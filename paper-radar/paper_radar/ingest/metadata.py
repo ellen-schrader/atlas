@@ -6,8 +6,9 @@ first, page scraping last):
 1. **arXiv id** -> arXiv Atom API.
 2. **A DOI the URL encodes** -> Crossref. Either derived from the publisher's
    article id (Nature ``10.1038/<id>``, JCI ``10.1172/JCI<id>``) or matched in
-   the path (doi.org, science.org ``/doi/``, aacr ``/article/doi/``, bioRxiv and
-   medRxiv ``/content/<doi>v<n>``). See :func:`_url_doi` for the order.
+   the path (doi.org, science.org ``/doi/``, aacr ``/article/doi/``, OUP
+   ``/doi/<doi>/<internal-id>``, bioRxiv and medRxiv ``/content/<doi>v<n>``).
+   See :func:`_url_doi` for the order.
 3. **An Elsevier PII** (Cell Press, ScienceDirect) -> Crossref's alternative-id
    index, which holds the PII alongside the DOI Elsevier deposited with it.
 4. **PubMed PMID** -> NCBI E-utilities esummary.
@@ -55,7 +56,7 @@ _PMID_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(?P<pmid>\d+)", re.IGNORECAS
 # part of the registered DOI and Crossref 404s on the versioned string, so the
 # generic _DOI_RE below (which happily swallows it) has to be pre-empted here.
 _PREPRINT_RE = re.compile(
-    r"(?:bio|med)rxiv\.org/content/(?P<doi>10\.\d{4,9}/[^/?#]+)v\d+(?:\.[a-z0-9.\-]+)?(?:[/?#]|$)",
+    r"(?:bio|med)rxiv\.org/content/(?P<doi>10\.\d{4,9}/[^/?#]+)v\d+(?:[.+][a-z0-9.+\-]+)?(?:[/?#]|$)",
     re.IGNORECASE,
 )
 # JCI derives its DOI from the article number in the URL, the way Nature does:
@@ -70,6 +71,15 @@ _JCI_RE = re.compile(r"(?P<insight>insight\.)?jci\.org/articles/view/(?P<id>\d+)
 _PII_RE = re.compile(
     r"(?:/pii/|/fulltext/|/abstract/|[?&]pii=)(?:PII)?"
     r"(?P<pii>S\d{4}-?\d{4}\(?\d{2}\)?\d{4,5}-?[0-9X])(?![0-9-])",
+    re.IGNORECASE,
+)
+# OUP DOI suffixes have two segments of their own ("bioinformatics/btag137"),
+# so the generic trimmer -- which keeps 10.<reg>/<one segment> -- truncates them
+# to the journal ("10.1093/bioinformatics") and Crossref 404s. The trailing
+# segment after the DOI is OUP's numeric internal article id, never part of it.
+_OUP_RE = re.compile(
+    r"academic\.oup\.com/[^?#]*?/doi/(?:full/|pdf/|abstract/)?"
+    r"(?P<doi>10\.\d{4,9}/[^/?#]+/[^/?#]+)",
     re.IGNORECASE,
 )
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
@@ -198,8 +208,16 @@ def _nature_doi(url: str) -> str | None:
     if not m:
         return None
     art = m.group("id").split("?")[0].split("#")[0]
-    art = art.removesuffix(".pdf")
+    # ".epdf" is the share-link rendition Nature hands out from "Share this
+    # article"; removesuffix(".pdf") does not match it, so strip either.
+    art = re.sub(r"\.e?pdf$", "", art, flags=re.IGNORECASE)
     return f"10.1038/{art}" if art else None
+
+
+def _oup_doi(url: str) -> str | None:
+    """The full DOI an academic.oup.com article URL carries, internal id dropped."""
+    m = _OUP_RE.search(url)
+    return m.group("doi") if m else None
 
 
 def _preprint_doi(url: str) -> str | None:
@@ -257,7 +275,7 @@ def _url_doi(url: str) -> str | None:
     case. The order is the point -- the generic match would return the versioned
     bioRxiv string ``10.64898/2026.09.20.753045v1``, which Crossref 404s.
     """
-    return _nature_doi(url) or _jci_doi(url) or _preprint_doi(url) or _doi(url)
+    return _nature_doi(url) or _jci_doi(url) or _oup_doi(url) or _preprint_doi(url) or _doi(url)
 
 
 def _pmid(url: str) -> str | None:
