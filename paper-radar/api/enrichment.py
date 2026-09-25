@@ -10,13 +10,24 @@ from __future__ import annotations
 
 import logging
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from paper_radar.config import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
 BATCH_SIZE = 15  # papers per Claude call
+MAX_TAGS = 6  # the prompt asks for 3-6; this is what actually gets stored
+
+# Output budget, sized from the batch. One tagged paper is a UUID plus up to six
+# hyphenated tags -- and a UUID tokenizes badly, so budget generously. The cap has
+# to cover the whole batch: overrun it and the reply is cut off mid-JSON, which
+# fails to parse and loses every paper in the batch, not just the last one. A
+# fixed 2000 did exactly that on a 15-paper batch of spatial-omics papers, whose
+# tags run long ("tertiary-lymphoid-structures"). Generous on purpose: billing is
+# on tokens generated, never on the ceiling.
+_TOKENS_PER_PAPER = 200
+_MIN_OUTPUT_TOKENS = 1024
 
 
 class _PaperTags(BaseModel):
@@ -46,7 +57,17 @@ def enrich_batch(
     usable = [it for it in items if _grounding(it.get("title"), it.get("abstract"))]
     if not usable:
         return {}
+    return _tag(usable, settings)
 
+
+def _tag(usable: list[dict], settings: Settings) -> dict[str, list[str]]:
+    """One Claude call for ``usable``, halving the batch if the reply won't parse.
+
+    An unparseable reply is almost always one cut off mid-JSON, which is a
+    property of how much the batch asked for rather than of any paper in it —
+    so the same papers in two smaller calls usually succeed. Without this, a
+    single truncation discards the tags for every paper in the batch.
+    """
     blocks = []
     for it in usable:
         text = _grounding(it.get("title"), it.get("abstract"))[:1500]
@@ -67,14 +88,23 @@ def enrich_batch(
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         resp = client.messages.parse(
             model=settings.anthropic_model,
-            max_tokens=2000,
+            max_tokens=max(_MIN_OUTPUT_TOKENS, _TOKENS_PER_PAPER * len(usable)),
             messages=[{"role": "user", "content": prompt}],
             output_format=_BatchTags,
         )
         return {
-            p.id: [t.strip().lower() for t in p.tags if t.strip()]
+            # Trimmed rather than constrained in the schema: a maxItems the model
+            # overshot would raise here and send a fine batch down the retry path.
+            p.id: [t.strip().lower() for t in p.tags if t.strip()][:MAX_TAGS]
             for p in resp.parsed_output.papers
         }
-    except Exception as exc:  # network / parse / auth — leave unenriched, retry later
+    except ValidationError as exc:
+        if len(usable) == 1:
+            log.warning("enrichment failed for paper %s: %s", usable[0]["id"], exc)
+            return {}
+        mid = len(usable) // 2
+        log.info("enrichment reply unparseable for %d papers; retrying in halves", len(usable))
+        return _tag(usable[:mid], settings) | _tag(usable[mid:], settings)
+    except Exception as exc:  # network / auth — leave unenriched, the backfill retries
         log.warning("enrichment batch failed: %s", exc)
         return {}
