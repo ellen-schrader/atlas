@@ -163,6 +163,28 @@ def test_elsevier_pii_extraction():
     assert _elsevier_pii("https://www.nature.com/articles/s41586-023-06124-2") is None
 
 
+def test_elsevier_pii_wherever_the_imprint_puts_it():
+    # The imprints disagree about the PII's position, which is why the match is
+    # anchored on a path boundary rather than on a list of known markers: Cell
+    # puts it last, Lancet mid-path behind a "PII" prefix, with /fulltext after.
+    assert (
+        _elsevier_pii(
+            "https://www.thelancet.com/journals/lancet/article/PIIS0140-6736(26)00462-9/fulltext"
+        )
+        == "S0140673626004629"
+    )
+    assert (
+        _elsevier_pii(
+            "https://www.thelancet.com/journals/lanonc/article/PIIS1470-2045(26)00123-4/abstract"
+        )
+        == "S1470204526001234"
+    )
+    # A URL with no PII in it must stay None, or every unknown link costs a
+    # pointless Crossref query.
+    assert _elsevier_pii("https://www.jci.org/articles/view/205962") is None
+    assert _elsevier_pii("https://www.biorxiv.org/content/10.64898/2026.09.20.753045v1") is None
+
+
 def test_nature_share_link_strips_the_epdf_rendition():
     # "Share this article" hands out a .epdf link; removesuffix(".pdf") does not
     # match it, so the extension used to ride along into the derived DOI.
