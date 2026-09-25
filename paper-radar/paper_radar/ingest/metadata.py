@@ -63,14 +63,21 @@ _PREPRINT_RE = re.compile(
 # jci.org/articles/view/205962 -> 10.1172/JCI205962. Worth a special case
 # because the landing page is the only other place that DOI appears.
 _JCI_RE = re.compile(r"(?P<insight>insight\.)?jci\.org/articles/view/(?P<id>\d+)", re.IGNORECASE)
-# Elsevier (Cell Press, ScienceDirect) URLs carry a PII, never a DOI. Crossref
-# indexes the PII as an alternative-id, which is the only way to resolve these
-# server-side: cell.com answers a non-browser with a Cloudflare challenge (403).
-# The punctuated URL form "S0092-8674(25)01309-1" is the "S0092867425013091"
-# Crossref holds; both spellings (and the percent-encoded one) are accepted.
+# Elsevier (Cell Press, ScienceDirect, The Lancet) URLs carry a PII, never a DOI.
+# Crossref indexes the PII as an alternative-id, which is the only way to resolve
+# these server-side: cell.com answers a non-browser with a Cloudflare challenge
+# (403). The punctuated URL form "S0092-8674(25)01309-1" is the
+# "S0092867425013091" Crossref holds; both spellings (and the percent-encoded
+# one) are accepted.
+#
+# Matched at a path/query boundary rather than after a known marker, because the
+# imprints disagree about where the PII sits and an enumerated list keeps missing
+# one -- Cell puts it last ("/cell/fulltext/<pii>"), Lancet puts it mid-path with
+# a "PII" prefix ("/journals/lancet/article/PII<pii>/fulltext"). The shape is
+# specific enough to carry the match on its own; a false positive costs one
+# Crossref query that returns nothing.
 _PII_RE = re.compile(
-    r"(?:/pii/|/fulltext/|/abstract/|[?&]pii=)(?:PII)?"
-    r"(?P<pii>S\d{4}-?\d{4}\(?\d{2}\)?\d{4,5}-?[0-9X])(?![0-9-])",
+    r"(?:^|[/?&=])(?:PII)?(?P<pii>S\d{4}-?\d{4}\(?\d{2}\)?\d{4,5}-?[0-9X])(?![0-9-])",
     re.IGNORECASE,
 )
 # OUP DOI suffixes have two segments of their own ("bioinformatics/btag137"),
