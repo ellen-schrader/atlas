@@ -52,6 +52,29 @@ uv run python -m api.backfill_embeddings --all    # re-embed (model change)
 - "Find similar" needs no server round-trip through this service — the web app
   calls the `similar_papers` RPC directly on Supabase.
 
+## Re-resolving papers stored without metadata
+
+`fetch_metadata` resolves a URL through an identifier API where it can and falls
+back to scraping the landing page. The scrape does not work from the deployed
+API — the big publishers answer a datacenter address with a bot challenge — so a
+publisher whose URL carried no identifier the resolver understood was stored as a
+bare link, and bioRxiv rows kept the version suffix (`…724388v1`) as their DOI,
+which is not a registered DOI and so can never dedupe.
+
+After teaching the resolver a new publisher, sweep the rows the old one missed:
+
+```bash
+uv run python -m api.backfill_metadata --dry-run   # always look first
+uv run python -m api.backfill_metadata
+uv run python -m api.backfill_embeddings           # rows that gained a title
+uv run python -m api.backfill_enrichment
+```
+
+It only claims untitled rows and preprint rendition DOIs, only writes a field the
+resolver actually produced, and reports — rather than merges — a row whose
+corrected DOI another row already holds, since merging means moving that paper's
+posts, reactions and comments.
+
 ## Teams integration (see `../../docs/teams-integration-plan.md`)
 
 Outbound mirror: connected labs get an Adaptive Card in their Teams channel

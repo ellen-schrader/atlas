@@ -4,21 +4,31 @@ Resolution strategy, tried in order of reliability (identifier-based lookups
 first, page scraping last):
 
 1. **arXiv id** -> arXiv Atom API.
-2. **Nature** article URL -> derived DOI (``10.1038/<article-id>``) -> Crossref.
-3. **DOI in the URL** (doi.org, science.org ``/doi/``, aacr ``/article/doi/`` ...)
-   -> Crossref.
+2. **A DOI the URL encodes** -> Crossref. Either derived from the publisher's
+   article id (Nature ``10.1038/<id>``, JCI ``10.1172/JCI<id>``) or matched in
+   the path (doi.org, science.org ``/doi/``, aacr ``/article/doi/``, bioRxiv and
+   medRxiv ``/content/<doi>v<n>``). See :func:`_url_doi` for the order.
+3. **An Elsevier PII** (Cell Press, ScienceDirect) -> Crossref's alternative-id
+   index, which holds the PII alongside the DOI Elsevier deposited with it.
 4. **PubMed PMID** -> NCBI E-utilities esummary.
 5. **Landing-page citation tags** -> fetch the HTML with a browser-like
    User-Agent and read Highwire ``citation_*`` / Dublin Core / JSON-LD metadata
    (this is the same embedded metadata Zotero and Google Scholar rely on). If a
    DOI turns up in the page, Crossref is preferred for the authoritative record.
 
+Steps 1-4 are what has to carry the load in production. Step 5 looks like a
+general fallback and is not one: from a datacenter address the big publishers
+answer a server-side fetch with a challenge, not a page (cell.com returns 403
+``cf-mitigated: challenge``; biorxiv.org rate-limits), and Zotero only gets away
+with it because it reads them through your logged-in browser. So a publisher
+whose URL carries no identifier resolves on the *developer's* laptop and silently
+resolves to nothing once deployed -- which is why the identifier cases above are
+worth the special-casing, even one journal at a time.
+
 Everything is defensive: any network failure, bot-wall (HTTP 403), or unknown
 scheme returns a mostly-empty record with the URL preserved, so ingest never
-blocks. Publisher pages behind a bot-wall (e.g. Elsevier's Cell / ScienceDirect)
-are the expected gap -- Zotero reads those through your logged-in browser
-session, which a server-side client does not have. Their summaries/tags are
-filled in later by the LLM enrichment stage.
+blocks. Whatever summaries/tags are still missing are filled in later by the LLM
+enrichment stage.
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
 from paper_radar.ingest import url_guard
@@ -39,6 +50,28 @@ _ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5})(?:v\d+)?"
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"'<>]+)", re.IGNORECASE)
 _NATURE_RE = re.compile(r"nature\.com/articles/(?P<id>[a-z0-9.\-]+)", re.IGNORECASE)
 _PMID_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(?P<pmid>\d+)", re.IGNORECASE)
+# bioRxiv / medRxiv: the path is the DOI followed by a *rendition* suffix --
+# "v1", "v2.full", "v1.full.pdf", "v1.supplementary-material". None of that is
+# part of the registered DOI and Crossref 404s on the versioned string, so the
+# generic _DOI_RE below (which happily swallows it) has to be pre-empted here.
+_PREPRINT_RE = re.compile(
+    r"(?:bio|med)rxiv\.org/content/(?P<doi>10\.\d{4,9}/[^/?#]+)v\d+(?:\.[a-z0-9.\-]+)?(?:[/?#]|$)",
+    re.IGNORECASE,
+)
+# JCI derives its DOI from the article number in the URL, the way Nature does:
+# jci.org/articles/view/205962 -> 10.1172/JCI205962. Worth a special case
+# because the landing page is the only other place that DOI appears.
+_JCI_RE = re.compile(r"(?P<insight>insight\.)?jci\.org/articles/view/(?P<id>\d+)", re.IGNORECASE)
+# Elsevier (Cell Press, ScienceDirect) URLs carry a PII, never a DOI. Crossref
+# indexes the PII as an alternative-id, which is the only way to resolve these
+# server-side: cell.com answers a non-browser with a Cloudflare challenge (403).
+# The punctuated URL form "S0092-8674(25)01309-1" is the "S0092867425013091"
+# Crossref holds; both spellings (and the percent-encoded one) are accepted.
+_PII_RE = re.compile(
+    r"(?:/pii/|/fulltext/|/abstract/|[?&]pii=)(?:PII)?"
+    r"(?P<pii>S\d{4}-?\d{4}\(?\d{2}\)?\d{4,5}-?[0-9X])(?![0-9-])",
+    re.IGNORECASE,
+)
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
 
 _TIMEOUT = 10.0
@@ -169,6 +202,64 @@ def _nature_doi(url: str) -> str | None:
     return f"10.1038/{art}" if art else None
 
 
+def _preprint_doi(url: str) -> str | None:
+    """The registered DOI behind a bioRxiv/medRxiv URL, version suffix removed."""
+    m = _PREPRINT_RE.search(url)
+    return m.group("doi") if m else None
+
+
+def _jci_doi(url: str) -> str | None:
+    """JCI article DOIs are ``10.1172/JCI<article-id>``, where the id is in the URL.
+
+    JCI Insight is the same journal family under its own suffix:
+    ``insight.jci.org/articles/view/<id>`` -> ``10.1172/jci.insight.<id>``.
+    """
+    m = _JCI_RE.search(url)
+    if not m:
+        return None
+    art = m.group("id")
+    return f"10.1172/jci.insight.{art}" if m.group("insight") else f"10.1172/JCI{art}"
+
+
+def _elsevier_pii(url: str) -> str | None:
+    """The PII a Cell Press / ScienceDirect URL carries, in the form Crossref indexes.
+
+    Unquoted first so a percent-encoded ``?pii=S0092-8674%2825%2901309-1`` is seen
+    the same as the plain one, then reduced to the unpunctuated spelling Crossref
+    registers as the work's alternative-id.
+    """
+    m = _PII_RE.search(unquote(url))
+    if not m:
+        return None
+    return re.sub(r"[^0-9A-Z]", "", m.group("pii").upper()) or None
+
+
+def _is_doi_resolver(url: str) -> bool:
+    """True for a doi.org/dx.doi.org link, where the path *is* the DOI by definition.
+
+    Matters for step (2) of :func:`fetch_metadata`: a DOI merely pattern-matched out
+    of a publisher path is a guess Crossref can refute, but a resolver URL's DOI is
+    authoritative even when Crossref has never heard of it (DataCite registers
+    Zenodo/figshare DOIs, and Crossref does not index those).
+    """
+    try:
+        host = urlsplit(url).netloc.lower().removeprefix("www.")
+    except ValueError:
+        return False
+    return host in ("doi.org", "dx.doi.org")
+
+
+def _url_doi(url: str) -> str | None:
+    """The DOI a publisher URL encodes, or None.
+
+    Most specific first: the publishers whose URL shape *derives* a DOI (Nature,
+    JCI), then the preprint servers, then the generic "a DOI sits in the path"
+    case. The order is the point -- the generic match would return the versioned
+    bioRxiv string ``10.64898/2026.09.20.753045v1``, which Crossref 404s.
+    """
+    return _nature_doi(url) or _jci_doi(url) or _preprint_doi(url) or _doi(url)
+
+
 def _pmid(url: str) -> str | None:
     m = _PMID_RE.search(url)
     return m.group("pmid") if m else None
@@ -252,6 +343,25 @@ def _fetch_crossref(doi: str, url: str) -> PaperMetadata | None:
     except (json.JSONDecodeError, AttributeError):
         return None
     return parse_crossref(msg, url)
+
+
+def _fetch_crossref_by_pii(pii: str, url: str) -> PaperMetadata | None:
+    """Resolve an Elsevier PII through Crossref's alternative-id index.
+
+    A filter query, not a /works/<id> lookup: the PII is not a DOI, it is a
+    secondary identifier Elsevier deposits alongside one.
+    """
+    endpoint = (
+        f"https://api.crossref.org/works?filter=alternative-id:{urllib.request.quote(pii)}&rows=1"
+    )
+    raw = _get(endpoint)
+    if raw is None:
+        return None
+    try:
+        items = json.loads(raw)["message"]["items"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    return parse_crossref(items[0], url) if items else None
 
 
 def _fetch_pubmed(pmid: str, url: str) -> PaperMetadata | None:
@@ -529,14 +639,14 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
     scheme is still recognised so callers can see what *would* be fetched.
     """
     arxiv_id = _arxiv_id(url)
-    nature_doi = _nature_doi(url)
-    doi = _doi(url)
+    url_doi = _url_doi(url)
+    pii = _elsevier_pii(url)
     pmid = _pmid(url)
 
     if not network:
         if arxiv_id:
             source = "arxiv"
-        elif nature_doi or doi:
+        elif url_doi or pii:
             source = "crossref"
         elif pmid:
             source = "pubmed"
@@ -546,11 +656,19 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
 
     # 1) Resolve core bibliographic metadata (title/authors/venue/year/doi).
     meta: PaperMetadata | None = None
+    doi_refuted = False
     if arxiv_id:
         meta = _fetch_arxiv(arxiv_id, url)
-    if meta is None and nature_doi and (m := _fetch_crossref(nature_doi, url)) and m.title:
-        meta = m
-    if meta is None and doi and (m := _fetch_crossref(doi, url)) and m.title:
+    if meta is None and url_doi:
+        if (m := _fetch_crossref(url_doi, url)) and m.title:
+            meta = m
+        elif not _is_doi_resolver(url):
+            # Crossref gave us nothing for a DOI we inferred from the path. Usually
+            # that means the inference was wrong; occasionally Crossref is just
+            # down. Either way we have no evidence the string is a real DOI, and
+            # step (2) needs evidence before writing it to the dedup key.
+            doi_refuted = True
+    if meta is None and pii and (m := _fetch_crossref_by_pii(pii, url)) and m.title:
         meta = m
     if meta is None and pmid and (m := _fetch_pubmed(pmid, url)) and m.title:
         meta = m
@@ -559,9 +677,14 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
     if meta is None:
         meta = PaperMetadata(url=url)
 
-    # 2) Always persist a DOI when we can derive one from the URL.
-    if not meta.doi:
-        meta.doi = nature_doi or doi
+    # 2) Persist a URL-derived DOI when nothing refuted it, so a later doi.org
+    #    post of the same paper dedupes against this one. A DOI Crossref has never
+    #    heard of is worse than no DOI at all: papers.doi IS the dedup key, so
+    #    storing an unresolvable string guarantees the paper comes in twice -- and
+    #    it is non-null, so a bot-walled page is filed as a titleless row instead
+    #    of being skipped. (This is what put bioRxiv "...v1" strings in the table.)
+    if not meta.doi and url_doi and not doi_refuted:
+        meta.doi = url_doi
 
     # 3) Backfill the abstract (and keywords) from a dedicated source if missing.
     if not meta.abstract:
