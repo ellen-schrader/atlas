@@ -217,8 +217,12 @@ export function BibtexImportDone({
       <p className="mt-1.5 text-sm text-muted">
         Atlas is already learning {teamName}’s taste from them. Embeddings compute in the
         background, so the map will fill in shortly.
-        {result.skipped > 0 && ` ${result.skipped} were already here and were skipped.`}
-        {result.failed > 0 && ` ${result.failed} couldn’t be read.`}
+        {result.skipped > 0 &&
+          ` ${result.skipped} ${result.skipped === 1 ? "was" : "were"} already here and ${
+            result.skipped === 1 ? "was" : "were"
+          } skipped.`}
+        {result.failed > 0 &&
+          ` ${result.failed} couldn’t be read.`}
       </p>
     </section>
   );

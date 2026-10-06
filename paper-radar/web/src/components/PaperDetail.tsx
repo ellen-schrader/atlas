@@ -217,12 +217,21 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // Capture phase, and stop the event: Modal also listens for Escape on
+    // document, so without this one press closes the popover AND the dialog
+    // behind it. A capture listener on document runs before document's own
+    // bubble listener, which is what lets the inner layer win. Escape again
+    // (popover now closed, this listener gone) closes the dialog as usual.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
     document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
 
