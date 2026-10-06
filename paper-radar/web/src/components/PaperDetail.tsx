@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, Maximize2, Quote, Trash2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
@@ -14,6 +14,7 @@ import {
   type ExportFormat,
   type ExportPaper,
   FORMAT_META,
+  bareDoi,
   downloadText,
   exportFilename,
   formatPapers,
@@ -135,7 +136,7 @@ export function PaperDetail({
           </div>
         )}
 
-        <SimilarPapers paperId={p.id} teamId={teamId} />
+        <SimilarPapers paperId={p.id} teamId={teamId} fullPage={fullPage} />
 
         <hr className="my-6 border-border" />
         <MetaLabel>Discussion</MetaLabel>
@@ -176,16 +177,23 @@ function AuthorList({ authors }: { authors: string[] }) {
  *  clickable DOI where we can find one (resolved through doi.org), otherwise the
  *  source host — never a bare, unclickable URL that reads as a broken fragment. */
 function PaperIdentifier({ doi, url }: { doi: string | null; url: string | null }) {
-  const bare = doi?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:/i, "");
-  const fromUrl = url?.match(/(?:dx\.)?doi\.org\/(10\.\S+)/i)?.[1] ?? null;
-  const id = bare || fromUrl;
+  // bareDoi is the normaliser the BibTeX/RIS/CSV exporters already use, and it
+  // covers the forms our sources store (www., scheme-less, "doi: " with a
+  // space). A third, weaker copy here made Cite and this link disagree about
+  // the same paper's DOI.
+  const bare = doi ? bareDoi(doi) : null;
+  // Anchored to the path and stopped at ?/#: unanchored \S+ swallowed query
+  // strings into the href and matched hosts like "notdoi.org" that aren't the
+  // resolver at all.
+  const fromUrl = url?.match(/^https?:\/\/(?:www\.)?(?:dx\.)?doi\.org\/([^?#\s]+)/i)?.[1] ?? null;
+  const id = bare || fromUrl || null;
   let host: string | null = null;
   try {
     host = url ? new URL(url).host.replace(/^www\./, "") : null;
   } catch {
     host = null;
   }
-  const href = id ? `https://doi.org/${id}` : safeHref(url);
+  const href = id ? `https://doi.org/${encodeURI(id)}` : safeHref(url);
   const label = id ? `DOI ${id}` : host;
   if (!href || !label) return null;
   return (
@@ -214,8 +222,14 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    // pointerdown, not mousedown: Modal dismisses on a pointerdown/pointerup pair
+    // on its backdrop, and pointer events precede mouse events — so a backdrop
+    // click closed this popover AND the dialog behind it. Taking the pointerdown
+    // and stopping it leaves the Modal's pair unarmed.
+    const onDown = (e: PointerEvent) => {
+      if (ref.current?.contains(e.target as Node)) return;
+      e.stopPropagation();
+      setOpen(false);
     };
     // Capture phase, and stop the event: Modal also listens for Escape on
     // document, so without this one press closes the popover AND the dialog
@@ -227,10 +241,10 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
       e.stopPropagation();
       setOpen(false);
     };
-    document.addEventListener("mousedown", onDown);
+    document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey, true);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
@@ -286,8 +300,20 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
 }
 
 /** The lab's most similar papers by embedding (hidden until embeddings exist). */
-function SimilarPapers({ paperId, teamId }: { paperId: string; teamId: string }) {
+function SimilarPapers({
+  paperId,
+  teamId,
+  fullPage = false,
+}: {
+  paperId: string;
+  teamId: string;
+  /** On /papers/:id, follow the link as a route rather than stacking a modal
+   *  on top of the page — PaperModalProvider wraps the Outlet, so the hook
+   *  resolves here too and would otherwise open ?paper=B at the URL /papers/A. */
+  fullPage?: boolean;
+}) {
   const { openPaper } = usePaperModal();
+  const navigate = useNavigate();
   const { data } = useQuery({
     queryKey: ["similar-papers", teamId, paperId],
     queryFn: async (): Promise<SimilarPaper[]> => {
@@ -311,7 +337,9 @@ function SimilarPapers({ paperId, teamId }: { paperId: string; teamId: string })
           <li key={s.paper_id}>
             <button
               type="button"
-              onClick={() => openPaper(s.paper_id)}
+              onClick={() =>
+                fullPage ? navigate(`/papers/${s.paper_id}`) : openPaper(s.paper_id)
+              }
               className="w-full rounded-control px-2 py-1.5 text-left text-sm transition hover:bg-surface-2"
             >
               <span className="text-fg">{s.title ?? "Untitled"}</span>
@@ -402,6 +430,9 @@ function DeletePost({
       setError(err.message);
       return;
     }
+    // Including the post itself: /papers/:id reads this key, so without it the
+    // page keeps rendering a live detail for a post that no longer exists.
+    void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
     void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
     void qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
     void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });

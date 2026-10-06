@@ -42,8 +42,10 @@ export const FORMAT_META: Record<ExportFormat, { label: string; ext: string; mim
 };
 
 /** Reduce any of the DOI forms our sources store — `10.x/y`, `doi:10.x/y`,
- *  `https://doi.org/…`, the legacy `dx.doi.org`, `www.doi.org` — to the bare DOI. */
-function bareDoi(doi: string): string {
+ *  `https://doi.org/…`, the legacy `dx.doi.org`, `www.doi.org` — to the bare DOI.
+ *  Exported because the paper detail's DOI link needs the same normalisation: a
+ *  second, weaker copy there made Cite and the link disagree about one paper. */
+export function bareDoi(doi: string): string {
   return doi.trim().replace(/^(?:https?:\/\/)?(?:dx\.|www\.)?doi\.org\/|^doi:\s*/i, "");
 }
 
@@ -131,7 +133,7 @@ function toRis(papers: ExportPaper[], opts: ExportOptions): string {
     .map((p) => {
       const lines = [`TY  - ${p.venue ? "JOUR" : "GEN"}`];
       if (p.title) lines.push(`TI  - ${collapse(p.title)}`);
-      for (const a of p.authors) lines.push(`AU  - ${collapse(a)}`);
+      for (const a of p.authors) lines.push(`AU  - ${risAuthor(a)}`);
       if (p.year != null) lines.push(`PY  - ${p.year}`);
       if (p.venue) lines.push(`JO  - ${collapse(p.venue)}`);
       const doi = p.doi ? bareDoi(p.doi) : null;
@@ -147,9 +149,20 @@ function toRis(papers: ExportPaper[], opts: ExportOptions): string {
     .concat("\r\n");
 }
 
-/** Quote a CSV cell per RFC 4180 — only when it contains a comma, quote, or newline. */
+// A cell a spreadsheet would evaluate rather than display. Excel, Sheets and
+// LibreOffice all treat a leading =, +, - or @ as the start of a formula, and
+// RFC-4180 quoting does NOT protect you — they strip the quotes first, then
+// evaluate. Leading tab/CR are included because they are stripped before that
+// test is applied. Paper titles and authors come from scraped publisher metadata
+// and from whatever .bib a lab member uploads, so this is attacker-reachable.
+const CSV_FORMULA_RE = /^[=+\-@\t\r]/;
+
+/** Quote a CSV cell per RFC 4180, and defuse anything a spreadsheet would run.
+ *  The leading apostrophe is the standard mitigation: Excel and Sheets consume
+ *  it and show the literal text. */
 function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const safe = CSV_FORMULA_RE.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function toCsv(papers: ExportPaper[], opts: ExportOptions): string {
@@ -179,6 +192,35 @@ const INITIALS_RE = /^[A-Z](?:[.-]?[A-Z]){0,2}\.?$/;
  *  PubMed gives "Poissonnier A", BibTeX gives "Doe, Jane" — so neither the first
  *  nor the last token is reliably the surname. Mirrors the server's `_surname`
  *  (atlas_mcp/server.py); the "last token" rule made "Poissonnier A" cite as "A". */
+/** RIS wants `AU  - Family, Given`. Handed a bare "Jane Doe", EndNote and Zotero
+ *  store the whole string as the family name, so the paper cites as "(Jane Doe,
+ *  2024)" and sorts under J. BibTeX gets away with raw names because it parses
+ *  First-Last itself; RIS does not, so split it here. */
+function risAuthor(name: string): string {
+  const trimmed = collapse(name);
+  if (trimmed.includes(",")) return trimmed; // already Family, Given
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return trimmed;
+
+  // Trailing initials mean the name is already Family-first ("Poissonnier A",
+  // "van den Berg JW") — everything before them is the family name, particles
+  // and all. surnameOf() can't be reused here: it returns the last token only,
+  // which turns "van den Berg" into "Berg".
+  const initials: string[] = [];
+  while (tokens.length > 1 && INITIALS_RE.test(tokens[tokens.length - 1])) {
+    initials.unshift(tokens.pop()!);
+  }
+  if (initials.length > 0) return `${tokens.join(" ")}, ${initials.join(" ")}`;
+
+  // Otherwise it's Given-first ("Jane Doe"). Walk back over lowercase particles
+  // so "Jane van den Berg" keeps its family name intact.
+  let i = tokens.length - 1;
+  while (i > 1 && /^[a-z]/.test(tokens[i - 1])) i -= 1;
+  const family = tokens.slice(i).join(" ");
+  const given = tokens.slice(0, i).join(" ");
+  return given ? `${family}, ${given}` : family;
+}
+
 function surnameOf(name: string): string {
   const trimmed = name.trim();
   if (trimmed.includes(",")) {
@@ -271,7 +313,11 @@ export function exportFilename(format: ExportFormat, count: number, heading?: st
 
 /** Trigger a browser download of `text` as a file. */
 export function downloadText(filename: string, text: string, mime: string): void {
-  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+  // Excel on Windows ignores the charset and decodes CSV as the system codepage
+  // unless the file opens with a UTF-8 BOM — "Müller" arrives as "MÃ¼ller". Only
+  // CSV needs it: the BOM would be literal junk at the top of a .bib or .ris.
+  const body = mime === "text/csv" ? ["\ufeff", text] : [text];
+  const blob = new Blob(body, { type: `${mime};charset=utf-8` });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

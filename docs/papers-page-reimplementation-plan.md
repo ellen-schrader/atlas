@@ -69,8 +69,11 @@ Self-contained, no feed coupling.
 - Reading-status two-axis model / unified status control (deferred, see above).
 - Year/author/shared-by filters, most-discussed sort, saved searches, the
   shell-wide ⌘K palette — unrelated to this scope, not touched.
-- `PaperListRow.tsx` — dead/orphaned code on the branch, not the list view,
-  not reimplemented.
+- `PaperListRow.tsx` — not the list view, not reimplemented. (The plan first
+  called this "dead/orphaned code"; that was wrong — `routes/Dashboard.tsx`
+  imports and renders it, and `PaperCard.tsx` cites it as the source of its
+  keyboard guard. It is only unreferenced *from the Papers page*, which is why
+  a grep run from here appeared to confirm it. Out of scope either way.)
 
 ## Add-paper / Import: merging into one dialog
 

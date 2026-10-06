@@ -818,15 +818,15 @@ function PaperTable({
         <thead>
           <tr className="bg-surface-2 text-left text-eyebrow uppercase tracking-eyebrow text-muted">
             {selecting && (
-              <th className="w-10 px-4 py-2.5 font-semibold">
+              <th className="w-12 px-3 py-2.5 font-semibold">
                 <span className="sr-only">Select</span>
               </th>
             )}
             <th className="px-4 py-2.5 font-semibold">Paper</th>
             <th className="w-48 px-4 py-2.5 font-semibold">Authors</th>
-            <th className="w-28 px-4 py-2.5 font-semibold">Engagement</th>
-            <th className="w-24 px-4 py-2.5 font-semibold">Posted</th>
-            <th className="w-14 px-4 py-2.5 font-semibold">
+            <th className="w-32 px-4 py-2.5 font-semibold">Engagement</th>
+            <th className="w-28 px-4 py-2.5 font-semibold">Posted</th>
+            <th className="w-16 px-3 py-2.5 font-semibold">
               <span className="sr-only">Save</span>
             </th>
           </tr>
@@ -838,31 +838,22 @@ function PaperTable({
             const read = readIds?.has(p.id) ?? false;
             const checked = isSelected?.(p.id) ?? false;
             return (
+              // The row stays a row. role="button" on a <tr> overrides its
+              // implicit `row`, orphaning the cells from any row ancestor, and
+              // `button` is children-presentational — it flattens the select
+              // checkbox and the bookmark out of the accessibility tree entirely.
+              // The keyboard-operable control is the title button in the first
+              // cell; onClick here is a mouse convenience on top of it.
               <tr
                 key={post.id}
-                role="button"
-                tabIndex={0}
-                aria-pressed={selecting ? checked : undefined}
                 onClick={() => activate(p.id)}
-                onKeyDown={(e) => {
-                  // Only when the row itself has focus: keydown bubbles, so without
-                  // this an Enter/Space on the nested checkbox or bookmark would
-                  // double-fire (its own click plus this handler). Same guard
-                  // PaperCard uses.
-                  if (e.target !== e.currentTarget) return;
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    activate(p.id);
-                  }
-                }}
                 className={cn(
                   "cursor-pointer border-t border-border align-middle transition hover:bg-surface-2",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
                   selecting && checked && "bg-accent-weak",
                 )}
               >
                 {selecting && (
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                     <SelectCheckbox checked={checked} onChange={() => onToggleSelect?.(p.id)} />
                   </td>
                 )}
@@ -876,9 +867,23 @@ function PaperTable({
                       )}
                     />
                     <div className="min-w-0">
-                      <div className={cn("truncate", read ? "text-muted" : "font-medium text-fg")}>
+                      <button
+                        type="button"
+                        aria-pressed={selecting ? checked : undefined}
+                        onClick={(e) => {
+                          // The row handles the click; without this the action
+                          // would fire twice.
+                          e.stopPropagation();
+                          activate(p.id);
+                        }}
+                        className={cn(
+                          "block w-full truncate text-left",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                          read ? "text-muted" : "font-medium text-fg",
+                        )}
+                      >
                         {p.title ?? p.url}
-                      </div>
+                      </button>
                       <SourceLabel venue={p.venue} year={p.year} className="mt-0.5 block" />
                     </div>
                   </div>
@@ -892,14 +897,14 @@ function PaperTable({
                   <EngagementSummary reactions={c?.reactions ?? 0} comments={c?.comments ?? 0} />
                 </td>
                 <td
-                  className="whitespace-nowrap px-4 py-3 text-meta text-muted tabular-nums"
+                  className="truncate px-4 py-3 text-meta text-muted tabular-nums"
                   title={formatDate(post.posted_at)}
                 >
                   {formatRelative(post.posted_at)}
                 </td>
                 {/* The card view has always had a bookmark; the table view hadn't, so
                     the same paper was saveable in one view and not the other. */}
-                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                   <BookmarkButton
                     paperId={p.id}
                     teamId={teamId}

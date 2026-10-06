@@ -1,4 +1,4 @@
-import { type DragEvent, type ReactNode, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, FileUp, Info, X } from "lucide-react";
 
@@ -29,10 +29,15 @@ import { cn } from "@/lib/utils";
 export function BibtexImportPanel({
   teamId,
   onImported,
+  onImportingChange,
 }: {
   teamId: string;
   /** Fired once papers have actually landed, so the dialog can show its summary. */
   onImported: (result: { imported: number; skipped: number; failed: number }) => void;
+  /** True only while the commit write is in flight. The dialog uses it to refuse
+   *  dismissal: the request finishes regardless, so letting the user close here
+   *  lands every paper with no confirmation and no counts. */
+  onImportingChange?: (importing: boolean) => void;
 }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -44,6 +49,23 @@ export function BibtexImportPanel({
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    onImportingChange?.(importing);
+  }, [importing, onImportingChange]);
+
+  function reset() {
+    setPreflight(null);
+    setBibtex(null);
+    setFileName(null);
+    setError(null);
+    setShowProblems(false);
+    // The <input type="file"> is uncontrolled: without clearing its value,
+    // re-picking the SAME file fires no change event and the dialog just sits
+    // there looking frozen.
+    if (fileRef.current) fileRef.current.value = "";
+  }
 
   async function accept(file: File) {
     setError(null);
@@ -65,17 +87,23 @@ export function BibtexImportPanel({
   async function commit() {
     if (!bibtex) return;
     setBusy(true);
+    setImporting(true);
     setError(null);
     try {
       const result = await bibtexImport(bibtex, teamId);
-      setPreflight(null);
-      // The lab's corpus just changed underneath every cached view.
-      await qc.invalidateQueries();
+      // Hand the result over BEFORE refetching. invalidateQueries() with no
+      // filter invalidates every query in the app and its promise only settles
+      // once the refetches do — awaiting first withheld the success screen
+      // behind that, and the intermediate state (preflight cleared, busy still
+      // true) read as "the import was discarded, start again".
       onImported(result);
+      // The lab's corpus just changed underneath every cached view.
+      void qc.invalidateQueries();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+      setImporting(false);
     }
   }
 
@@ -181,14 +209,7 @@ export function BibtexImportPanel({
                   ? "Nothing new to import"
                   : `Import ${preflight.importable} ${preflight.importable === 1 ? "paper" : "papers"}`}
             </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setPreflight(null);
-                setBibtex(null);
-                setFileName(null);
-              }}
-            >
+            <Button variant="ghost" disabled={busy} onClick={reset}>
               Clear
             </Button>
           </div>
@@ -208,6 +229,25 @@ export function BibtexImportDone({
   result: { imported: number; skipped: number; failed: number };
   teamName: string;
 }) {
+  // `importable` is computed at preflight; by the time the write runs a colleague
+  // may have imported the same library, so zero-imported is a real outcome and
+  // must not be dressed up as a success.
+  if (result.imported === 0) {
+    return (
+      <section className="rounded-card border border-border bg-surface-2 p-5">
+        <h3 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+          <Info size={18} className="text-faint" />
+          Nothing new to import
+        </h3>
+        <p className="mt-1.5 text-sm text-muted">
+          {result.skipped > 0 &&
+            `All ${result.skipped} ${result.skipped === 1 ? "paper was" : "papers were"} already in ${teamName}.`}
+          {result.failed > 0 && ` ${result.failed} couldn’t be read.`}
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-card border border-accent/40 bg-accent-weak p-5">
       <h3 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">

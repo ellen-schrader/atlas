@@ -126,6 +126,8 @@ export function AddPaperDialog({
   const qc = useQueryClient();
   const [step, setStep] = useState<Step>("url");
   const [mode, setMode] = useState<Mode>("link");
+  /** True only while the .bib commit write is in flight — see the Modal below. */
+  const [importing, setImporting] = useState(false);
   /** Set once a .bib import has written papers; swaps step 1 for its summary. */
   const [imported, setImported] = useState<{
     imported: number;
@@ -162,6 +164,7 @@ export function AddPaperDialog({
     setStep("url");
     setMode("link");
     setImported(null);
+    setImporting(false);
     setUrl("");
     setDoi("");
     setFields(EMPTY);
@@ -327,7 +330,12 @@ export function AddPaperDialog({
   const canSave = Boolean(url.trim()) && Boolean(fields.title?.trim());
 
   return (
-    <Modal open={open} onClose={onClose} label="Add a paper">
+    // Refuse dismissal mid-write. Modal closes on Escape and on a backdrop click,
+    // but the POST completes regardless — so abandoning here lands every paper in
+    // the file with no confirmation and no counts, and re-importing is then the
+    // obvious next move. The standalone /import page had no way to abandon it;
+    // moving the flow into a dialog is what introduced one.
+    <Modal open={open} onClose={importing ? () => {} : onClose} label="Add a paper">
       <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pr-14">
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
@@ -369,12 +377,18 @@ export function AddPaperDialog({
 
         {step === "url" && !imported && (
           <div className="mb-4">
-            <ModeSwitch mode={mode} onChange={setMode} disabled={looking} />
+            {/* `looking` is the link lookup; `importing` is the .bib write. Either
+                in flight means switching would unmount work that still completes. */}
+            <ModeSwitch mode={mode} onChange={setMode} disabled={looking || importing} />
           </div>
         )}
 
         {step === "url" && !imported && mode === "bib" && (
-          <BibtexImportPanel teamId={teamId} onImported={setImported} />
+          <BibtexImportPanel
+            teamId={teamId}
+            onImported={setImported}
+            onImportingChange={setImporting}
+          />
         )}
 
         {step === "url" && !imported && mode === "link" && (
@@ -650,10 +664,15 @@ export function AddPaperDialog({
           </>
         ) : (
           <>
+            {/* Only on the step that actually shows the ModeSwitch: on "recover"
+                and "done" this pointed at a control that isn't on screen, and
+                after an import it advertised a job already finished. */}
             <p className="text-xs text-faint">
-              {mode === "link"
-                ? "Adding a back-catalogue? Switch to “Upload a .bib”."
-                : "Every reference manager exports BibTeX."}
+              {step === "url" && !imported
+                ? mode === "link"
+                  ? "Adding a back-catalogue? Switch to “Upload a .bib”."
+                  : "Every reference manager exports BibTeX."
+                : ""}
             </p>
             {(step === "done" || imported) && (
               <Button variant="secondary" size="sm" onClick={onClose}>
