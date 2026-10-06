@@ -59,7 +59,7 @@ export function PaperDetail({
             onClick={onClose}
             aria-label="Open as page"
             title="Open this paper on its own page"
-            className="absolute right-14 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
+            className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
           >
             <Maximize2 size={15} />
           </Link>

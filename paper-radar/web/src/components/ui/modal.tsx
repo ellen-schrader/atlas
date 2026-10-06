@@ -86,7 +86,10 @@ export function Modal({
           ref={closeRef}
           onClick={onClose}
           aria-label="Close"
-          className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
+          // Top-LEFT: the right corner is where a dialog's "take me to this
+          // full-screen" control goes (PaperDetail's "Open as page"), and two
+          // different destinations one next to the other invited a misclick.
+          className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
         >
           <X size={16} />
         </button>

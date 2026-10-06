@@ -336,7 +336,7 @@ export function AddPaperDialog({
     // obvious next move. The standalone /import page had no way to abandon it;
     // moving the flow into a dialog is what introduced one.
     <Modal open={open} onClose={importing ? () => {} : onClose} label="Add a paper">
-      <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pr-14">
+      <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pl-14">
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
             {imported

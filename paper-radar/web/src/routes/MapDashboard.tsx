@@ -444,7 +444,7 @@ function MapEditPanel({
   return (
     <Modal open onClose={onClose} label="Edit map" className="max-w-md">
       <div className="p-5">
-        <div className="mb-3 pr-8">
+        <div className="mb-3 pl-8">
           <h2 className="font-serif text-lg font-semibold tracking-tight">Edit map</h2>
         </div>
 
