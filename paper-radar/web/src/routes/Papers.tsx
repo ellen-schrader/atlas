@@ -68,7 +68,7 @@ const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4";
 
 const STATUS_LABEL: Record<PaperStatus, string> = {
   unread: "Unread",
-  to_read: "Saved to read",
+  saved: "Saved",
   reading: "Reading",
   read: "Read",
 };

@@ -19,6 +19,7 @@ import {
   exportFilename,
   formatPapers,
 } from "@/lib/paperExport";
+import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
@@ -427,19 +428,22 @@ function MarkReadButton({
   const isRead = readSet?.has(paperId) ?? false;
   const [busy, setBusy] = useState(false);
 
-  // Toggle read ↔ unread. "Unread" removes the read status row entirely (a paper
-  // is either to_read / read / unset — there's no separate unread state), so the
-  // list dots and reading list update in step.
+  // Toggle read ↔ unread on the progress axis ONLY. This used to delete the
+  // whole row to mean "unread", which threw away the save with it, and the
+  // upsert used to overwrite `to_read` with `read`, which silently un-saved the
+  // paper. Both axes now survive each other.
   async function toggle() {
     if (busy) return;
     setBusy(true);
-    const q = supabase.from("paper_status");
-    const { error } = isRead
-      ? await q.delete().eq("user_id", userId).eq("team_id", teamId).eq("paper_id", paperId)
-      : await q.upsert(
-          { user_id: userId, team_id: teamId, paper_id: paperId, status: "read" },
-          { onConflict: "user_id,paper_id,team_id" },
-        );
+    const { error } = await supabase
+      .from("paper_status")
+      .upsert(
+        { user_id: userId, team_id: teamId, paper_id: paperId, status: isRead ? "unread" : "read" },
+        { onConflict: "user_id,paper_id,team_id" },
+      );
+    // Back to unread and never saved = an all-default row, which would hide the
+    // paper from Discover (recommend_v2 excludes any paper with a row).
+    if (!error && isRead) await deleteIfDefault(supabase, userId, teamId, paperId);
     setBusy(false);
     if (!error) {
       await qc.invalidateQueries({ queryKey: ["reading-list"] });

@@ -92,7 +92,7 @@ export default function MapDashboard() {
     onError: (e) => window.alert(`Couldn’t delete the map — ${(e as Error).message}`),
   });
   // Quick read toggle from a row: mark read, or clear back to unread. (Clearing
-  // also drops a reading-list "to_read" on that paper — an accepted simplification.)
+  // also saves that paper to the reading list — an accepted simplification.)
   const setRead = useMutation({
     mutationFn: async ({ paperId, read }: { paperId: string; read: boolean }) => {
       const base = supabase.from("paper_status");
@@ -667,7 +667,7 @@ function PaperRow({
       ? "bg-faint border-faint"
       : p.read_status === "reading"
         ? "bg-accent border-accent"
-        : "bg-transparent border-accent"; // to_read / null = unread
+        : "bg-transparent border-accent"; // unread / null
   return (
     <li className="group flex gap-3 border-t border-border py-2.5 first:border-t-0">
       <span

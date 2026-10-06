@@ -183,7 +183,7 @@ export interface MapPaper {
   similarity: number | null; // relevance to the seed
   reactions: number;
   comments: number;
-  read_status: "to_read" | "reading" | "read" | null;
+  read_status: "unread" | "reading" | "read" | null;
   posted_at: string | null;
   pinned: boolean;
 }

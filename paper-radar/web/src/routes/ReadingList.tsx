@@ -8,11 +8,24 @@ import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { type Selection, useSelection } from "@/hooks/useSelection";
 import type { ExportPaper } from "@/lib/paperExport";
+import type { Progress } from "@/lib/paperStatus";
+import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import { cn, formatAuthors, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 type Sort = "recommended" | "added";
+
+/** Which slice of the saved set is on screen. Membership never changes here —
+ *  a paper leaves the saved set only by being un-saved — so this picks a view,
+ *  not a filter on whether the paper is still yours. */
+type View = "queue" | "read" | "all";
+
+const VIEWS: { key: View; label: string; blurb: string }[] = [
+  { key: "queue", label: "To read", blurb: "Saved and not started." },
+  { key: "read", label: "Read", blurb: "Read and kept — still yours, still counting." },
+  { key: "all", label: "All", blurb: "Everything you have saved." },
+];
 
 interface Item {
   paperId: string;
@@ -25,6 +38,7 @@ interface Item {
   abstract: string | null;
   added?: string; // when saved (updated_at) — present in "Date added" mode
   similarity?: number; // taste fit — present in "Recommended" mode
+  status?: Progress; // reading progress — present in "Date added" mode
 }
 
 function itemToExport(it: Item): ExportPaper {
@@ -71,6 +85,7 @@ export default function ReadingList() {
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const qc = useQueryClient();
+  const [view, setView] = useState<View>("queue");
   const [sort, setSort] = useState<Sort>("added");
   const [query, setQuery] = useState("");
   const [venue, setVenue] = useState("");
@@ -94,6 +109,7 @@ export default function ReadingList() {
           url: r.papers?.url ?? null,
           abstract: r.papers?.abstract ?? null,
           added: r.updated_at,
+          status: r.status,
         }))
       : (byRec.data?.results ?? []).map((r) => ({
           paperId: r.post.papers.id,
@@ -123,8 +139,17 @@ export default function ReadingList() {
 
   const q = query.trim().toLowerCase();
   const filtering = Boolean(q || venue);
+  // "Recommended" ranks the whole saved set through the API and carries no
+  // progress, so the view split only applies to the date-ordered read.
+  const inView = (it: Item) =>
+    view === "all" || !it.status
+      ? true
+      : view === "read"
+        ? it.status === "read"
+        : it.status !== "read";
   const shown = items.filter(
     (it) =>
+      inView(it) &&
       (!venue || it.venue === venue) &&
       (!q ||
         (it.title ?? "").toLowerCase().includes(q) ||
@@ -143,11 +168,15 @@ export default function ReadingList() {
   const { clear: clearSelection } = selection;
   useEffect(() => {
     clearSelection();
-  }, [query, venue, sort, clearSelection]);
+  }, [query, venue, sort, view, clearSelection]);
 
   // Canonical backlog size comes from the date view (always loaded), so the
   // header stays stable even while the ranked view is fetching.
-  const total = byDate.data?.length ?? 0;
+  const saved = byDate.data ?? [];
+  const total = saved.length;
+  const queueCount = saved.filter((r) => r.status !== "read").length;
+  const readCount = total - queueCount;
+  const counts: Record<View, number> = { queue: queueCount, read: readCount, all: total };
   const readWk = readWeek.data ?? 0;
 
   // "Date added" reads as a queue when grouped by recency; "Recommended" is a
@@ -164,11 +193,14 @@ export default function ReadingList() {
     setVenue("");
   }
 
-  async function markRead(paperId: string) {
+  // Progress only. The paper stays saved, so it moves from "To read" into
+  // "Read" rather than leaving the list — which is the point: a paper central to
+  // your project should not disappear the moment you finish it.
+  async function markRead(paperId: string, read = true) {
     await supabase
       .from("paper_status")
       .upsert(
-        { user_id: userId, team_id: team.id, paper_id: paperId, status: "read" },
+        { user_id: userId, team_id: team.id, paper_id: paperId, status: read ? "read" : "unread" },
         { onConflict: "user_id,paper_id,team_id" },
       );
     await qc.invalidateQueries({ queryKey: ["reading-list"] });
@@ -177,14 +209,16 @@ export default function ReadingList() {
     await qc.invalidateQueries({ queryKey: ["read-papers"] });
   }
 
+  // Membership only — the deliberate "this is not mine after all". Keeps any
+  // reading progress, and drops the row entirely if nothing is left to say.
   async function removeFromList(paperId: string) {
     await supabase
       .from("paper_status")
-      .delete()
+      .update({ saved: false })
       .eq("user_id", userId)
       .eq("team_id", team.id)
-      .eq("paper_id", paperId)
-      .eq("status", "to_read");
+      .eq("paper_id", paperId);
+    await deleteIfDefault(supabase, userId, team.id, paperId);
     await qc.invalidateQueries({ queryKey: ["reading-list"] });
     await qc.invalidateQueries({ queryKey: ["recommendations"] });
   }
@@ -196,16 +230,25 @@ export default function ReadingList() {
           <h1 className="text-display font-serif font-semibold tracking-tight">Reading list</h1>
           {total > 0 ? (
             <p className="mt-1.5 text-sm text-muted">
-              {total} paper{total === 1 ? "" : "s"} · {readingTime(total)} to read
+              {queueCount > 0 ? (
+                <>
+                  {queueCount} to read · {readingTime(queueCount)}
+                </>
+              ) : (
+                <span className="font-medium text-accent">Queue clear</span>
+              )}
+              {readCount > 0 && <> · {readCount} read and kept</>}
               {readWk > 0 && (
                 <>
                   {" · "}
-                  <span className="font-medium text-accent">{readWk} read this week</span>
+                  <span className="font-medium text-accent">{readWk} this week</span>
                 </>
               )}
             </p>
           ) : (
-            <p className="mt-1.5 text-sm text-muted">Papers you saved to read in {team.name}.</p>
+            <p className="mt-1.5 text-sm text-muted">
+              Papers you save in {team.name} land here — to read, and to keep.
+            </p>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -241,6 +284,41 @@ export default function ReadingList() {
           )}
         </div>
       </div>
+
+      {total > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div
+            role="tablist"
+            aria-label="Which saved papers to show"
+            className="flex gap-1 self-start rounded-control bg-surface-2 p-1"
+          >
+            {VIEWS.map((v) => (
+              <button
+                key={v.key}
+                role="tab"
+                aria-selected={view === v.key}
+                onClick={() => setView(v.key)}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-control px-3 py-1.5 text-sm font-medium transition",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                  view === v.key ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
+                )}
+              >
+                {v.label}
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-xs tabular-nums",
+                    view === v.key ? "bg-accent-weak text-accent" : "text-faint",
+                  )}
+                >
+                  {counts[v.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-faint">{VIEWS.find((v) => v.key === view)?.blurb}</p>
+        </div>
+      )}
 
       {total > 0 && (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -312,7 +390,40 @@ export default function ReadingList() {
         </div>
       )}
 
-      {!loading && !recError && items.length > 0 && shown.length === 0 && (
+      {/* An empty VIEW is not an empty search. Draining the queue is the whole
+          point of the page, so it gets a result rather than "no matches". */}
+      {!loading && !recError && items.length > 0 && shown.length === 0 && !filtering && (
+        <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-surface-2 py-14 text-center">
+          {view === "queue" ? (
+            <>
+              <Check size={22} className="text-accent" />
+              <p className="text-sm font-medium">Queue clear</p>
+              <p className="max-w-sm text-xs text-muted">
+                Nothing left to read.{" "}
+                {readCount > 0 && (
+                  <button
+                    onClick={() => setView("read")}
+                    className="font-medium text-accent hover:underline"
+                  >
+                    {readCount} kept {readCount === 1 ? "paper" : "papers"}
+                  </button>
+                )}{" "}
+                {readCount > 0 && "are still here."}
+              </p>
+            </>
+          ) : (
+            <>
+              <BookMarked size={22} className="text-muted" />
+              <p className="text-sm font-medium">Nothing read yet</p>
+              <p className="max-w-sm text-xs text-muted">
+                Papers you mark as read stay saved and move here.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {!loading && !recError && items.length > 0 && shown.length === 0 && filtering && (
         <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-surface-2 py-14 text-center">
           <p className="text-sm font-medium">No papers match your filters</p>
           <button onClick={clearFilters} className="text-xs font-medium text-accent hover:underline">
@@ -388,7 +499,7 @@ function ListCard({
 }: {
   items: Item[];
   onOpen: (id: string) => void;
-  onMarkRead: (id: string) => void;
+  onMarkRead: (id: string, read: boolean) => void;
   onRemove: (id: string) => void;
   selection: Selection;
 }) {
@@ -417,7 +528,7 @@ function Row({
 }: {
   item: Item;
   onOpen: (id: string) => void;
-  onMarkRead: (id: string) => void;
+  onMarkRead: (id: string, read: boolean) => void;
   onRemove: (id: string) => void;
   selection: Selection;
 }) {
@@ -467,17 +578,21 @@ function Row({
       {!selecting && (
         <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
           <button
-            onClick={() => onMarkRead(item.paperId)}
-            title="Mark as read"
-            aria-label="Mark as read"
-            className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-accent"
+            onClick={() => onMarkRead(item.paperId, item.status !== "read")}
+            title={item.status === "read" ? "Move back to “to read”" : "Mark as read"}
+            aria-label={item.status === "read" ? "Mark as unread" : "Mark as read"}
+            aria-pressed={item.status === "read"}
+            className={cn(
+              "grid h-7 w-7 place-items-center rounded-md transition hover:bg-surface-3",
+              item.status === "read" ? "text-accent" : "text-faint hover:text-accent",
+            )}
           >
             <Check size={15} />
           </button>
           <button
             onClick={() => onRemove(item.paperId)}
-            title="Remove from reading list"
-            aria-label="Remove from reading list"
+            title="Un-save — removes it from your list entirely"
+            aria-label="Un-save this paper"
             className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-danger"
           >
             <X size={15} />
