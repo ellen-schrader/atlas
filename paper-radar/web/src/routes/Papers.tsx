@@ -460,6 +460,7 @@ export default function Papers() {
         open={adding}
         onClose={() => setAdding(false)}
         teamId={team.id}
+        teamName={team.name}
         onAdded={(paperId) => {
           setAdding(false);
           openPaper(paperId);

@@ -11,7 +11,6 @@ import Layout from "@/routes/Layout";
 import Landing from "@/routes/Landing";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
-import Import from "@/routes/Import";
 import MapView from "@/routes/Map";
 import MapDashboard from "@/routes/MapDashboard";
 import MapsLibrary from "@/routes/MapsLibrary";
@@ -93,7 +92,9 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/" element={<Dashboard />} />
         <Route path="/papers" element={<Papers />} />
         <Route path="/papers/:paperId" element={<PaperPage />} />
-        <Route path="/import" element={<Import />} />
+        {/* Retired: importing a .bib is a mode of the Add-paper dialog now.
+            Kept as a redirect so an old bookmark lands somewhere sensible. */}
+        <Route path="/import" element={<Navigate to="/papers" replace />} />
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />
