@@ -51,6 +51,19 @@ export function PaperDetail({
     <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
       <div className="relative h-[150px] shrink-0">
         <Cover seed={p.id} />
+        {!fullPage && (
+          // Sits left of Modal's close button (right-3, h-8 w-8) and matches its
+          // treatment, so the two read as one set of window controls.
+          <Link
+            to={`/papers/${p.id}`}
+            onClick={onClose}
+            aria-label="Open as page"
+            title="Open this paper on its own page"
+            className="absolute right-14 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
+          >
+            <Maximize2 size={15} />
+          </Link>
+        )}
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-4">
           {[p.venue, p.year].filter(Boolean).length > 0 && (
             <span className="text-eyebrow font-semibold uppercase tracking-eyebrow tabular-nums text-white/90">
@@ -90,16 +103,6 @@ export function PaperDetail({
               abstract: p.abstract,
             }}
           />
-          {!fullPage && (
-            <Link
-              to={`/papers/${p.id}`}
-              onClick={onClose}
-              className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-2 text-sm font-medium transition hover:border-accent hover:text-accent"
-              title="Open this paper on its own page"
-            >
-              <Maximize2 size={13} /> Open as page
-            </Link>
-          )}
           <BookmarkButton
             paperId={p.id}
             teamId={teamId}
