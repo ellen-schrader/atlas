@@ -804,9 +804,16 @@ function PaperTable({
   isSelected?: (id: string) => boolean;
   onToggleSelect?: (id: string) => void;
 }) {
+  const activate = (paperId: string) =>
+    selecting ? onToggleSelect?.(paperId) : onOpen(paperId);
+
   return (
     <div className="overflow-x-auto rounded-card border border-border shadow-sm">
-      <table className="w-full min-w-[680px] border-collapse text-sm">
+      {/* table-fixed, not auto: with content-based sizing a single long author
+          list widens its column and shunts Posted/Save sideways, so the columns
+          don't line up as you scroll. Fixed widths on everything but Paper give
+          the title the remaining space and keep the grid steady. */}
+      <table className="w-full min-w-[680px] table-fixed border-collapse text-sm">
         <thead>
           <tr className="bg-surface-2 text-left text-eyebrow uppercase tracking-eyebrow text-muted">
             {selecting && (
@@ -815,10 +822,10 @@ function PaperTable({
               </th>
             )}
             <th className="px-4 py-2.5 font-semibold">Paper</th>
-            <th className="px-4 py-2.5 font-semibold">Authors</th>
-            <th className="px-4 py-2.5 font-semibold">Engagement</th>
-            <th className="px-4 py-2.5 font-semibold">Posted</th>
-            <th className="px-4 py-2.5 font-semibold">
+            <th className="w-48 px-4 py-2.5 font-semibold">Authors</th>
+            <th className="w-28 px-4 py-2.5 font-semibold">Engagement</th>
+            <th className="w-24 px-4 py-2.5 font-semibold">Posted</th>
+            <th className="w-14 px-4 py-2.5 font-semibold">
               <span className="sr-only">Save</span>
             </th>
           </tr>
@@ -832,9 +839,24 @@ function PaperTable({
             return (
               <tr
                 key={post.id}
-                onClick={() => (selecting ? onToggleSelect?.(p.id) : onOpen(p.id))}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selecting ? checked : undefined}
+                onClick={() => activate(p.id)}
+                onKeyDown={(e) => {
+                  // Only when the row itself has focus: keydown bubbles, so without
+                  // this an Enter/Space on the nested checkbox or bookmark would
+                  // double-fire (its own click plus this handler). Same guard
+                  // PaperCard uses.
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    activate(p.id);
+                  }
+                }}
                 className={cn(
                   "cursor-pointer border-t border-border align-middle transition hover:bg-surface-2",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
                   selecting && checked && "bg-accent-weak",
                 )}
               >
@@ -860,7 +882,11 @@ function PaperTable({
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-3 text-muted">{formatAuthors(p.authors)}</td>
+                <td className="px-4 py-3 text-muted">
+                  <div className="truncate" title={p.authors.join(", ")}>
+                    {formatAuthors(p.authors)}
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <EngagementSummary reactions={c?.reactions ?? 0} comments={c?.comments ?? 0} />
                 </td>

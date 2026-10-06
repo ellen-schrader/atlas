@@ -17,6 +17,7 @@ import MapDashboard from "@/routes/MapDashboard";
 import MapsLibrary from "@/routes/MapsLibrary";
 import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
+import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
 import ReadingList from "@/routes/ReadingList";
 import Settings from "@/routes/Settings";
@@ -91,6 +92,7 @@ function AuthedApp({ session }: { session: Session }) {
       <Route element={<Layout session={session} team={team} />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/papers" element={<Papers />} />
+        <Route path="/papers/:paperId" element={<PaperPage />} />
         <Route path="/import" element={<Import />} />
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />

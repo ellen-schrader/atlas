@@ -11,7 +11,7 @@ import {
 } from "@/lib/paperExport";
 import { cn } from "@/lib/utils";
 
-const FORMATS: ExportFormat[] = ["markdown", "text", "bibtex"];
+const FORMATS: ExportFormat[] = ["markdown", "text", "bibtex", "csv"];
 
 /** A floating action bar for multi-select export. Shown while a list is in select
  *  mode: it reports the count, toggles select-all, and opens the export popover

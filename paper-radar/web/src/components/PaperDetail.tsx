@@ -1,6 +1,7 @@
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Trash2 } from "lucide-react";
+import { Check, ExternalLink, Maximize2, Quote, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
@@ -9,6 +10,14 @@ import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useReadPapers } from "@/hooks/useReadPapers";
+import {
+  type ExportFormat,
+  type ExportPaper,
+  FORMAT_META,
+  downloadText,
+  exportFilename,
+  formatPapers,
+} from "@/lib/paperExport";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
@@ -19,12 +28,17 @@ export function PaperDetail({
   userId,
   bookmarked = false,
   onClose,
+  fullPage = false,
 }: {
   post: PaperPost;
   teamId: string;
   userId: string;
   bookmarked?: boolean;
   onClose?: () => void;
+  /** Rendered on its own /papers/:id page rather than inside the modal: the body
+   *  flows with the page instead of being a scroll area inside a fixed-height
+   *  dialog, and the "Open as page" link is dropped (we are already there). */
+  fullPage?: boolean;
 }) {
   const p = post.papers;
   const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
@@ -33,7 +47,7 @@ export function PaperDetail({
   const canDelete = post.posted_by === userId || role === "owner";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
       <div className="relative h-[150px] shrink-0">
         <Cover seed={p.id} />
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-4">
@@ -45,12 +59,12 @@ export function PaperDetail({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-6">
+      <div className={cn("p-6", !fullPage && "min-h-0 flex-1 overflow-y-auto")}>
         <h2 className="text-balance text-[21px] font-bold leading-tight tracking-tight">
           {p.title ?? p.url}
         </h2>
-        {p.authors.length > 0 && <div className="mt-2.5 text-sm text-muted">{p.authors.join(", ")}</div>}
-        <div className="mt-1 break-all font-mono text-xs text-faint">{p.doi ?? p.url}</div>
+        {p.authors.length > 0 && <AuthorList authors={p.authors} />}
+        <PaperIdentifier doi={p.doi} url={p.url} />
 
         <div className="mt-4 flex flex-wrap gap-2">
           <a
@@ -63,6 +77,28 @@ export function PaperDetail({
           </a>
           {safeHref(p.code_url) && <LinkBtn href={safeHref(p.code_url)!}>Code</LinkBtn>}
           {safeHref(p.data_url) && <LinkBtn href={safeHref(p.data_url)!}>Data</LinkBtn>}
+          <CitePaperButton
+            paper={{
+              id: p.id,
+              title: p.title,
+              authors: p.authors ?? [],
+              venue: p.venue,
+              year: p.year,
+              doi: p.doi,
+              url: p.url,
+              abstract: p.abstract,
+            }}
+          />
+          {!fullPage && (
+            <Link
+              to={`/papers/${p.id}`}
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-2 text-sm font-medium transition hover:border-accent hover:text-accent"
+              title="Open this paper on its own page"
+            >
+              <Maximize2 size={13} /> Open as page
+            </Link>
+          )}
           <BookmarkButton
             paperId={p.id}
             teamId={teamId}
@@ -105,6 +141,137 @@ export function PaperDetail({
         <MetaLabel>Discussion</MetaLabel>
         <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
       </div>
+    </div>
+  );
+}
+
+/** A long author list is four lines of noise on open. Show the first few and let
+ *  the reader expand the rest — mirroring the table view's truncation. */
+function AuthorList({ authors }: { authors: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const LEAD = 5;
+  const hidden = authors.length - LEAD;
+  // Hiding a single author would trade one name for a longer "+1 more" button.
+  const shown = expanded || hidden <= 1 ? authors : authors.slice(0, LEAD);
+  return (
+    <div className="mt-2.5 text-sm text-muted">
+      {shown.join(", ")}
+      {!expanded && hidden > 1 && (
+        <>
+          {" "}
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="font-medium text-accent hover:underline"
+          >
+            +{hidden} more
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The paper's canonical identifier, as a link rather than dead text: a labelled,
+ *  clickable DOI where we can find one (resolved through doi.org), otherwise the
+ *  source host — never a bare, unclickable URL that reads as a broken fragment. */
+function PaperIdentifier({ doi, url }: { doi: string | null; url: string | null }) {
+  const bare = doi?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:/i, "");
+  const fromUrl = url?.match(/(?:dx\.)?doi\.org\/(10\.\S+)/i)?.[1] ?? null;
+  const id = bare || fromUrl;
+  let host: string | null = null;
+  try {
+    host = url ? new URL(url).host.replace(/^www\./, "") : null;
+  } catch {
+    host = null;
+  }
+  const href = id ? `https://doi.org/${id}` : safeHref(url);
+  const label = id ? `DOI ${id}` : host;
+  if (!href || !label) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="mt-1 inline-block break-all font-mono text-xs text-faint underline-offset-2 transition hover:text-accent hover:underline"
+    >
+      {label}
+    </a>
+  );
+}
+
+const CITE_FORMATS: ExportFormat[] = ["bibtex", "ris", "markdown", "text", "csv"];
+
+/** Copy or download a single paper as a citation, in any export format. Grabbing
+ *  one BibTeX entry otherwise means entering the multi-select bar and selecting a
+ *  single card; this puts it on the paper itself. */
+function CitePaperButton({ paper }: { paper: ExportPaper }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<ExportFormat | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  async function copyAs(f: ExportFormat) {
+    const text = formatPapers([paper], f);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(f);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(null), 1600);
+    } catch {
+      // Clipboard blocked (insecure context, denied permission) — fall back to a
+      // one-paper download so the citation is still obtainable.
+      downloadText(exportFilename(f, 1), text, FORMAT_META[f].mime);
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-2 text-sm font-medium transition hover:border-accent hover:text-accent"
+      >
+        <Quote size={13} /> Cite
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1.5 w-48 overflow-hidden rounded-card border border-border bg-surface shadow-xl">
+          <div className="border-b border-border px-3 py-2 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+            Copy citation
+          </div>
+          <div className="flex flex-col p-1">
+            {CITE_FORMATS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => copyAs(f)}
+                className="flex items-center justify-between gap-3 rounded-control px-2.5 py-2 text-left text-sm text-fg transition hover:bg-surface-2"
+              >
+                {FORMAT_META[f].label}
+                {copied === f && <Check size={14} className="text-accent" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

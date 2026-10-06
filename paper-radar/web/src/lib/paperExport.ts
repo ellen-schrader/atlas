@@ -1,8 +1,9 @@
 /**
  * Serialise a set of papers for handoff out of Atlas — to a chat model (Markdown),
- * to a person over chat/email (plain text), or to a reference manager (BibTeX).
+ * to a person over chat/email (plain text), to a reference manager (BibTeX for
+ * LaTeX/Zotero, RIS for EndNote/Mendeley), or to a spreadsheet (CSV).
  *
- * The three formats share one normalised {@link ExportPaper} shape, so a list from
+ * Every format shares one normalised {@link ExportPaper} shape, so a list from
  * anywhere in the app (Papers, the Reading List, a single paper) exports the same
  * way. Everything here is pure and side-effect free except {@link downloadText},
  * which the browser needs to save a file.
@@ -21,7 +22,7 @@ export interface ExportPaper {
   abstract: string | null;
 }
 
-export type ExportFormat = "markdown" | "text" | "bibtex";
+export type ExportFormat = "markdown" | "text" | "bibtex" | "ris" | "csv";
 
 export interface ExportOptions {
   /** Include each paper's abstract — the "more detailed" version. Off by default,
@@ -36,6 +37,8 @@ export const FORMAT_META: Record<ExportFormat, { label: string; ext: string; mim
   markdown: { label: "Markdown", ext: "md", mime: "text/markdown" },
   text: { label: "Plain text", ext: "txt", mime: "text/plain" },
   bibtex: { label: "BibTeX", ext: "bib", mime: "application/x-bibtex" },
+  ris: { label: "RIS", ext: "ris", mime: "application/x-research-info-systems" },
+  csv: { label: "CSV", ext: "csv", mime: "text/csv" },
 };
 
 /** Reduce any of the DOI forms our sources store — `10.x/y`, `doi:10.x/y`,
@@ -117,6 +120,55 @@ function toBibtex(papers: ExportPaper[], opts: ExportOptions): string {
     })
     .join("\n\n")
     .concat("\n");
+}
+
+// RIS is a line-based tag format (EndNote, Mendeley, ProCite). One record per
+// paper, TY first and ER last; every value must be single-line, so newlines in a
+// title or abstract are collapsed. JOUR for a venue-backed paper, GEN otherwise
+// (the preprint case), mirroring the @article/@misc split in BibTeX.
+function toRis(papers: ExportPaper[], opts: ExportOptions): string {
+  return papers
+    .map((p) => {
+      const lines = [`TY  - ${p.venue ? "JOUR" : "GEN"}`];
+      if (p.title) lines.push(`TI  - ${collapse(p.title)}`);
+      for (const a of p.authors) lines.push(`AU  - ${collapse(a)}`);
+      if (p.year != null) lines.push(`PY  - ${p.year}`);
+      if (p.venue) lines.push(`JO  - ${collapse(p.venue)}`);
+      const doi = p.doi ? bareDoi(p.doi) : null;
+      if (doi) lines.push(`DO  - ${doi}`);
+      const link = paperLink(p);
+      if (link) lines.push(`UR  - ${link}`);
+      if (opts.abstracts && p.abstract) lines.push(`AB  - ${collapse(p.abstract)}`);
+      lines.push("ER  - ");
+      // RIS is conventionally CRLF-delimited; some parsers reject bare LF.
+      return lines.join("\r\n");
+    })
+    .join("\r\n\r\n")
+    .concat("\r\n");
+}
+
+/** Quote a CSV cell per RFC 4180 — only when it contains a comma, quote, or newline. */
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function toCsv(papers: ExportPaper[], opts: ExportOptions): string {
+  const cols = ["Title", "Authors", "Venue", "Year", "DOI", "URL"];
+  if (opts.abstracts) cols.push("Abstract");
+  const rows = papers.map((p) => {
+    const doi = p.doi ? bareDoi(p.doi) : "";
+    const cells = [
+      p.title ?? "",
+      p.authors.join("; "), // authors within one cell, ";"-joined so the comma stays the delimiter
+      p.venue ?? "",
+      p.year != null ? String(p.year) : "",
+      doi,
+      p.url ?? (doi ? `https://doi.org/${doi}` : ""),
+    ];
+    if (opts.abstracts) cells.push(p.abstract ? collapse(p.abstract) : "");
+    return cells.map(csvCell).join(",");
+  });
+  return [cols.join(","), ...rows].join("\r\n").concat("\r\n");
 }
 
 // An initials run: "A", "AB", "A.B.", "X-Y". Every letter must be capital, so a
@@ -204,6 +256,10 @@ export function formatPapers(papers: ExportPaper[], format: ExportFormat, opts: 
       return toText(papers, opts);
     case "bibtex":
       return toBibtex(papers, opts);
+    case "ris":
+      return toRis(papers, opts);
+    case "csv":
+      return toCsv(papers, opts);
   }
 }
 
