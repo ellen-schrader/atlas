@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Maximize2, Quote, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Maximize2, Quote, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
@@ -215,10 +215,16 @@ const CITE_FORMATS: ExportFormat[] = ["bibtex", "ris", "markdown", "text", "csv"
 
 /** Copy or download a single paper as a citation, in any export format. Grabbing
  *  one BibTeX entry otherwise means entering the multi-select bar and selecting a
- *  single card; this puts it on the paper itself. */
+ *  single card; this puts it on the paper itself.
+ *
+ *  Same shape as ExportBar's menu — pick a format, then an explicit Copy or
+ *  Download. The formats used to BE the buttons, which read as a list of labels:
+ *  nothing told you that clicking one would copy, and the only confirmation was
+ *  a checkmark that showed for a second and a half. */
 function CitePaperButton({ paper }: { paper: ExportPaper }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<ExportFormat | null>(null);
+  const [format, setFormat] = useState<ExportFormat>("bibtex");
+  const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -252,18 +258,27 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
     };
   }, [open]);
 
-  async function copyAs(f: ExportFormat) {
-    const text = formatPapers([paper], f);
+  // Drop the confirmation when the format changes, so "Copied" never sits beside
+  // a format other than the one actually on the clipboard.
+  useEffect(() => setCopied(false), [format]);
+
+  const text = () => formatPapers([paper], format);
+
+  function download() {
+    downloadText(exportFilename(format, 1), text(), FORMAT_META[format].mime);
+    setOpen(false);
+  }
+
+  async function copy() {
     try {
-      await navigator.clipboard.writeText(text);
-      setCopied(f);
+      await navigator.clipboard.writeText(text());
+      setCopied(true);
       clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(null), 1600);
+      timer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard blocked (insecure context, denied permission) — fall back to a
-      // one-paper download so the citation is still obtainable.
-      downloadText(exportFilename(f, 1), text, FORMAT_META[f].mime);
-      setOpen(false);
+      // download so the citation is still obtainable.
+      download();
     }
   }
 
@@ -279,22 +294,61 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
         <Quote size={13} /> Cite
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-20 mt-1.5 w-48 overflow-hidden rounded-card border border-border bg-surface shadow-xl">
-          <div className="border-b border-border px-3 py-2 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
-            Copy citation
+        <div className="absolute left-0 top-full z-20 mt-1.5 w-60 overflow-hidden rounded-card border border-border bg-surface shadow-xl">
+          <div className="border-b border-border px-4 py-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+            Cite this paper
           </div>
-          <div className="flex flex-col p-1">
+
+          <div role="radiogroup" aria-label="Citation format" className="flex flex-col p-1.5">
             {CITE_FORMATS.map((f) => (
               <button
                 key={f}
                 type="button"
-                onClick={() => copyAs(f)}
-                className="flex items-center justify-between gap-3 rounded-control px-2.5 py-2 text-left text-sm text-fg transition hover:bg-surface-2"
+                role="radio"
+                aria-checked={format === f}
+                onClick={() => setFormat(f)}
+                className={cn(
+                  "flex items-center gap-3 rounded-control px-2.5 py-2 text-left transition hover:bg-surface-2",
+                  format === f && "bg-surface-2",
+                )}
               >
-                {FORMAT_META[f].label}
-                {copied === f && <Check size={14} className="text-accent" />}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "grid h-4 w-4 shrink-0 place-items-center rounded-full border",
+                    format === f ? "border-accent" : "border-border-strong",
+                  )}
+                >
+                  {format === f && <span className="h-2 w-2 rounded-full bg-accent" />}
+                </span>
+                <span className="text-sm font-medium text-fg">{FORMAT_META[f].label}</span>
               </button>
             ))}
+          </div>
+
+          <div className="flex gap-1.5 border-t border-border p-1.5">
+            <button
+              type="button"
+              onClick={copy}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-control px-3 py-2 text-sm font-medium text-fg transition hover:bg-surface-2"
+            >
+              {copied ? (
+                <>
+                  <Check size={14} className="text-accent" /> Copied
+                </>
+              ) : (
+                <>
+                  <Copy size={14} /> Copy
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={download}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-control bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition hover:brightness-110"
+            >
+              <Download size={14} /> Download
+            </button>
           </div>
         </div>
       )}
