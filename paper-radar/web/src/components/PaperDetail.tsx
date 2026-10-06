@@ -456,14 +456,26 @@ function MarkReadButton({
       type="button"
       onClick={toggle}
       disabled={busy}
+      aria-pressed={isRead}
+      // The visible label is the STATE ("Read"), which is ambiguous read aloud,
+      // so the accessible name carries the action instead — the same split
+      // BookmarkButton uses for "Saved" / "Remove from reading list".
+      aria-label={isRead ? "Mark as unread" : "Mark as read"}
+      title={isRead ? "Mark as unread" : "Mark as read"}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-control border px-3 py-2 text-sm font-medium transition disabled:opacity-60",
+        // min-w, and the label never gets longer than it: the text used to grow
+        // from "Mark read" to "Mark unread" (112px -> 129px) and shrink back,
+        // which jumps the row under the pointer — and Safari does not repaint
+        // the strip the button vacates, leaving a dark sliver beside it.
+        "inline-flex min-w-[7rem] items-center justify-center gap-1.5 rounded-control border px-3 py-2 text-sm font-medium transition disabled:opacity-60",
         isRead
           ? "border-accent bg-accent-weak text-accent"
           : "border-border hover:border-accent hover:text-accent",
       )}
     >
-      <Check size={14} /> {isRead ? "Mark unread" : "Mark read"}
+      {/* State, not instruction — the same way the bookmark beside it reads
+          "Save" then "Saved". The action lives in the title and aria-pressed. */}
+      <Check size={14} /> {isRead ? "Read" : "Mark read"}
     </button>
   );
 }
