@@ -57,7 +57,12 @@ export function PaperDetail({
           // treatment, so the two read as one set of window controls.
           <Link
             to={`/papers/${p.id}`}
-            onClick={onClose}
+            // Deliberately NOT onClose: the modal lives in the ?paper= search
+            // param, and closing it does a replace — which overwrites the
+            // ?paper= history entry just before this link pushes, so Back landed
+            // on the bare list instead of the dialog you expanded from. Leaving
+            // it alone keeps that entry, and the route change unmounts the modal
+            // anyway, since ?paper= belongs to the /papers URL.
             aria-label="Open as page"
             title="Open this paper on its own page"
             className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-control bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60"
