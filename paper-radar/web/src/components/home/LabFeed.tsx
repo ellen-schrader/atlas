@@ -217,7 +217,7 @@ function FeedRow({
               userId={userId}
               bookmarked={bookmarked}
               className={cn(
-                "justify-center text-muted hover:text-accent",
+                "tap-target justify-center text-muted hover:text-accent",
                 mobile && "-mr-3 h-11 w-11",
               )}
             />

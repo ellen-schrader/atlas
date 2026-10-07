@@ -96,7 +96,7 @@ export function RecommendationsRow({
         <p className="mb-3 text-xs text-muted">
           Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
           and this becomes yours, or{" "}
-          <button onClick={onTune} className="font-medium text-accent hover:underline">
+          <button onClick={onTune} className="tap-target font-medium text-accent hover:underline">
             describe your research
           </button>{" "}
           to give it a head start.
@@ -181,7 +181,7 @@ function ArrowButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={dir === "left" ? "Scroll left" : "Scroll right"}
-      className="grid h-7 w-7 place-items-center rounded-full border border-border text-muted transition hover:border-border-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
+      className="tap-target grid h-7 w-7 place-items-center rounded-full border border-border text-muted transition hover:border-border-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-muted"
     >
       <Icon size={14} />
     </button>
@@ -265,7 +265,7 @@ export function RecCard({
               teamId={teamId}
               userId={userId}
               bookmarked={bookmarked}
-              className="text-muted hover:text-accent"
+              className="tap-target text-muted hover:text-accent"
             />
           </span>
         </div>

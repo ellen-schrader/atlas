@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { type CSSProperties, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -7,12 +7,15 @@ import { LabFeed } from "@/components/home/LabFeed";
 import { gridColumns, homeFrame } from "@/components/home/layout";
 import { Omnibar } from "@/components/home/Omnibar";
 import { RecommendationsRow } from "@/components/home/Recommendations";
+import { TagVolume } from "@/components/home/TagVolume";
+import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
+import { useTagVolume, useTrendingAuthors, useTrendingTags } from "@/hooks/useTrends";
 import { supabase } from "@/lib/supabase";
 import { useAppContext } from "@/routes/Layout";
 
@@ -45,6 +48,16 @@ export default function Dashboard() {
   const { data: readIds } = useReadPapers(userId, team.id);
   // 12, so the widest layouts can fill 4–5 cards and still have a page to scroll to.
   const recs = useRecommendations(team.id, "discover", 12);
+  const trendingTags = useTrendingTags(team.id);
+  const trendingAuthors = useTrendingAuthors(team.id);
+  const tagRows = trendingTags.data ?? [];
+  const volume = useTagVolume(
+    team.id,
+    tagRows.map((t) => t.tag),
+  );
+  // Shared between Trending and Tag volume: hovering either highlights both.
+  const [hoveredTag, setHoveredTag] = useState<string | null>(null);
+  const [touch] = useState(() => window.matchMedia?.("(hover: none)").matches ?? false);
 
   async function markPaperRead(paperId: string) {
     await supabase
@@ -131,7 +144,29 @@ export default function Dashboard() {
     />
   );
 
-  const rail: ReactNode[] = [];
+  const rail = [
+    <Trending
+      key="trending"
+      tags={tagRows}
+      authors={trendingAuthors.data ?? []}
+      loading={trendingTags.isLoading}
+      hoveredTag={hoveredTag}
+      onHoverTag={setHoveredTag}
+      onTag={(tag) => navigate(`/papers?tag=${encodeURIComponent(tag)}`)}
+      // No author filter in Papers; its full-text search covers author names.
+      onAuthor={(author) => navigate(`/papers?q=${encodeURIComponent(author)}`)}
+    />,
+    <TagVolume
+      key="volume"
+      className="flex-1"
+      tags={tagRows}
+      series={volume.data ?? []}
+      loading={trendingTags.isLoading || volume.isLoading}
+      hoveredTag={hoveredTag}
+      onHoverTag={setHoveredTag}
+      touch={touch}
+    />,
+  ];
 
   const grid: CSSProperties = { gridTemplateColumns: gridColumns(cols), columnGap: 24 };
   const lead: CSSProperties = { gridColumn: `1 / span ${cols - 1}` };
@@ -185,17 +220,16 @@ export default function Dashboard() {
         ) : (
           <>
             {feed}
-            {rail.length > 0 && (
-              <div
-                className="grid items-stretch"
-                style={{
-                  gridTemplateColumns: tier === "tablet" ? gridColumns(2) : gridColumns(1),
-                  gap: `${frame.blockGap}px 24px`,
-                }}
-              >
-                {rail}
-              </div>
-            )}
+            {/* Tablet: Trending and Tag volume side by side under the feed. */}
+            <div
+              className="grid items-stretch"
+              style={{
+                gridTemplateColumns: tier === "tablet" ? gridColumns(2) : gridColumns(1),
+                gap: `${frame.blockGap}px 24px`,
+              }}
+            >
+              {rail}
+            </div>
           </>
         )}
       </div>

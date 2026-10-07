@@ -52,7 +52,7 @@ export function HeadingLink({ onClick, children }: { onClick: () => void; childr
     <button
       type="button"
       onClick={onClick}
-      className="whitespace-nowrap rounded-control text-xs font-medium text-muted transition hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="tap-target whitespace-nowrap rounded-control text-xs font-medium text-muted transition hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       {children} →
     </button>
@@ -81,7 +81,7 @@ export function Segmented<T extends string>({
           aria-selected={o.value === value}
           onClick={() => onChange(o.value)}
           className={cn(
-            "h-7 whitespace-nowrap rounded-control border px-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+            "tap-target h-7 whitespace-nowrap rounded-control border px-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
             o.value === value
               ? "border-border-strong bg-surface-2 text-fg"
               : "border-transparent text-muted hover:text-fg",
