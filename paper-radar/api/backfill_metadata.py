@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import re
 import time
+from datetime import date
 
 from paper_radar.ingest.metadata import fetch_metadata
 from paper_radar.ingest.urls import norm_doi
@@ -66,7 +67,10 @@ def _fetch_candidates(svc) -> list[dict]:
     while True:
         page = (
             svc.table("papers")
-            .select("id, url, doi, title, venue, year, abstract, metadata_source")
+            .select(
+                "id, url, doi, title, authors, venue, year, abstract, keywords, "
+                "metadata_source, published_at, edited_at, edited_fields"
+            )
             .order("created_at")
             .range(start, start + _PAGE - 1)
             .execute()
@@ -88,8 +92,36 @@ def needs_backfill(row: dict) -> bool:
     return bool(doi and _RENDITION_DOI_RE.match(doi))
 
 
-def plan_update(row: dict, meta, doi_owner: str | None) -> tuple[dict, str | None]:
+def follow_year(patch: dict, row: dict) -> None:
+    """Move ``published_at`` along with a changed ``year``, in place.
+
+    The Papers page sorts on ``published_at``, which the bibtex migration
+    backfilled from ``year`` as ``YYYY-01-01``. Correct the year without it and
+    the sort disagrees with the year on screen. Only a January 1st — that
+    migration's marker for "year only" — is rewritten; a date with real day
+    precision came from somewhere that knew more than the year field does.
+    """
+    if "year" not in patch:
+        return
+    current = row.get("published_at")
+    if isinstance(current, str):
+        current = date.fromisoformat(current[:10])
+    if current is not None and (current.month, current.day) != (1, 1):
+        return
+    year = patch["year"]
+    new = date(year, 1, 1).isoformat() if year else None
+    if new != (current.isoformat() if current else None):
+        patch["published_at"] = new
+
+
+def plan_update(
+    row: dict, meta, doi_owner: str | None, held=()
+) -> tuple[dict, str | None]:
     """The patch for one row, plus a note if something needed a human.
+
+    ``held`` is the row's ``edited_fields``: keys a person has corrected by hand.
+    They are left off the patch and everything else is still written — a row
+    with a hand-fixed title and no abstract should still get the abstract.
 
     ``doi_owner`` is the id of the paper already holding the resolved DOI, if any
     (the caller looks it up). That case is a genuine duplicate -- two rows, one
@@ -109,8 +141,11 @@ def plan_update(row: dict, meta, doi_owner: str | None) -> tuple[dict, str | Non
         if value is not None and value != row.get(field):
             patch[field] = value
     for field in _LIST_FIELDS:
-        if value := getattr(meta, field):
+        value = getattr(meta, field)
+        if value and value != row.get(field):
             patch[field] = value
+    for field in held:
+        patch.pop(field, None)
 
     note = None
     if doi_owner is not None and doi_owner != row["id"]:
@@ -118,16 +153,36 @@ def plan_update(row: dict, meta, doi_owner: str | None) -> tuple[dict, str | Non
         note = f"duplicate of {doi_owner}"
 
     if not patch:
-        return {}, None
+        # Still return the note: a row whose only change was a colliding DOI is
+        # exactly the duplicate pair a person needs to hear about.
+        return {}, note
 
+    follow_year(patch, row)
     patch["metadata_source"] = meta.source
-    # A row that gains a title is embeddable and enrichable for the first time;
-    # the existing backfills pick it up from these nulls. Matches what
-    # api/app.py::_repair_untitled does on the same transition.
-    if "title" in patch:
+    # The embedding and the tags are both computed from title + abstract, so a
+    # change to either makes them stale; the existing backfills pick the row up
+    # from these nulls. Nothing else is worth a re-embed and a re-tag.
+    if "title" in patch or "abstract" in patch:
         patch["embedded_at"] = None
         patch["enriched_at"] = None
     return patch, note
+
+
+def _write_unless_edited(svc, row: dict, patch: dict) -> bool:
+    """Write the patch only if nobody has edited the row since it was read.
+
+    Candidates are read once, up front, and each one then waits on a network
+    lookup — so a person can correct a row between the read and this write, and
+    the patch was planned against the old ``edited_fields``. Matching on
+    ``edited_at`` makes that a skip instead of a silent overwrite. Returns False
+    when skipped.
+    """
+    query = svc.table("papers").update(patch).eq("id", row["id"])
+    if row.get("edited_at"):
+        query = query.eq("edited_at", row["edited_at"])
+    else:
+        query = query.is_("edited_at", "null")
+    return bool(query.execute().data)
 
 
 def _doi_owner(svc, doi: str | None, row_id: str) -> str | None:
@@ -156,22 +211,27 @@ def main(argv: list[str] | None = None) -> None:
     for i, row in enumerate(rows, 1):
         meta = fetch_metadata(row["url"])
         owner = _doi_owner(svc, norm_doi(meta.doi), row["id"])
-        patch, note = plan_update(row, meta, owner)
+        patch, note = plan_update(row, meta, owner, held=row.get("edited_fields") or ())
 
         if note == "unresolved":
             unresolved += 1
             print(f"  [{i}/{len(rows)}] still unresolved: {row['url']}")
         elif not patch:
+            if note:
+                duplicates += 1
+                print(f"  [{i}/{len(rows)}] {note} — merge by hand: {row['id']} {row['url']}")
             unchanged += 1
         else:
             if note:
                 duplicates += 1
                 print(f"  [{i}/{len(rows)}] {note} — merge by hand: {row['id']} {row['url']}")
-            fixed += 1
             title = str(patch.get("title") or row.get("title"))[:60]
-            print(f"  [{i}/{len(rows)}] {'would fix' if args.dry_run else 'fixed'}: {title}")
-            if not args.dry_run:
-                svc.table("papers").update(patch).eq("id", row["id"]).execute()
+            if args.dry_run or _write_unless_edited(svc, row, patch):
+                fixed += 1
+                print(f"  [{i}/{len(rows)}] {'would fix' if args.dry_run else 'fixed'}: {title}")
+            else:
+                unchanged += 1
+                print(f"  [{i}/{len(rows)}] skipped, edited by hand while this ran: {title}")
         time.sleep(args.delay)
 
     verb = "would fix" if args.dry_run else "fixed"

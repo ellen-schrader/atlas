@@ -115,3 +115,102 @@ def test_row_that_already_matches_produces_no_patch():
     }
     patch, note = plan_update(row, _meta(authors=[], keywords=[]), doi_owner=None)
     assert patch == {} and note is None
+
+
+# --- rows a person has corrected ---------------------------------------------
+
+
+def test_held_fields_are_never_overwritten_but_the_rest_still_arrives():
+    # A hand-fixed title must not opt the row out of the abstract Crossref
+    # publishes later — that would keep the thin embedding this exists to fix.
+    row = {"id": "p1", "title": "Typed by hand", "doi": "10.1101/2026.05.11.724388v1"}
+    patch, _ = plan_update(row, _meta(abstract="Now published."), None, held=["title"])
+    assert "title" not in patch
+    assert patch["abstract"] == "Now published."
+    assert patch["doi"] == "10.1101/2026.05.11.724388"
+
+
+def test_a_new_abstract_queues_a_reembed():
+    row = {"id": "p1", "title": "A preprint", "doi": "10.1101/2026.05.11.724388v1"}
+    patch, _ = plan_update(row, _meta(abstract="New."), None)
+    assert patch["embedded_at"] is None and patch["enriched_at"] is None
+
+
+def test_year_change_moves_a_year_only_published_at():
+    row = {"id": "p1", "title": None, "year": 2025, "published_at": "2025-01-01"}
+    patch, _ = plan_update(row, _meta(year=2026), None)
+    assert patch["published_at"] == "2026-01-01"
+
+
+def test_year_change_keeps_a_real_publication_date():
+    row = {"id": "p1", "title": None, "year": 2025, "published_at": "2025-06-14"}
+    patch, _ = plan_update(row, _meta(year=2026), None)
+    assert "published_at" not in patch
+
+
+def test_unchanged_author_list_is_not_rewritten():
+    row = {
+        "id": "p1",
+        "title": "A preprint",
+        "doi": "10.1101/2026.05.11.724388",
+        "authors": ["Ada Lovelace"],
+        "venue": "bioRxiv",
+        "year": 2026,
+        "abstract": None,
+    }
+    patch, _ = plan_update(row, _meta(), None)
+    assert patch == {}
+
+
+def test_a_doi_collision_is_reported_even_when_nothing_else_changes():
+    # The DOI was the only change and another row holds it: no patch, but the
+    # duplicate pair is exactly what a person needs to hear about.
+    row = {
+        "id": "p1",
+        "title": "A preprint",
+        "doi": "10.1101/2026.05.11.724388v1",
+        "authors": ["Ada Lovelace"],
+        "venue": "bioRxiv",
+        "year": 2026,
+        "abstract": None,
+    }
+    patch, note = plan_update(row, _meta(), doi_owner="p2")
+    assert patch == {}
+    assert note == "duplicate of p2"
+
+
+class _Update:
+    """Records the filters a backfill write applies; matches nothing if told to."""
+
+    def __init__(self, matches: bool):
+        self.matches, self.filters = matches, []
+
+    def table(self, _n):
+        return self
+
+    def update(self, _patch):
+        return self
+
+    def eq(self, col, val):
+        self.filters.append(("eq", col, val))
+        return self
+
+    def is_(self, col, val):
+        self.filters.append(("is", col, val))
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": [{"id": "p1"}] if self.matches else []})()
+
+
+def test_backfill_write_is_conditional_on_nobody_editing_meanwhile():
+    from api.backfill_metadata import _write_unless_edited
+
+    svc = _Update(matches=True)
+    assert _write_unless_edited(svc, {"id": "p1", "edited_at": None}, {"title": "x"})
+    assert ("is", "edited_at", "null") in svc.filters
+
+    stamp = "2026-10-02T09:30:00+00:00"
+    svc = _Update(matches=False)  # someone edited it after we read it
+    assert not _write_unless_edited(svc, {"id": "p1", "edited_at": stamp}, {"title": "x"})
+    assert ("eq", "edited_at", stamp) in svc.filters

@@ -35,6 +35,12 @@ export interface Paper {
   code_url: string | null;
   data_url: string | null;
   enriched_at: string | null;
+  /** Last hand correction or re-resolve: who, when. `edited_at` is also the
+   *  concurrency token an edit must send back. */
+  edited_by: string | null;
+  edited_at: string | null;
+  /** Fields a person corrected by hand; the resolver never overwrites these. */
+  edited_fields: string[];
 }
 
 export interface PaperPost {

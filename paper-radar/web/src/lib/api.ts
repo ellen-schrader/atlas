@@ -106,6 +106,39 @@ export function postPaper(
   });
 }
 
+/** What a person may correct on a paper. Not `doi` or `url`: those are dedup
+ *  keys, and changing one is a merge, not an edit. */
+export interface PaperCorrection {
+  title?: string | null;
+  authors?: string[];
+  venue?: string | null;
+  year?: number | null;
+  abstract?: string | null;
+  code_url?: string | null;
+  data_url?: string | null;
+}
+
+export interface PaperEditResult {
+  status: "updated" | "unchanged" | "unresolved";
+  paper: Record<string, unknown>;
+  /** Only set by POST /papers/{id}/resolve, which the web app does not call. */
+  duplicate_of: string | null;
+}
+
+/** Correct a paper by hand, for every lab that holds it. `expectedEditedAt` is
+ *  the paper's `edited_at` as the form was loaded; if it has moved since, this
+ *  rejects with a 409 rather than silently overwriting someone else's fix. */
+export function fixPaperMetadata(
+  paperId: string,
+  expectedEditedAt: string | null,
+  fields: PaperCorrection,
+): Promise<PaperEditResult> {
+  return authedRequest<PaperEditResult>(`/papers/${encodeURIComponent(paperId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ expected_edited_at: expectedEditedAt, ...fields }),
+  });
+}
+
 /** Call the Atlas API; throws the API's `detail` on error. */
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let res: Response;
