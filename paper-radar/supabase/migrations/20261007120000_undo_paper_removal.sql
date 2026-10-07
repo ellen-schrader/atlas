@@ -40,6 +40,24 @@ create table public.removed_posts (
 
 create index removed_posts_team_idx on public.removed_posts (team_id, removed_at desc);
 
+-- How long a tombstone is worth keeping. The undo itself needs seconds, but the
+-- row is also the answer to "who removed that paper, and when" — a question
+-- someone asks weeks later, not immediately. Past this it is neither, so it
+-- goes.
+--
+-- Pruned from the delete trigger rather than on a schedule: the table only
+-- grows when a paper is removed, so the cleanup runs exactly when it could
+-- start to matter, and there is no cron to own. Removals are rare enough that
+-- the extra delete costs nothing.
+create function public.prune_removed_posts()
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+    delete from public.removed_posts where removed_at < now() - interval '90 days';
+$$;
+
 -- AFTER DELETE, so a removal that is rolled back leaves no tombstone.
 create function public.capture_removed_post()
 returns trigger
@@ -48,6 +66,7 @@ security definer
 set search_path = public
 as $$
 begin
+    perform public.prune_removed_posts();
     insert into public.removed_posts (
         id, paper_id, team_id, posted_by, posted_by_label, posted_at,
         source, source_pdf, page, via, note, tags, removed_by
@@ -118,3 +137,6 @@ create policy removed_posts_select on public.removed_posts for select
 grant select on public.removed_posts to authenticated;
 grant select, insert, update, delete on public.removed_posts to service_role;
 grant execute on function public.restore_post(uuid) to authenticated;
+-- Not granted to authenticated: the trigger calls it as definer, and nothing in
+-- the app has a reason to prune on demand.
+grant execute on function public.prune_removed_posts() to service_role;
