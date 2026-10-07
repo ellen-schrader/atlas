@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Quote, Share2, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Pencil, Quote, Share2, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
@@ -21,6 +21,11 @@ import {
   paperLink,
 } from "@/lib/paperExport";
 import { useToast } from "@/components/Toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ApiError, type PaperCorrection, fixPaperMetadata } from "@/lib/api";
 import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
@@ -73,6 +78,11 @@ export function PaperDetail({
   const canonical = [...new Set([...p.tags, ...p.keywords])];
   const { data: role } = useMyRole(teamId, userId);
   const canDelete = post.posted_by === userId || role === "owner";
+  // The API's rule (can_edit_paper) is poster-or-owner in *any* lab holding the
+  // paper; this lab's half of it is what the UI can know cheaply, and it is the
+  // same gate as removal. The server is the authority either way.
+  const canEdit = canDelete;
+  const [editing, setEditing] = useState(false);
 
   return (
     <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
@@ -106,71 +116,80 @@ export function PaperDetail({
       </div>
 
       <div className={cn("p-6", !fullPage && "min-h-0 flex-1 overflow-y-auto")}>
-        <h2 className="text-balance text-[21px] font-bold leading-tight tracking-tight">
-          {p.title ?? p.url}
-        </h2>
-        {p.authors.length > 0 && <AuthorList authors={p.authors} />}
-        <PaperIdentifier doi={p.doi} url={p.url} />
-
-        {/* Two clusters, so the row is navigable rather than six equal buttons.
-            Left: what you do with the paper and your own state on it. Right,
-            pushed over by ml-auto: getting it out of Atlas, then the admin
-            action. Within a cluster the gap is 8px; between them at least 24. */}
-        <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2">
-          <a
-            href={safeHref(p.url)}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(ACTION_BTN, "bg-accent font-semibold text-accent-fg hover:brightness-110")}
-          >
-            Read paper <ExternalLink size={13} />
-          </a>
-          {safeHref(p.code_url) && <LinkBtn href={safeHref(p.code_url)!}>Code</LinkBtn>}
-          {safeHref(p.data_url) && <LinkBtn href={safeHref(p.data_url)!}>Data</LinkBtn>}
-          <BookmarkButton
-            paperId={p.id}
-            teamId={teamId}
-            userId={userId}
-            bookmarked={bookmarked}
-            showLabel
-            className={cn(
-              ACTION_BTN,
-              "justify-center border border-border font-medium hover:border-accent hover:text-accent",
-              "aria-pressed:border-accent aria-pressed:bg-accent-weak aria-pressed:text-accent",
-            )}
-          />
-          <MarkReadButton paperId={p.id} teamId={teamId} userId={userId} />
-
-          <span className="ml-auto flex items-center gap-2 pl-6">
-            <CitePaperButton
-              paper={{
-                id: p.id,
-                title: p.title,
-                authors: p.authors ?? [],
-                venue: p.venue,
-                year: p.year,
-                doi: p.doi,
-                url: p.url,
-                abstract: p.abstract,
-              }}
-            />
-            <SharePost paper={p} />
-            {canDelete && (
-              <PostMenu
-                teamId={teamId}
-                teamName={teamName}
-                postId={post.id}
-                onDeleted={onClose}
-              />
-            )}
-          </span>
-        </div>
-
-        <MetaLabel>Abstract</MetaLabel>
-        {p.abstract ? (
-          <p className="text-sm leading-relaxed text-fg/90">{p.abstract}</p>
+        {editing ? (
+          <MetadataEditor paper={p} teamId={teamId} onDone={() => setEditing(false)} />
         ) : (
-          <p className="text-sm italic text-muted">No abstract available.</p>
+          <>
+            <h2 className="text-balance text-[21px] font-bold leading-tight tracking-tight">
+              {p.title ?? p.url}
+            </h2>
+            {p.authors.length > 0 && <AuthorList authors={p.authors} />}
+            <PaperIdentifier doi={p.doi} url={p.url} />
+
+            {/* Two clusters, so the row is navigable rather than six equal buttons.
+                Left: what you do with the paper and your own state on it. Right,
+                pushed over by ml-auto: getting it out of Atlas, then the admin
+                action. Within a cluster the gap is 8px; between them at least 24. */}
+            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2">
+              <a
+                href={safeHref(p.url)}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(ACTION_BTN, "bg-accent font-semibold text-accent-fg hover:brightness-110")}
+              >
+                Read paper <ExternalLink size={13} />
+              </a>
+              {safeHref(p.code_url) && <LinkBtn href={safeHref(p.code_url)!}>Code</LinkBtn>}
+              {safeHref(p.data_url) && <LinkBtn href={safeHref(p.data_url)!}>Data</LinkBtn>}
+              <BookmarkButton
+                paperId={p.id}
+                teamId={teamId}
+                userId={userId}
+                bookmarked={bookmarked}
+                showLabel
+                className={cn(
+                  ACTION_BTN,
+                  "justify-center border border-border font-medium hover:border-accent hover:text-accent",
+                  "aria-pressed:border-accent aria-pressed:bg-accent-weak aria-pressed:text-accent",
+                )}
+              />
+              <MarkReadButton paperId={p.id} teamId={teamId} userId={userId} />
+
+              <span className="ml-auto flex items-center gap-2 pl-6">
+                <CitePaperButton
+                  paper={{
+                    id: p.id,
+                    title: p.title,
+                    authors: p.authors ?? [],
+                    venue: p.venue,
+                    year: p.year,
+                    doi: p.doi,
+                    url: p.url,
+                    abstract: p.abstract,
+                  }}
+                />
+                <SharePost paper={p} />
+                {(canDelete || canEdit) && (
+                  <PostMenu
+                    teamId={teamId}
+                    teamName={teamName}
+                    postId={post.id}
+                    canEdit={canEdit}
+                    canDelete={canDelete}
+                    onFix={() => setEditing(true)}
+                    onDeleted={onClose}
+                  />
+                )}
+              </span>
+            </div>
+
+            <MetaLabel>Abstract</MetaLabel>
+            {p.abstract ? (
+              <p className="text-sm leading-relaxed text-fg/90">{p.abstract}</p>
+            ) : (
+              <p className="text-sm italic text-muted">No abstract available.</p>
+            )}
+          </>
         )}
 
         <MetaLabel>Tags</MetaLabel>
@@ -183,8 +202,8 @@ export function PaperDetail({
               Posted {posterName ? `by ${posterName} ` : ""}· {formatRelative(post.posted_at)}
             </span>
           </span>
-
         </div>
+        {p.edited_at && <EditedLine paper={p} userId={userId} />}
         {post.note && (
           <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
             “{post.note}”
@@ -275,27 +294,33 @@ function SharePost({ paper }: { paper: Paper }) {
   );
 }
 
-/** The rare, restricted, destructive action, one step back from the row. A
- *  single-item menu looks odd, but a paper that vanishes for the whole lab is
- *  not something to put a stray click away from Save. */
+/** The rare, restricted actions, one step back from the row: editing the
+ *  paper (which changes it for every lab holding it) and removing it from this
+ *  lab. Neither belongs a stray click away from Save. */
 function PostMenu({
   teamId,
   teamName,
   postId,
+  canEdit,
+  canDelete,
+  onFix,
   onDeleted,
 }: {
   teamId: string;
   teamName: string;
   postId: string;
+  canEdit: boolean;
+  canDelete: boolean;
+  onFix: () => void;
   onDeleted?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // The removal is in flight. Nothing may close the menu while it is, or the
-  // confirmation unmounts with the request still outstanding and its failure
-  // has nowhere to go: the paper stays, and the user is told nothing. Same
-  // reason AddPaperDialog refuses to close mid-import.
-  const [removing, setRemoving] = useState(false);
+  // A write is in flight. Nothing may close the menu while it is, or the panel
+  // unmounts with the request still outstanding and its failure has nowhere to
+  // go: the paper stays, and the user is told nothing. Same reason
+  // AddPaperDialog refuses to close mid-import.
+  const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -303,8 +328,8 @@ function PostMenu({
     // Swallow the gesture rather than stop listening for it. The hook stops
     // propagation in the capture phase, so staying armed is also what keeps an
     // Escape or a backdrop click from reaching the Modal behind this menu and
-    // closing the whole dialog with the removal still outstanding.
-    if (removing) return;
+    // closing the whole dialog with the write still outstanding.
+    if (busy) return;
     setOpen(false);
     // Focus goes back only on Escape. A keyboard user is otherwise dropped at
     // the top of the document — but after a click elsewhere, moving focus onto
@@ -333,7 +358,7 @@ function PostMenu({
         aria-expanded={open}
         ref={trigger}
         aria-label="More actions for this paper"
-        disabled={removing}
+        disabled={busy}
         onClick={() => setOpen((o) => !o)}
         className={cn(
           "grid h-[38px] w-[38px] shrink-0 place-items-center rounded-control transition",
@@ -352,27 +377,270 @@ function PostMenu({
               teamId={teamId}
               teamName={teamName}
               onCancel={() => setConfirming(false)}
-              onBusyChange={setRemoving}
+              onBusyChange={setBusy}
               onDeleted={onDeleted}
             />
           ) : (
-            <MenuItem
-              icon={<Trash2 size={14} />}
-              // The ellipsis is the convention for "a confirmation follows",
-              // which is what makes the click safe to make.
-              label="Remove from this lab…"
-              // Short, and not a rehearsal of the confirmation: the same warning
-              // at both steps reads as routine by the time it matters. It also
-              // stops "Removes it for everyone" sitting under a label that
-              // already begins "Remove".
-              hint="Affects everyone in the lab"
-              danger
-              onClick={() => setConfirming(true)}
-            />
+            <>
+              {canEdit && (
+                <MenuItem
+                  icon={<Pencil size={14} />}
+                  label="Edit"
+                  onClick={() => {
+                    setOpen(false);
+                    onFix();
+                  }}
+                />
+              )}
+              {canEdit && canDelete && <div className="border-t border-border" role="separator" />}
+              {canDelete && (
+                <MenuItem
+                  icon={<Trash2 size={14} />}
+                  // The confirmation that follows names the lab and says who
+                  // loses the paper; the menu item doesn't need to rehearse it.
+                  label="Delete"
+                  danger
+                  onClick={() => setConfirming(true)}
+                />
+              )}
+            </>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Every cached view of a paper's metadata, so a correction shows everywhere at
+ *  once rather than only in the dialog that made it. */
+function useRefreshPaper(teamId: string) {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: ["paper-post"] });
+    void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
+    void qc.invalidateQueries({ queryKey: ["reading-list"] });
+  };
+}
+
+/** The correction form, in place of the paper's header while it is open. Inline
+ *  rather than a dialog for the same reason as the removal confirmation: the
+ *  detail is often already inside a Modal, and nested focus traps are worse. */
+function MetadataEditor({
+  paper,
+  teamId,
+  onDone,
+}: {
+  paper: Paper;
+  teamId: string;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const refresh = useRefreshPaper(teamId);
+  // The token is the edited_at the form was loaded from, captured once: a
+  // background refetch must not quietly move it under an open form, or the
+  // server could no longer tell that someone else's fix landed meanwhile.
+  const [token] = useState(paper.edited_at);
+  const [title, setTitle] = useState(paper.title ?? "");
+  const [authors, setAuthors] = useState((paper.authors ?? []).join("\n"));
+  const [venue, setVenue] = useState(paper.venue ?? "");
+  const [year, setYear] = useState(paper.year ? String(paper.year) : "");
+  const [abstract, setAbstract] = useState(paper.abstract ?? "");
+  const [codeUrl, setCodeUrl] = useState(paper.code_url ?? "");
+  const [dataUrl, setDataUrl] = useState(paper.data_url ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<{ message: string; stale: boolean } | null>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => titleRef.current?.focus(), []);
+
+  /** Only what changed: the server holds exactly the fields sent, and a field
+   *  re-sent untouched would stop the resolver ever improving it. */
+  function changes(): PaperCorrection {
+    const out: PaperCorrection = {};
+    const text = (v: string) => v.trim() || null;
+    if (text(title) !== paper.title) out.title = text(title);
+    const list = authors
+      .split("\n")
+      .map((a) => a.trim())
+      .filter(Boolean);
+    if (JSON.stringify(list) !== JSON.stringify(paper.authors ?? [])) out.authors = list;
+    if (text(venue) !== paper.venue) out.venue = text(venue);
+    const y = year.trim() ? Number(year) : null;
+    if (y !== paper.year) out.year = y;
+    if (text(abstract) !== paper.abstract) out.abstract = text(abstract);
+    if (text(codeUrl) !== paper.code_url) out.code_url = text(codeUrl);
+    if (text(dataUrl) !== paper.data_url) out.data_url = text(dataUrl);
+    return out;
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    const fields = changes();
+    if (Object.keys(fields).length === 0) {
+      onDone();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await fixPaperMetadata(paper.id, token, fields);
+      // Write the saved row into the cache before refetching. Reopening the
+      // form must read the new edited_at: the old one would send this user's
+      // own edit back as "someone else changed this paper".
+      qc.setQueriesData<PaperPost | null>({ queryKey: ["paper-post"] }, (old) =>
+        old && old.papers.id === paper.id
+          ? { ...old, papers: { ...old.papers, ...(result.paper as Partial<Paper>) } }
+          : old,
+      );
+      refresh();
+      toast({ message: "Paper updated." });
+      onDone();
+    } catch (err) {
+      const stale = err instanceof ApiError && err.status === 409;
+      setError({ message: err instanceof Error ? err.message : String(err), stale });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reload() {
+    // Throw the form away rather than merge: the other edit may well have fixed
+    // what this one was about to.
+    refresh();
+    onDone();
+  }
+
+  return (
+    <form onSubmit={save} className="flex flex-col gap-3">
+      <h2 className="text-lg font-bold tracking-tight">Edit paper</h2>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="fix-title">
+          Title <span className="text-danger">*</span>
+        </Label>
+        <Input
+          id="fix-title"
+          ref={titleRef}
+          required
+          maxLength={2000}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="fix-authors">Authors (one per line)</Label>
+        <Textarea
+          id="fix-authors"
+          rows={3}
+          value={authors}
+          onChange={(e) => setAuthors(e.target.value)}
+        />
+      </div>
+      <div className="grid grid-cols-[1fr_7rem] gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="fix-venue">Journal or venue</Label>
+          <Input id="fix-venue" maxLength={500} value={venue} onChange={(e) => setVenue(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="fix-year">Year</Label>
+          <Input
+            id="fix-year"
+            type="number"
+            min={1000}
+            max={2200}
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="fix-abstract">Abstract</Label>
+        <Textarea
+          id="fix-abstract"
+          rows={6}
+          value={abstract}
+          onChange={(e) => setAbstract(e.target.value)}
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="fix-code">Code link</Label>
+          <Input
+            id="fix-code"
+            type="url"
+            value={codeUrl}
+            onChange={(e) => setCodeUrl(e.target.value)}
+            placeholder="https://github.com/…"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="fix-data">Data link</Label>
+          <Input
+            id="fix-data"
+            type="url"
+            value={dataUrl}
+            onChange={(e) => setDataUrl(e.target.value)}
+            placeholder="https://zenodo.org/…"
+          />
+        </div>
+      </div>
+
+      {error && (
+        <p className="text-xs text-danger">
+          {error.message}{" "}
+          {error.stale && (
+            <button type="button" onClick={reload} className="font-semibold underline">
+              Reload
+            </button>
+          )}
+        </p>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" onClick={onDone} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={busy || !title.trim()}>
+          {busy ? "Saving…" : "Save for every lab"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** "Edited by Ellen · 2 Oct". The editor's name is read under the
+ *  caller's own RLS: profiles are visible only to people who share a lab, so for
+ *  an editor elsewhere the row simply isn't there, and the line says so rather
+ *  than fetching the name with the service role — which would leak who they are
+ *  across exactly the boundary that policy draws. */
+function EditedLine({ paper, userId }: { paper: Paper; userId: string }) {
+  const editor = paper.edited_by;
+  const { data: name, isLoading } = useQuery({
+    queryKey: ["profile-name", editor],
+    enabled: !!editor && editor !== userId,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", editor!)
+        .maybeSingle();
+      return (data?.display_name as string | undefined) ?? null;
+    },
+  });
+  if (isLoading) return null;
+  const who = !editor
+    ? ""
+    : editor === userId
+      ? " by you"
+      : name
+        ? ` by ${name}`
+        : " outside your lab";
+  return (
+    <p className="mt-1.5 text-xs text-muted" title={formatDate(paper.edited_at)}>
+      Edited{who} · {formatDate(paper.edited_at)}
+    </p>
   );
 }
 

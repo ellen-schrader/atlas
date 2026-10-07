@@ -1,7 +1,9 @@
 # Editing paper metadata — plan
 
-Status: proposed. The `⋯` post menu it builds on shipped in #112
-(`web/src/components/PaperDetail.tsx::PostMenu`).
+Status: implemented (migration `20261007140000_paper_metadata_editing.sql`). The
+`⋯` post menu it builds on shipped in #112
+(`web/src/components/PaperDetail.tsx::PostMenu`). Where the build departed from the
+plan below, see **Changes made while building** at the end.
 
 ## Why
 
@@ -305,3 +307,62 @@ service role, which is what keeps the authorization rule in exactly one place.
   embeddings read `papers` regardless.
 - Suggest-and-approve review. Correct for a multi-lab Atlas, absurd overhead for
   one lab fixing its own typo.
+
+## Changes made while building
+
+Checking the plan against the code turned up five gaps. Each one fails silently
+in the multi-lab case the plan is designed for.
+
+- **Re-resolve is recorded too.** As planned, only hand edits wrote history and
+  moved `edited_at`. But Re-resolve is the one write that can *discard* a hand
+  correction, which makes it the last thing that should go unrecorded. And the
+  stale-write token is `edited_at`, so a Re-resolve that didn't move it could
+  race a hand edit undetected. Both operations now go through the same write,
+  and `paper_edits.kind` says which one it was (`edit` | `resolve`).
+- **One atomic write, via a service-role RPC.** Checking the token, updating the
+  row and inserting the history as separate PostgREST calls would let an edit
+  land with no history behind it. `apply_paper_edit` does all three in one
+  transaction. It is granted to `service_role` only, and refuses any column
+  outside an allow-list, so `url`/`url_norm` can't be written even by mistake.
+  Authorization stays in one place: `can_edit_paper(p_paper)` is written in terms
+  of `auth.uid()`, so the API calls it with the caller's JWT, and the same
+  function can back an RLS policy later.
+- **The Re-resolve override is enforced by the server.** The API returns 409
+  when fields are held unless the request has `discard_edits: true`. A confirm
+  dialog only in the web client would not stop any other client (MCP, scripts).
+- **History is pruned by count, not age.** Each paper keeps its newest 50 edits.
+  Pruning by age would eventually delete the record of the edit that is still
+  live on the row, which is the one most worth keeping.
+- **An edit kicks off re-embedding and re-tagging, not just a reset.**
+  Setting `embedded_at`/`enriched_at` to null only helps if a backfill runs, and
+  backfills are run by hand. The PATCH queues the same background tasks
+  `/posts` does, and only when `title` or `abstract` changed.
+
+Also:
+
+- A title can't be cleared by hand (400): an untitled row is exactly what the
+  resolver backfills.
+- Only fields that actually changed become held. Saving the form without
+  changing a field doesn't take that field away from future backfills.
+- `plan_update` now compares the author and keyword lists before writing them,
+  so an unchanged list doesn't make a history entry. It also re-embeds when the
+  abstract changes, not only the title, and moves `published_at` with `year`
+  (`follow_year`, shared with the API).
+- The audit line says *"Metadata refreshed"* rather than *"corrected"* when the
+  last write was a Re-resolve (no held fields).
+- `PaperDetail.tsx` approximates `can_edit_paper` with this lab's half of the
+  rule (the same gate as removal). The server is the authority. A poster in
+  another lab simply won't see the menu here.
+
+**Re-resolve is not in the UI (yet).** After using it, it turned out to have no
+moment where a person would reach for it. The papers people notice are wrong
+are mostly bot-walled, so fetching the same URL again returns the same nothing.
+The case it does fix — the resolver has since been fixed — is invisible to a
+reader and is already covered across the corpus by `api/backfill_metadata.py`.
+It earns a button once a link or DOI can be corrected: "point it at the right
+URL, then fetch". So `POST /papers/{id}/resolve` stays in place, with its
+history, rate limit and override guard, and the web app does not call it.
+
+The menu item is **"Edit paper…"** rather than "Fix metadata…", and the form
+has no explanatory paragraph; the button text "Save for every lab" carries the
+one thing that has to be said.

@@ -38,6 +38,7 @@ from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url
 from . import embeddings, enrichment, integrations, maps, teams_integration
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
+from .backfill_metadata import _doi_owner, follow_year, plan_update
 from .config import get_api_settings
 from .deps import require_token
 from .supa import get_user_id, service_client, user_client
@@ -153,7 +154,7 @@ class PostResponse(BaseModel):
 # the 1024-dim embedding into every response.
 PAPER_COLUMNS = (
     "id, url, doi, title, authors, abstract, venue, year, keywords, tags, "
-    "code_url, data_url, enriched_at"
+    "code_url, data_url, enriched_at, edited_by, edited_at, edited_fields"
 )
 POST_COLUMNS = f"id, posted_at, note, posted_by, posted_by_label, tags, papers({PAPER_COLUMNS})"
 
@@ -323,6 +324,10 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
     """
     if row.get("title") or not meta.title:
         return False
+    # A person has corrected this row's title. It can't be blank in that case
+    # (the edit endpoint refuses that), but the hold is the rule, not the blank.
+    if "title" in (row.get("edited_fields") or []):
+        return False
     patch = {
         "title": meta.title,
         "metadata_source": meta.source,
@@ -337,6 +342,10 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
         value = getattr(meta, key)
         if value is not None:
             patch[key] = value
+    # A row can be untitled and still have hand-corrected fields (the API allows
+    # editing venue or year without a title); those are not the resolver's to fill.
+    for key in row.get("edited_fields") or []:
+        patch.pop(key, None)
     try:
         service_client().table("papers").update(patch).eq("id", row["id"]).execute()
     except Exception as exc:  # a unique-DOI clash shouldn't fail the post
@@ -361,7 +370,7 @@ def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bo
 
     found = (
         svc.table("papers")
-        .select("id, title, embedded_at")
+        .select("id, title, embedded_at, edited_fields")
         .eq("url_norm", url_norm)
         .limit(1)
         .execute()
@@ -373,7 +382,7 @@ def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bo
     if doi:
         by_doi = (
             svc.table("papers")
-            .select("id, title, embedded_at")
+            .select("id, title, embedded_at, edited_fields")
             .eq("doi", doi)
             .limit(1)
             .execute()
@@ -592,6 +601,247 @@ def create_post(
         paper_id=paper_id,
         already_posted=already,
         paper=_resolved(meta, url, url_norm),
+    )
+
+
+# --- correcting a paper ----------------------------------------------------
+#
+# `papers` is global: one row serves every lab holding the paper, so a correction
+# lands for all of them. Two operations, deliberately separate (see
+# docs/paper-metadata-editing-plan.md): Re-resolve, for "the resolver was broken
+# and has since been fixed", and fix-by-hand, for "no registry will ever have
+# this". Both ask `can_edit_paper` as the caller and write through
+# `apply_paper_edit` as the service role, so the authorization rule exists once
+# and every write carries its history and concurrency check atomically.
+
+# What a person may correct. Not `doi` or `url`: both are unique dedup keys, and
+# changing one can collide with another row or split one paper into two
+# identities across labs. That is a merge, not an edit.
+EDITABLE_FIELDS = ("title", "authors", "venue", "year", "abstract", "code_url", "data_url")
+
+# Everything an edit compares against or reports back. Never `*`: the embedding.
+_EDIT_COLUMNS = (
+    "id, url, doi, title, authors, venue, year, abstract, keywords, code_url, data_url, "
+    "metadata_source, published_at, edited_by, edited_at, edited_fields"
+)
+
+
+class PaperEditRequest(BaseModel):
+    """A hand correction. Only the fields present are considered.
+
+    ``expected_edited_at`` is the row's ``edited_at`` as the form was rendered from
+    it — required, and null is a real value ("never edited when I loaded it").
+    """
+
+    expected_edited_at: datetime | None
+    title: str | None = Field(default=None, max_length=2_000)
+    authors: list[Author] = Field(default=[], max_length=1_000)
+    venue: str | None = Field(default=None, max_length=500)
+    year: int | None = Field(default=None, ge=1000, le=2200)
+    abstract: str | None = Field(default=None, max_length=100_000)
+    code_url: str | None = Field(default=None, max_length=2_000)
+    data_url: str | None = Field(default=None, max_length=2_000)
+
+
+class ReresolveRequest(BaseModel):
+    expected_edited_at: datetime | None
+    # Re-resolve takes whatever the publisher says, including over fields a person
+    # corrected. When there are any, the caller must say so — enforced here, not
+    # only as a confirm in the web client, so no other client can skip it.
+    discard_edits: bool = False
+
+
+class PaperEditResponse(BaseModel):
+    # "updated" | "unchanged" | "unresolved" (the publisher gave us nothing usable)
+    status: Literal["updated", "unchanged", "unresolved"]
+    paper: dict
+    # Re-resolve found a DOI another row already holds: the rest was written, the
+    # DOI was not, and the pair needs merging by a person.
+    duplicate_of: str | None = None
+
+
+def _require_paper_editor(token: str, paper_id: str) -> str:
+    """The caller's id, or 403 — asked of the database as the caller.
+
+    One answer for "no such paper" and "not yours", so the endpoint is not an
+    oracle for which papers other labs hold.
+    """
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    allowed = user_client(token).rpc("can_edit_paper", {"p_paper": paper_id}).execute().data
+    if allowed is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Only whoever shared this paper, or an owner of a lab holding it, "
+            "can correct it.",
+        )
+    return user_id
+
+
+def _load_paper(paper_id: str) -> dict:
+    found = (
+        service_client().table("papers").select(_EDIT_COLUMNS).eq("id", paper_id).limit(1).execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="That paper no longer exists.")
+    return found.data[0]
+
+
+def _is_stale(row: dict, expected: datetime | None) -> bool:
+    return _parse_ts(row.get("edited_at")) != expected
+
+
+_STALE = "Someone else changed this paper since you opened it. Reload to see their version."
+
+
+def _apply_edit(
+    paper_id: str, user_id: str, kind: str, expected: datetime | None, patch: dict, held: list[str]
+) -> None:
+    """Write through apply_paper_edit; its errors become honest HTTP answers."""
+    try:
+        service_client().rpc(
+            "apply_paper_edit",
+            {
+                "p_paper": paper_id,
+                "p_editor": user_id,
+                "p_kind": kind,
+                "p_expected": expected.isoformat() if expected else None,
+                "p_patch": patch,
+                "p_held": held,
+            },
+        ).execute()
+    except Exception as exc:
+        code = getattr(exc, "code", None)
+        if code == "40001":
+            raise HTTPException(status_code=409, detail=_STALE) from exc
+        if code == "P0002":  # no_data_found
+            raise HTTPException(status_code=404, detail="That paper no longer exists.") from exc
+        if code == "23505":  # unique_violation — the DOI guard lost a race
+            raise HTTPException(
+                status_code=409, detail="Another paper already holds that DOI."
+            ) from exc
+        raise
+
+
+def _rederive(background: BackgroundTasks, paper_id: str, patch: dict, row: dict) -> None:
+    """Re-embed and re-tag after a change to what they are computed from.
+
+    Only title and abstract feed them. Re-tagging rewrites `papers.tags`, which
+    every lab holding the paper sees, so fixing a code link must not trigger it.
+    """
+    if "title" not in patch and "abstract" not in patch:
+        return
+    title = patch.get("title", row.get("title"))
+    abstract = patch.get("abstract", row.get("abstract"))
+    if get_api_settings().voyage_api_key:
+        background.add_task(_embed_and_store, paper_id, title, abstract)
+    background.add_task(_enrich_and_store, paper_id, title, abstract)
+
+
+def _clean_edit(req: PaperEditRequest) -> dict:
+    """The supplied fields, trimmed, with blanks as null — or a 400."""
+    out: dict = {}
+    for field in EDITABLE_FIELDS:
+        if field not in req.model_fields_set:
+            continue
+        value = getattr(req, field)
+        if field == "authors":
+            value = [a.strip() for a in value if a.strip()]
+        elif isinstance(value, str):
+            value = value.strip() or None
+        if field in ("code_url", "data_url") and value:
+            _reject_dangerous_url(value)
+        out[field] = value
+    if "title" in out and not out["title"]:
+        # An untitled row is what the resolver backfills — clearing a title by hand
+        # would hand the row straight back to the machinery this edit overrides.
+        raise HTTPException(status_code=400, detail="A paper needs a title.")
+    return out
+
+
+@app.patch("/papers/{paper_id}", response_model=PaperEditResponse)
+def fix_paper(
+    paper_id: str,
+    req: PaperEditRequest,
+    background: BackgroundTasks,
+    token: str = Depends(require_token),
+) -> PaperEditResponse:
+    """Correct a paper's metadata by hand, for every lab that holds it.
+
+    Only fields that actually change are written, and only those become held —
+    re-saving the form untouched must not opt the rest of the row out of backfill.
+    """
+    user_id = _require_paper_editor(token, paper_id)
+    supplied = _clean_edit(req)
+    row = _load_paper(paper_id)
+    if _is_stale(row, req.expected_edited_at):
+        raise HTTPException(status_code=409, detail=_STALE)
+
+    patch = {k: v for k, v in supplied.items() if v != row.get(k)}
+    if not patch:
+        return PaperEditResponse(status="unchanged", paper=row)
+
+    held = sorted(set(row.get("edited_fields") or []) | set(patch))
+    follow_year(patch, row)
+    # Provenance only — what the backfill respects is `edited_fields`.
+    patch["metadata_source"] = "manual"
+    if "title" in patch or "abstract" in patch:
+        patch["embedded_at"] = None
+        patch["enriched_at"] = None
+
+    _apply_edit(paper_id, user_id, "edit", req.expected_edited_at, patch, held)
+    _rederive(background, paper_id, patch, row)
+    return PaperEditResponse(status="updated", paper=_load_paper(paper_id))
+
+
+@app.post("/papers/{paper_id}/resolve", response_model=PaperEditResponse)
+def reresolve_paper(
+    paper_id: str,
+    req: ReresolveRequest,
+    background: BackgroundTasks,
+    token: str = Depends(require_token),
+) -> PaperEditResponse:
+    """Fetch the paper's metadata again and take what the publisher says.
+
+    The right fix when the resolver was the problem and has since been fixed.
+    Never blanks a field (an empty answer leaves the old value), and asking for it
+    clears every hand hold — which is why it must be asked for explicitly when
+    there are any.
+    """
+    user_id = _require_paper_editor(token, paper_id)
+    row = _load_paper(paper_id)
+    # Both checked before the fetch, so a request that cannot succeed costs no
+    # outbound call and no rate-limit quota.
+    if _is_stale(row, req.expected_edited_at):
+        raise HTTPException(status_code=409, detail=_STALE)
+    held = row.get("edited_fields") or []
+    if held and not req.discard_edits:
+        raise HTTPException(
+            status_code=409,
+            detail="Fields corrected by hand would be overwritten: " + ", ".join(held) + ".",
+        )
+
+    # Same SSRF guard and the same budget as /resolve: this is the same outbound
+    # fetch, and must not be an unmetered door into it.
+    url = _validated_fetch_url(row["url"])
+    _resolve_limiter.check(user_id)
+    meta = fetch_metadata(url)
+
+    owner = _doi_owner(service_client(), _norm_doi(meta.doi), paper_id)
+    patch, note = plan_update(row, meta, owner)
+    if note == "unresolved":
+        return PaperEditResponse(status="unresolved", paper=row)
+    duplicate_of = owner if note else None
+    if not patch and not held:
+        return PaperEditResponse(status="unchanged", paper=row, duplicate_of=duplicate_of)
+
+    _apply_edit(paper_id, user_id, "resolve", req.expected_edited_at, patch, [])
+    _rederive(background, paper_id, patch, row)
+    return PaperEditResponse(
+        status="updated" if patch else "unchanged",
+        paper=_load_paper(paper_id),
+        duplicate_of=duplicate_of,
     )
 
 
