@@ -35,6 +35,8 @@ export interface AppContext {
   team: Team;
   userId: string;
   displayName: string;
+  /** Width of the whole app shell (nav included) — Home's breakpoints key off it. */
+  shellWidth: number;
 }
 
 export function useAppContext() {
@@ -76,13 +78,14 @@ export function navModeFor(shellWidth: number): NavMode {
 export default function Layout({ session, team }: { session: Session; team: Team }) {
   const { data: profile } = useProfile(session.user.id);
   const displayName = profile?.display_name ?? session.user.email ?? "You";
-  const ctx: AppContext = { session, team, userId: session.user.id, displayName };
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
   const shellRef = useRef<HTMLDivElement>(null);
   // Before the first measurement the shell is the viewport; reading it avoids a
   // flash of the mobile nav on a desktop load.
-  const mode = navModeFor(useElementWidth(shellRef) || window.innerWidth);
+  const shellWidth = useElementWidth(shellRef) || window.innerWidth;
+  const mode = navModeFor(shellWidth);
+  const ctx: AppContext = { session, team, userId: session.user.id, displayName, shellWidth };
 
   return (
     <div
