@@ -34,8 +34,14 @@ export default function PaperPage() {
   // route change, so arriving from deep in an infinite-scrolled Papers list opens
   // this page already scrolled past the title and the Read/Cite buttons. There is
   // no ScrollRestoration in the app, so do it here.
+  //
+  // Both, because which element scrolls depends on the viewport: Layout clamps
+  // the height and hides overflow only at md and up. Below that the column grows
+  // to its content, <main> never overflows, and the document is the scroller — so
+  // scrolling <main> alone was a no-op on exactly the phones this matters most on.
   useEffect(() => {
     document.querySelector("main")?.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0 });
   }, [paperId]);
 
   const { data: post, isLoading, isError, refetch } = useQuery({

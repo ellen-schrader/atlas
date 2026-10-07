@@ -288,15 +288,22 @@ export default function ReadingList() {
       {total > 0 && (
         <div className="flex flex-col gap-1.5">
           <div
-            role="tablist"
+            // radiogroup, not tablist: these are three mutually exclusive
+            // filters over one list, not three panels. A tablist promises
+            // arrow-key navigation and an aria-controls'd tabpanel, neither of
+            // which exists here — and the same control elsewhere in the app
+            // (AddPaperDialog's ModeSwitch, the Cite format picker) is a
+            // radiogroup already.
+            role="radiogroup"
             aria-label="Which saved papers to show"
             className="flex gap-1 self-start rounded-control bg-surface-2 p-1"
           >
             {VIEWS.map((v) => (
               <button
                 key={v.key}
-                role="tab"
-                aria-selected={view === v.key}
+                type="button"
+                role="radio"
+                aria-checked={view === v.key}
                 onClick={() => setView(v.key)}
                 className={cn(
                   "inline-flex items-center gap-2 rounded-control px-3 py-1.5 text-sm font-medium transition",

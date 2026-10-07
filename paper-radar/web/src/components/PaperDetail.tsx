@@ -292,14 +292,26 @@ function PostMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // The removal is in flight. Nothing may close the menu while it is, or the
+  // confirmation unmounts with the request still outstanding and its failure
+  // has nowhere to go: the paper stays, and the user is told nothing. Same
+  // reason AddPaperDialog refuses to close mid-import.
+  const [removing, setRemoving] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
-  function dismiss() {
+  function dismiss(reason: "escape" | "outside") {
+    // Swallow the gesture rather than stop listening for it. The hook stops
+    // propagation in the capture phase, so staying armed is also what keeps an
+    // Escape or a backdrop click from reaching the Modal behind this menu and
+    // closing the whole dialog with the removal still outstanding.
+    if (removing) return;
     setOpen(false);
-    // Focus returns to the control that opened the menu; otherwise Escape drops
-    // a keyboard user at the top of the document.
-    trigger.current?.focus();
+    // Focus goes back only on Escape. A keyboard user is otherwise dropped at
+    // the top of the document — but after a click elsewhere, moving focus onto
+    // the trigger that removes a paper for the whole lab means the next Space
+    // reopens it.
+    if (reason === "escape") trigger.current?.focus();
   }
   useDismissable(ref, open, dismiss);
 
@@ -322,6 +334,7 @@ function PostMenu({
         aria-expanded={open}
         ref={trigger}
         aria-label="More actions for this paper"
+        disabled={removing}
         onClick={() => setOpen((o) => !o)}
         className={cn(
           "grid h-[38px] w-[38px] shrink-0 place-items-center rounded-control transition",
@@ -340,6 +353,7 @@ function PostMenu({
               teamId={teamId}
               teamName={teamName}
               onCancel={() => setConfirming(false)}
+              onBusyChange={setRemoving}
               onDeleted={onDeleted}
             />
           ) : (
@@ -406,12 +420,15 @@ function DeleteConfirm({
   teamId,
   teamName,
   onCancel,
+  onBusyChange,
   onDeleted,
 }: {
   postId: string;
   teamId: string;
   teamName: string;
   onCancel: () => void;
+  /** Tells the menu a removal is in flight, so it refuses to close over it. */
+  onBusyChange: (busy: boolean) => void;
   onDeleted?: () => void;
 }) {
   const qc = useQueryClient();
@@ -424,6 +441,11 @@ function DeleteConfirm({
   // be the key that removes a paper for a whole lab.
   useEffect(() => cancelRef.current?.focus(), []);
 
+  // Belt and braces: if this ever does unmount mid-write, the menu must not be
+  // left latched shut.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => onBusyChange(false), []);
+
   function refresh() {
     void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
     void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
@@ -432,8 +454,13 @@ function DeleteConfirm({
     void qc.invalidateQueries({ queryKey: ["reading-list"] });
   }
 
+  function markBusy(b: boolean) {
+    setBusy(b);
+    onBusyChange(b);
+  }
+
   async function del() {
-    setBusy(true);
+    markBusy(true);
     setError(null);
     // .select(), so a delete that matched nothing is distinguishable from one
     // that worked: PostgREST answers 204 with no error when RLS or a race
@@ -445,7 +472,9 @@ function DeleteConfirm({
       .delete()
       .eq("id", postId)
       .select("id");
-    setBusy(false);
+    // Released only here: until this point the menu holds itself open, so the
+    // messages below are rendered rather than set on an unmounted component.
+    markBusy(false);
     if (err) {
       setError(err.message);
       return;
@@ -467,7 +496,11 @@ function DeleteConfirm({
       onAction: async () => {
         const { error: undoErr } = await supabase.rpc("restore_post", { p_post: postId });
         refresh();
-        if (undoErr) toast({ message: `Couldn't undo: ${undoErr.message}` });
+        // Throw rather than report: the toast keeps itself open and offers the
+        // button again. A transient failure here used to consume the only Undo
+        // there was, and the tombstone it leaves behind is reachable from no
+        // other screen.
+        if (undoErr) throw new Error(undoErr.message);
       },
     });
     onDeleted?.();
