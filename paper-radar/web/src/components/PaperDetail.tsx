@@ -26,6 +26,26 @@ import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
 
+/** Every control in the paper's action row shares these metrics, so labels sit
+ *  on one baseline and the row has an even rhythm. Only the colour treatment
+ *  differs by tier: filled (primary), outlined (your state), ghost (output). */
+const ACTION_BTN =
+  "inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-control px-3 text-sm transition " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+
+/** Tertiary: no border, muted until hovered. Cite and Share are the same tier,
+ *  which is what stops Share reading as a disabled oddity beside outlined
+ *  buttons. */
+const GHOST_BTN = "font-medium text-muted hover:bg-surface-2 hover:text-fg";
+
+/** Menus float above the card, so they cannot share its background. bg-surface
+ *  is exactly the dialog's own colour, which left the abstract legible straight
+ *  through the panel; surface-2 plus a real shadow separates them. Right-aligned
+ *  to the trigger because every menu in this row now opens from the right side. */
+const POPOVER =
+  "absolute right-0 top-full z-30 mt-1.5 w-60 overflow-hidden rounded-card border border-border " +
+  "bg-surface-2 text-left shadow-[0_8px_24px_rgba(0,0,0,.45)]";
+
 export function PaperDetail({
   post,
   teamId,
@@ -88,40 +108,51 @@ export function PaperDetail({
         {p.authors.length > 0 && <AuthorList authors={p.authors} />}
         <PaperIdentifier doi={p.doi} url={p.url} />
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        {/* Two clusters, so the row is navigable rather than six equal buttons.
+            Left: what you do with the paper and your own state on it. Right,
+            pushed over by ml-auto: getting it out of Atlas, then the admin
+            action. Within a cluster the gap is 8px; between them at least 24. */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-2">
           <a
             href={safeHref(p.url)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-control bg-accent px-3 py-2 text-sm font-semibold text-accent-fg transition hover:brightness-110"
+            className={cn(ACTION_BTN, "bg-accent font-semibold text-accent-fg hover:brightness-110")}
           >
             Read paper <ExternalLink size={13} />
           </a>
           {safeHref(p.code_url) && <LinkBtn href={safeHref(p.code_url)!}>Code</LinkBtn>}
           {safeHref(p.data_url) && <LinkBtn href={safeHref(p.data_url)!}>Data</LinkBtn>}
-          <CitePaperButton
-            paper={{
-              id: p.id,
-              title: p.title,
-              authors: p.authors ?? [],
-              venue: p.venue,
-              year: p.year,
-              doi: p.doi,
-              url: p.url,
-              abstract: p.abstract,
-            }}
-          />
           <BookmarkButton
             paperId={p.id}
             teamId={teamId}
             userId={userId}
             bookmarked={bookmarked}
             showLabel
-            className="rounded-control border border-border px-3 py-2 text-sm font-medium hover:border-accent hover:text-accent aria-pressed:border-accent aria-pressed:text-accent"
+            className={cn(
+              ACTION_BTN,
+              "justify-center border border-border font-medium hover:border-accent hover:text-accent",
+              "aria-pressed:border-accent aria-pressed:bg-accent-weak aria-pressed:text-accent",
+            )}
           />
           <MarkReadButton paperId={p.id} teamId={teamId} userId={userId} />
-          <SharePost paper={p} />
-          {canDelete && <PostMenu teamId={teamId} postId={post.id} onDeleted={onClose} />}
+
+          <span className="ml-auto flex items-center gap-2 pl-6">
+            <CitePaperButton
+              paper={{
+                id: p.id,
+                title: p.title,
+                authors: p.authors ?? [],
+                venue: p.venue,
+                year: p.year,
+                doi: p.doi,
+                url: p.url,
+                abstract: p.abstract,
+              }}
+            />
+            <SharePost paper={p} />
+            {canDelete && <PostMenu teamId={teamId} postId={post.id} onDeleted={onClose} />}
+          </span>
         </div>
 
         <MetaLabel>Abstract</MetaLabel>
@@ -208,12 +239,12 @@ function SharePost({ paper }: { paper: Paper }) {
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-muted transition hover:bg-surface-2 hover:text-fg"
+        className={cn(ACTION_BTN, GHOST_BTN, open && "bg-surface-2 text-fg")}
       >
         <Share2 size={13} /> Share
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
+        <div className={POPOVER}>
           <MenuItem
             icon={copied === "atlas" ? <Check size={14} className="text-accent" /> : <LinkIcon size={14} />}
             label={copied === "atlas" ? "Copied" : "Copy Atlas link"}
@@ -261,12 +292,17 @@ function PostMenu({
         aria-expanded={open}
         aria-label="More actions for this paper"
         onClick={() => setOpen((o) => !o)}
-        className="grid h-[38px] w-9 place-items-center rounded-control border border-border text-muted transition hover:border-accent hover:text-accent"
+        className={cn(
+          "grid h-[38px] w-[38px] shrink-0 place-items-center rounded-control transition",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          // Visibly open, so the trigger and its menu read as one thing.
+          open ? "bg-surface-2 text-fg" : "text-muted hover:bg-surface-2 hover:text-fg",
+        )}
       >
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1.5 w-72 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
+        <div className={cn(POPOVER, "w-72")}>
           {confirming ? (
             <DeleteConfirm
               postId={postId}
@@ -316,7 +352,7 @@ function MenuItem({
       className={cn(
         "flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition",
         "disabled:cursor-not-allowed disabled:opacity-40",
-        danger ? "text-danger hover:bg-danger/10" : "text-fg hover:bg-surface-2",
+        danger ? "text-danger hover:bg-danger/10" : "text-fg hover:bg-surface-3",
       )}
     >
       <span className="shrink-0">{icon}</span>
@@ -345,6 +381,11 @@ function DeleteConfirm({
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // Focus the safe choice, not the destructive one: this confirmation appears
+  // under the pointer, and Enter must not be what removes a paper for the lab.
+  useEffect(() => cancelRef.current?.focus(), []);
 
   async function del() {
     setBusy(true);
@@ -387,8 +428,9 @@ function DeleteConfirm({
         </button>
         <button
           type="button"
+          ref={cancelRef}
           onClick={onCancel}
-          className="rounded-control px-2.5 py-1 text-xs font-medium text-muted transition hover:text-fg"
+          className="rounded-control px-2.5 py-1 text-xs font-medium text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Cancel
         </button>
@@ -510,12 +552,12 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 rounded-control border border-border px-3 py-2 text-sm font-medium transition hover:border-accent hover:text-accent"
+        className={cn(ACTION_BTN, GHOST_BTN, open && "bg-surface-2 text-fg")}
       >
         <Quote size={13} /> Cite
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-20 mt-1.5 w-60 overflow-hidden rounded-card border border-border bg-surface shadow-xl">
+        <div className={POPOVER}>
           <div className="border-b border-border px-4 py-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
             Cite this paper
           </div>
@@ -687,7 +729,8 @@ function MarkReadButton({
         // from "Mark read" to "Mark unread" (112px -> 129px) and shrink back,
         // which jumps the row under the pointer — and Safari does not repaint
         // the strip the button vacates, leaving a dark sliver beside it.
-        "inline-flex min-w-[7rem] items-center justify-center gap-1.5 rounded-control border px-3 py-2 text-sm font-medium transition disabled:opacity-60",
+        ACTION_BTN,
+        "min-w-[7rem] justify-center border font-medium disabled:opacity-60",
         isRead
           ? "border-accent bg-accent-weak text-accent"
           : "border-border hover:border-accent hover:text-accent",
