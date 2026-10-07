@@ -54,7 +54,9 @@ export function Omnibar({
   const lookupInput = mode === "add" && target === trimmed ? trimmed : null;
   const lookup = usePaperLookup(teamId, lookupInput);
 
-  useDismissable(wrapRef, open, () => setOpen(false));
+  // Esc never reaches the input's onKeyDown while the dropdown is open: the
+  // dismiss hook takes it in the capture phase. So "Esc clears" lives here too.
+  useDismissable(wrapRef, open, (reason) => (reason === "escape" ? clear() : setOpen(false)));
 
   // ⌘K / Ctrl+K focuses the bar from anywhere on Home.
   useEffect(() => {
@@ -375,6 +377,22 @@ function AddPanel({
 
   const { resolved: r, duplicate } = lookup.data;
 
+  // Before the duplicate check: adding refreshes the lookup, which then finds
+  // the paper we just added.
+  if (added) {
+    return (
+      <div className="p-4">
+        <div className="text-sm font-semibold">{r.title ?? duplicate?.title ?? "This paper"}</div>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent">
+            <Check size={15} /> Added to {teamName}
+          </span>
+          <PanelButton onClick={() => onOpen(added)}>Open →</PanelButton>
+        </div>
+      </div>
+    );
+  }
+
   if (duplicate) {
     return (
       <div className="p-4">
@@ -421,24 +439,15 @@ function AddPanel({
       )}
       {addError && <div className="mt-2 text-meta text-danger">{addError}</div>}
       <div className="mt-3 flex justify-end">
-        {added ? (
-          <span className="inline-flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent">
-              <Check size={15} /> Added to {teamName}
-            </span>
-            <PanelButton onClick={() => onOpen(added)}>Open →</PanelButton>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={onAdd}
-            disabled={adding}
-            className="inline-flex h-9 items-center gap-1.5 rounded-control bg-accent px-3.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
-          >
-            {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={15} />}
-            Add to {teamName}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onAdd}
+          disabled={adding}
+          className="inline-flex h-9 items-center gap-1.5 rounded-control bg-accent px-3.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
+        >
+          {adding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={15} />}
+          Add to {teamName}
+        </button>
       </div>
     </div>
   );
