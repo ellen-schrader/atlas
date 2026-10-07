@@ -1243,6 +1243,14 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
         .data
         or []
     ):
+        # Not saved and never started means the row says nothing — it is what
+        # un-saving a paper, or un-marking it read, leaves behind. Scoring it as
+        # _W_READ would let *discarding* a paper feed the taste vector as though
+        # it had been consumed. Harmless while the client deleted those rows on
+        # the way past; since 20261007130000 they are kept on purpose, so the
+        # same question has to be asked here.
+        if not s.get("saved") and s.get("status") == "unread":
+            continue
         # Keyed off `saved`, not a status value. Since the two-axis split
         # (20261006120000) a save is a boolean that survives being read, so the
         # old `status == "to_read"` test would never fire again and every saved

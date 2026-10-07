@@ -667,3 +667,55 @@ def test_norm_doi_casefolds_and_strips_resolver_prefix():
     assert _norm_doi(None) is None
     assert _norm_doi("") is None
     assert _norm_doi("   ") is None
+
+
+class _FakeTable:
+    """Chainable stand-in for the supabase-py query builder: every filter returns
+    self, and execute() hands back whatever rows were registered for the table."""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        return type("Result", (), {"data": self._rows})()
+
+
+class _FakeClient:
+    def __init__(self, **tables: list[dict]):
+        self._tables = tables
+
+    def table(self, name: str):
+        return _FakeTable(self._tables.get(name, []))
+
+
+def test_engagement_weights_ignores_a_paper_status_row_that_says_nothing():
+    """A row with saved=false and status='unread' is what un-saving a paper (or
+    un-marking it read) leaves behind. It must not feed the taste vector:
+    discarding a paper is not a signal that you liked it.
+
+    This guards a regression introduced by 20261007130000 — before it, the client
+    deleted those rows on the way past, so the API rarely saw one; now they are
+    kept on purpose."""
+    from api.app import _W_BOOKMARK, _W_READ, _engagement_weights
+
+    uc = _FakeClient(
+        paper_status=[
+            # Un-saved and never started: says nothing.
+            {"paper_id": "discarded", "saved": False, "status": "unread", "updated_at": None},
+            # Saved, no progress: still the strongest signal there is.
+            {"paper_id": "saved", "saved": True, "status": "unread", "updated_at": None},
+            # Read but never saved: a weak signal, but a real one.
+            {"paper_id": "read", "saved": False, "status": "read", "updated_at": None},
+        ]
+    )
+    weights = _engagement_weights(uc, "user-1", "team-1")
+
+    assert "discarded" not in weights
+    assert weights["saved"] == pytest.approx(_W_BOOKMARK)
+    assert weights["read"] == pytest.approx(_W_READ)
