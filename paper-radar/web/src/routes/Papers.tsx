@@ -578,6 +578,12 @@ function FilterMenu({
             onChange={(v) => setFilters((f) => ({ ...f, tag: v || null }))}
             options={[
               { value: "", label: "Any tag" },
+              // A tag from a link (Home's Trending counts paper tags too) may not
+              // be among the lab's own tags; keep it selectable rather than have
+              // the menu fall back to "Any tag" while the filter is still on.
+              ...(filters.tag && !tags.some((t) => t.tag === filters.tag)
+                ? [{ value: filters.tag, label: filters.tag }]
+                : []),
               ...tags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.n})` })),
             ]}
           />
