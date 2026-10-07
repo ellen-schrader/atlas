@@ -1,5 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   CheckSquare,
   LayoutGrid,
@@ -81,10 +82,16 @@ const SORT_LABEL: Record<PaperSort, string> = {
 export default function Papers() {
   const { team, userId } = useAppContext();
   const [mode, setMode] = useState<SearchMode>("keyword");
-  const [rawQuery, setRawQuery] = useState("");
+  // ?q= and ?tag= seed the page, so Home's "See all in Papers" and its Trending
+  // tags land here already filtered. Read once: after that the page owns them.
+  const [params] = useSearchParams();
+  const [rawQuery, setRawQuery] = useState(() => params.get("q") ?? "");
   const query = useDebouncedValue(rawQuery.trim(), 250);
   const [semanticQuery, setSemanticQuery] = useState("");
-  const [filters, setFilters] = useState<PaperFilters>(NO_FILTERS);
+  const [filters, setFilters] = useState<PaperFilters>(() => ({
+    ...NO_FILTERS,
+    tag: params.get("tag"),
+  }));
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
   const [adding, setAdding] = useState(false);
