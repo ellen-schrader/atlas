@@ -145,7 +145,7 @@ export default function Layout({ session, team }: { session: Session; team: Team
         </aside>
 
         <main className="min-w-0 flex-1 overflow-auto">
-          <PaperModalProvider teamId={team.id} userId={session.user.id}>
+          <PaperModalProvider teamId={team.id} teamName={team.name} userId={session.user.id}>
             <FigureModalProvider teamId={team.id} userId={session.user.id}>
               <Outlet context={ctx} />
             </FigureModalProvider>

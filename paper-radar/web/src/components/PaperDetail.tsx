@@ -49,6 +49,7 @@ const POPOVER =
 export function PaperDetail({
   post,
   teamId,
+  teamName,
   userId,
   bookmarked = false,
   onClose,
@@ -56,6 +57,9 @@ export function PaperDetail({
 }: {
   post: PaperPost;
   teamId: string;
+  /** Named in the removal confirmation: "this lab" / "your lab" is vague for
+   *  anyone in more than one, and "your" implies ownership they may not have. */
+  teamName: string;
   userId: string;
   bookmarked?: boolean;
   onClose?: () => void;
@@ -151,7 +155,14 @@ export function PaperDetail({
               }}
             />
             <SharePost paper={p} />
-            {canDelete && <PostMenu teamId={teamId} postId={post.id} onDeleted={onClose} />}
+            {canDelete && (
+              <PostMenu
+                teamId={teamId}
+                teamName={teamName}
+                postId={post.id}
+                onDeleted={onClose}
+              />
+            )}
           </span>
         </div>
 
@@ -269,20 +280,28 @@ function SharePost({ paper }: { paper: Paper }) {
  *  not something to put a stray click away from Save. */
 function PostMenu({
   teamId,
+  teamName,
   postId,
   onDeleted,
 }: {
   teamId: string;
+  teamName: string;
   postId: string;
   onDeleted?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useDismissable(ref, open, () => {
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  function dismiss() {
     setOpen(false);
     setConfirming(false);
-  });
+    // Focus returns to the control that opened the menu; otherwise Escape drops
+    // a keyboard user at the top of the document.
+    trigger.current?.focus();
+  }
+  useDismissable(ref, open, dismiss);
 
   return (
     <div ref={ref} className="relative">
@@ -290,6 +309,7 @@ function PostMenu({
         type="button"
         aria-haspopup="true"
         aria-expanded={open}
+        ref={trigger}
         aria-label="More actions for this paper"
         onClick={() => setOpen((o) => !o)}
         className={cn(
@@ -307,18 +327,21 @@ function PostMenu({
             <DeleteConfirm
               postId={postId}
               teamId={teamId}
+              teamName={teamName}
               onCancel={() => setConfirming(false)}
               onDeleted={onDeleted}
             />
           ) : (
             <MenuItem
               icon={<Trash2 size={14} />}
-              label="Remove from this lab"
-              // Says who it affects, because the previous wording ("the paper
-              // stays in Atlas") read as though something small and personal
-              // was being removed — a note or a comment — when in fact the
-              // paper disappears for every member.
-              hint="Removes it for everyone, not just you"
+              // The ellipsis is the convention for "a confirmation follows",
+              // which is what makes the click safe to make.
+              label="Remove from this lab…"
+              // Short, and not a rehearsal of the confirmation: the same warning
+              // at both steps reads as routine by the time it matters. It also
+              // stops "Removes it for everyone" sitting under a label that
+              // already begins "Remove".
+              hint="Affects everyone in the lab"
               danger
               onClick={() => setConfirming(true)}
             />
@@ -364,17 +387,19 @@ function MenuItem({
   );
 }
 
-/** The delete confirmation, inline in the menu. Same two-step as before — a
- *  destructive action one click from "Edit note" needs the pause — but it no
- *  longer sits bare in the byline row where it was the only thing on offer. */
+/** The confirmation, inline in the menu rather than a dialog: the paper detail
+ *  is already a Modal, and stacking one focus trap inside another is worse than
+ *  the small panel this replaces it with. */
 function DeleteConfirm({
   postId,
   teamId,
+  teamName,
   onCancel,
   onDeleted,
 }: {
   postId: string;
   teamId: string;
+  teamName: string;
   onCancel: () => void;
   onDeleted?: () => void;
 }) {
@@ -383,8 +408,8 @@ function DeleteConfirm({
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  // Focus the safe choice, not the destructive one: this confirmation appears
-  // under the pointer, and Enter must not be what removes a paper for the lab.
+  // Focus the safe choice: this appears under the pointer, and Enter must not
+  // be the key that removes a paper for a whole lab.
   useEffect(() => cancelRef.current?.focus(), []);
 
   async function del() {
@@ -409,30 +434,46 @@ function DeleteConfirm({
         <p className="text-xs text-danger">{error}</p>
       ) : (
         <>
-          <p className="text-sm font-semibold text-fg">Remove this paper from your lab?</p>
+          <p className="text-sm font-semibold text-fg">Remove from {teamName}?</p>
+          {/* Leads with the effect on people, then the recovery path. The old
+              copy described storage ("its comments are kept") that nobody can
+              see, which reassures about the wrong thing. */}
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            It disappears for <span className="font-medium text-fg">everyone in the lab</span>, not
-            just you. Its comments and reactions are kept, and come back if the paper is added
-            again.
+            Everyone in the lab will lose access to this paper. If anyone adds it again, its
+            comments and reactions will be restored.
           </p>
         </>
       )}
-      <div className="mt-2.5 flex gap-2">
-        <button
-          type="button"
-          onClick={del}
-          disabled={busy}
-          className="rounded-control bg-danger px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
-        >
-          {busy ? "Removing…" : "Remove for everyone"}
-        </button>
+      {/* Cancel first, destructive last and right-aligned — the standard order,
+          and it keeps either button from landing exactly where the menu item
+          was, where a second click could confirm by accident. */}
+      <div className="mt-3 flex items-center justify-end gap-2">
         <button
           type="button"
           ref={cancelRef}
           onClick={onCancel}
-          className="rounded-control px-2.5 py-1 text-xs font-medium text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className={cn(
+            "inline-flex h-9 items-center rounded-control border border-border px-3 text-xs font-medium",
+            "text-fg transition hover:bg-surface-3",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          )}
         >
           Cancel
+        </button>
+        <button
+          type="button"
+          onClick={del}
+          disabled={busy}
+          className={cn(
+            "inline-flex h-9 items-center rounded-control bg-danger px-3 text-xs font-semibold",
+            // danger-fg, not white: white on the dark theme's #ef6a55 is 3.06:1,
+            // under the 4.5:1 AA needs for text this size. The token flips per
+            // theme (6.35:1 dark, 5.13:1 light).
+            "text-danger-fg transition hover:brightness-110 disabled:opacity-60",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger",
+          )}
+        >
+          {busy ? "Removing…" : "Remove for everyone"}
         </button>
       </div>
     </div>

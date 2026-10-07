@@ -79,6 +79,7 @@ export default function PaperPage() {
             key={post.id}
             post={post}
             teamId={team.id}
+            teamName={team.name}
             userId={userId}
             bookmarked={(reading ?? []).some((r) => r.paper_id === post.papers.id)}
             fullPage

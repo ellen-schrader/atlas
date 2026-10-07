@@ -20,10 +20,12 @@ export const usePaperModal = () => useContext(PaperModalContext);
  *  shows the detail + engagement over whatever page you're on. */
 export function PaperModalProvider({
   teamId,
+  teamName,
   userId,
   children,
 }: {
   teamId: string;
+  teamName: string;
   userId: string;
   children: ReactNode;
 }) {
@@ -76,6 +78,7 @@ export function PaperModalProvider({
             key={post.id}
             post={post}
             teamId={teamId}
+            teamName={teamName}
             userId={userId}
             bookmarked={bookmarked}
             onClose={close}
