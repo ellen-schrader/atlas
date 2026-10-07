@@ -10,17 +10,16 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
 import { type PaperFields, postPaper, resolvePaper } from "@/lib/api";
-import { supabase } from "@/lib/supabase";
+import {
+  bareDoi,
+  doiUrl,
+  type Duplicate,
+  fetchableUrl,
+  findInLab,
+  pubmedUrl,
+  SOURCE_LABEL,
+} from "@/lib/paperLookup";
 import { cn } from "@/lib/utils";
-
-/** Where autofilled metadata came from, in words a researcher recognises. */
-const SOURCE_LABEL: Record<string, string> = {
-  arxiv: "arXiv",
-  crossref: "Crossref",
-  pubmed: "PubMed",
-  europepmc: "Europe PMC",
-  citation_meta: "the publisher’s page",
-};
 
 const EMPTY: PaperFields = {
   title: "",
@@ -42,47 +41,6 @@ const EMPTY: PaperFields = {
 type Step = "url" | "recover" | "review" | "done";
 /** Step 1 offers two ways in; the rest of the wizard only exists for "link". */
 type Mode = "link" | "bib";
-
-/** Accept a bare DOI, a `doi:` prefix, or a full doi.org URL — people paste all three.
- *  Returns the bare DOI, which is what `papers.doi` dedupes on: storing the doi.org
- *  URL there instead would never match the same paper added by anyone else. */
-function bareDoi(input: string): string | null {
-  const doi = input
-    .trim()
-    .replace(/^doi:\s*/i, "")
-    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
-  return /^10\.\d{4,9}\/\S+$/.test(doi) ? doi : null;
-}
-
-function doiUrl(input: string): string | null {
-  const doi = bareDoi(input);
-  return doi ? `https://doi.org/${doi}` : null;
-}
-
-/** A PubMed article link, or an explicit `pmid:12345`, normalised to the canonical
- *  page — the resolver reads the PMID out of exactly this URL shape. A bare number
- *  is deliberately NOT accepted: "2023" is a valid PMID, so treating stray digits as
- *  one would silently resolve an unrelated paper instead of erroring. */
-function pubmedUrl(input: string): string | null {
-  const trimmed = input.trim();
-  const m =
-    trimmed.match(/pubmed\.ncbi\.nlm\.nih\.gov\/([0-9]+)/i) ??
-    trimmed.match(/^pmid:\s*([0-9]+)$/i);
-  return m ? `https://pubmed.ncbi.nlm.nih.gov/${m[1]}/` : null;
-}
-
-/** What people paste is often not a fetchable URL: a bare DOI, a `doi:` handle,
- *  or a scheme-less `arxiv.org/abs/…` (our own placeholder suggests one). The
- *  server only fetches http(s), so build that here rather than bouncing the
- *  paste back with "Only http(s) links can be fetched." */
-function fetchableUrl(input: string): string {
-  const viaDoi = doiUrl(input);
-  if (viaDoi) return viaDoi;
-  const trimmed = input.trim();
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || !trimmed
-    ? trimmed
-    : `https://${trimmed}`;
-}
 
 /** What we'll actually send — the same trimming and DOI normalisation the server sees.
  *  Used both to build the payload and to tell whether the user changed anything. */
@@ -115,6 +73,7 @@ export function AddPaperDialog({
   teamId,
   teamName,
   onAdded,
+  initialUrl,
 }: {
   open: boolean;
   onClose: () => void;
@@ -122,6 +81,8 @@ export function AddPaperDialog({
   teamName: string;
   /** Called with the new paper's id once it's in the lab (so the list can open it). */
   onAdded?: (paperId: string) => void;
+  /** Prefill the link field (Home's omnibar hands over a paste it couldn't resolve). */
+  initialUrl?: string;
 }) {
   const qc = useQueryClient();
   const [step, setStep] = useState<Step>("url");
@@ -147,7 +108,7 @@ export function AddPaperDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The paper is already in this lab — found before we write anything. */
-  const [duplicate, setDuplicate] = useState<{ paperId: string; title: string | null } | null>(null);
+  const [duplicate, setDuplicate] = useState<Duplicate | null>(null);
   const [added, setAdded] = useState<{
     paperId: string;
     title: string | null;
@@ -165,7 +126,7 @@ export function AddPaperDialog({
     setMode("link");
     setImported(null);
     setImporting(false);
-    setUrl("");
+    setUrl(initialUrl ?? "");
     setDoi("");
     setFields(EMPTY);
     setAuthorsText("");
@@ -224,7 +185,7 @@ export function AddPaperDialog({
 
       // Tell them it's already here BEFORE they fill anything in — the old bar
       // only said so after it had written the post.
-      const existing = await findInLab(teamId, resolved.url_norm);
+      const existing = await findInLab(teamId, resolved);
       if (existing) {
         setDuplicate(existing);
         return;
@@ -268,7 +229,7 @@ export function AddPaperDialog({
       }
       // The lab may already hold this paper under its doi.org link rather than the
       // publisher URL that was pasted, so re-check before offering to add it again.
-      const existing = await findInLab(teamId, resolved.url_norm);
+      const existing = await findInLab(teamId, resolved);
       if (existing) {
         setDuplicate(existing);
         setStep("url");
@@ -741,28 +702,11 @@ function ModeSwitch({
   );
 }
 
-/** Is this paper already posted in the lab? Reads through RLS — `papers` is only
- *  visible via a post in one of your labs, which is exactly the question asked. */
-async function findInLab(
-  teamId: string,
-  urlNorm: string,
-): Promise<{ paperId: string; title: string | null } | null> {
-  const { data, error } = await supabase
-    .from("paper_posts")
-    .select("paper_id, papers!inner(title, url_norm)")
-    .eq("team_id", teamId)
-    .eq("papers.url_norm", urlNorm)
-    .maybeSingle();
-  if (error || !data) return null;
-  const papers = data.papers as unknown as { title: string | null };
-  return { paperId: data.paper_id as string, title: papers?.title ?? null };
-}
-
 function DuplicateNotice({
   duplicate,
   onClose,
 }: {
-  duplicate: { paperId: string; title: string | null };
+  duplicate: Duplicate;
   onClose: () => void;
 }) {
   return (
