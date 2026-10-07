@@ -30,7 +30,6 @@ import {
   updateMap,
 } from "@/lib/api";
 import { usePalette } from "@/lib/palette";
-import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import type { MapOverviewData, MapPaper, MapSummary } from "@/lib/types";
 import { cn, formatRelative } from "@/lib/utils";
@@ -105,7 +104,6 @@ export default function MapDashboard() {
         { onConflict: "user_id,team_id,paper_id" },
       );
       if (error) throw error;
-      if (!read) await deleteIfDefault(supabase, userId, team.id, paperId);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["map-papers", mapId] });

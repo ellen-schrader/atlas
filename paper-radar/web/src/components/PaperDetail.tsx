@@ -22,7 +22,6 @@ import {
 } from "@/lib/paperExport";
 import { useToast } from "@/components/Toast";
 import { useDismissable } from "@/hooks/useDismissable";
-import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
@@ -824,9 +823,6 @@ function MarkReadButton({
         { user_id: userId, team_id: teamId, paper_id: paperId, status: isRead ? "unread" : "read" },
         { onConflict: "user_id,paper_id,team_id" },
       );
-    // Back to unread and never saved = an all-default row, which would hide the
-    // paper from Discover (recommend_v2 excludes any paper with a row).
-    if (!error && isRead) await deleteIfDefault(supabase, userId, teamId, paperId);
     setBusy(false);
     if (!error) {
       await qc.invalidateQueries({ queryKey: ["reading-list"] });

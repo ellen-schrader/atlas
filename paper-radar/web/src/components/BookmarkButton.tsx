@@ -2,7 +2,6 @@ import { type MouseEvent, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bookmark } from "lucide-react";
 
-import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -66,10 +65,6 @@ export function BookmarkButton({
           .eq("user_id", userId)
           .eq("team_id", teamId)
           .eq("paper_id", paperId);
-    // Un-saving a paper with no progress leaves an all-default row, and
-    // recommend_v2 excludes every paper that has ANY row — so the paper would
-    // vanish from Discover instead of returning to it.
-    if (!next && !res.error) await deleteIfDefault(supabase, userId, teamId, paperId);
     setBusy(false);
     if (res.error) {
       setOn(!next); // revert

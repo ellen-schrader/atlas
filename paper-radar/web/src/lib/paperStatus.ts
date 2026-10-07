@@ -1,34 +1,10 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-/** Reading progress. Independent of `saved` — see 20261006120000. */
-export type Progress = "unread" | "reading" | "read";
-
-/**
- * Drop a paper_status row that has fallen back to meaning nothing: not saved,
- * and no reading progress.
+/** Reading progress. Independent of `saved` — see 20261006120000.
  *
- * It matters because `recommend_v2` excludes every paper that has ANY
- * paper_status row, on the assumption that a row means you have engaged with it.
- * Leave an all-default row behind and the paper disappears from Discover
- * forever — un-saving it would quietly bury it instead of putting it back in
- * circulation, which is the opposite of what un-saving means.
- *
- * Scoped by `saved = false and status = 'unread'` so it can never race with a
- * concurrent save or a mark-read: if either landed first, the row no longer
- * matches and the delete is a no-op.
+ *  This module also held `deleteIfDefault`, which dropped a paper_status row
+ *  that had fallen back to meaning nothing (not saved, no progress). It existed
+ *  because recommend_papers excluded every paper with ANY row, so the row left
+ *  behind by un-saving buried the paper in Discover — the opposite of what
+ *  un-saving means. 20261007130000 asks the question properly in SQL instead,
+ *  so there is nothing to clean up at four call sites any more.
  */
-export async function deleteIfDefault(
-  client: SupabaseClient,
-  userId: string,
-  teamId: string,
-  paperId: string,
-): Promise<void> {
-  await client
-    .from("paper_status")
-    .delete()
-    .eq("user_id", userId)
-    .eq("team_id", teamId)
-    .eq("paper_id", paperId)
-    .eq("saved", false)
-    .eq("status", "unread");
-}
+export type Progress = "unread" | "reading" | "read";

@@ -9,7 +9,6 @@ import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommen
 import { type Selection, useSelection } from "@/hooks/useSelection";
 import type { ExportPaper } from "@/lib/paperExport";
 import type { Progress } from "@/lib/paperStatus";
-import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import { cn, formatAuthors, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -210,7 +209,8 @@ export default function ReadingList() {
   }
 
   // Membership only — the deliberate "this is not mine after all". Keeps any
-  // reading progress, and drops the row entirely if nothing is left to say.
+  // reading progress; the row staying behind is harmless now that Discover asks
+  // whether a row means anything rather than whether one exists.
   async function removeFromList(paperId: string) {
     await supabase
       .from("paper_status")
@@ -218,7 +218,6 @@ export default function ReadingList() {
       .eq("user_id", userId)
       .eq("team_id", team.id)
       .eq("paper_id", paperId);
-    await deleteIfDefault(supabase, userId, team.id, paperId);
     await qc.invalidateQueries({ queryKey: ["reading-list"] });
     await qc.invalidateQueries({ queryKey: ["recommendations"] });
   }
