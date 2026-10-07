@@ -1,12 +1,11 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Pencil, Quote, Share2, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Quote, Share2, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Cover } from "@/components/Cover";
-import { Button } from "@/components/ui/button";
 import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
@@ -49,15 +48,7 @@ export function PaperDetail({
   const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
   const canonical = [...new Set([...p.tags, ...p.keywords])];
   const { data: role } = useMyRole(teamId, userId);
-  const mine = post.posted_by === userId;
-  const isOwner = role === "owner";
-  const canDelete = mine || isOwner;
-  // The note is the poster's words, shown under their name — a colleague
-  // silently rewriting it would make the byline a lie. RLS is more permissive
-  // (any member may UPDATE the post, which is right for the collaborative tag
-  // list), so this restriction is the UI's, deliberately.
-  const canEdit = canDelete;
-  const [editingNote, setEditingNote] = useState(false);
+  const canDelete = post.posted_by === userId || role === "owner";
 
   return (
     <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
@@ -129,6 +120,8 @@ export function PaperDetail({
             className="rounded-control border border-border px-3 py-2 text-sm font-medium hover:border-accent hover:text-accent aria-pressed:border-accent aria-pressed:text-accent"
           />
           <MarkReadButton paperId={p.id} teamId={teamId} userId={userId} />
+          <SharePost paper={p} />
+          {canDelete && <PostMenu teamId={teamId} postId={post.id} onDeleted={onClose} />}
         </div>
 
         <MetaLabel>Abstract</MetaLabel>
@@ -148,32 +141,12 @@ export function PaperDetail({
               Posted {posterName ? `by ${posterName} ` : ""}· {formatRelative(post.posted_at)}
             </span>
           </span>
-          <span className="flex items-center gap-1">
-            <SharePost paper={p} />
-            {canEdit && (
-              <PostMenu
-                post={post}
-                teamId={teamId}
-                canDelete={canDelete}
-                onDeleted={onClose}
-                onEditNote={() => setEditingNote(true)}
-              />
-            )}
-          </span>
+
         </div>
-        {editingNote ? (
-          <NoteEditor
-            postId={post.id}
-            teamId={teamId}
-            initial={post.note ?? ""}
-            onDone={() => setEditingNote(false)}
-          />
-        ) : (
-          post.note && (
-            <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
-              “{post.note}”
-            </div>
-          )
+        {post.note && (
+          <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
+            “{post.note}”
+          </div>
         )}
 
         <SimilarPapers paperId={p.id} teamId={teamId} fullPage={fullPage} />
@@ -260,21 +233,17 @@ function SharePost({ paper }: { paper: Paper }) {
   );
 }
 
-/** Post-level actions that are rare, restricted, or destructive. Share stays
- *  outside this menu on purpose: it is the frequent, safe one, and burying it
- *  would cost a click every time while putting Delete a slip away from it. */
+/** The rare, restricted, destructive action, one step back from the row. A
+ *  single-item menu looks odd, but a paper that vanishes for the whole lab is
+ *  not something to put a stray click away from Save. */
 function PostMenu({
-  post,
   teamId,
-  canDelete,
+  postId,
   onDeleted,
-  onEditNote,
 }: {
-  post: PaperPost;
   teamId: string;
-  canDelete: boolean;
+  postId: string;
   onDeleted?: () => void;
-  onEditNote: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -290,40 +259,34 @@ function PostMenu({
         type="button"
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label="Post actions"
+        aria-label="More actions for this paper"
         onClick={() => setOpen((o) => !o)}
-        className="grid h-7 w-7 place-items-center rounded-control text-muted transition hover:bg-surface-2 hover:text-fg"
+        className="grid h-[38px] w-9 place-items-center rounded-control border border-border text-muted transition hover:border-accent hover:text-accent"
       >
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
-          <MenuItem
-            icon={<Pencil size={14} />}
-            label={post.note ? "Edit note" : "Add a note"}
-            hint="Why you shared it"
-            onClick={() => {
-              setOpen(false);
-              onEditNote();
-            }}
-          />
-          {canDelete &&
-            (confirming ? (
-              <DeleteConfirm
-                postId={post.id}
-                teamId={teamId}
-                onCancel={() => setConfirming(false)}
-                onDeleted={onDeleted}
-              />
-            ) : (
-              <MenuItem
-                icon={<Trash2 size={14} />}
-                label="Delete post"
-                hint="Removes it from this lab"
-                danger
-                onClick={() => setConfirming(true)}
-              />
-            ))}
+        <div className="absolute right-0 top-full z-20 mt-1.5 w-72 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
+          {confirming ? (
+            <DeleteConfirm
+              postId={postId}
+              teamId={teamId}
+              onCancel={() => setConfirming(false)}
+              onDeleted={onDeleted}
+            />
+          ) : (
+            <MenuItem
+              icon={<Trash2 size={14} />}
+              label="Remove from this lab"
+              // Says who it affects, because the previous wording ("the paper
+              // stays in Atlas") read as though something small and personal
+              // was being removed — a note or a comment — when in fact the
+              // paper disappears for every member.
+              hint="Removes it for everyone, not just you"
+              danger
+              onClick={() => setConfirming(true)}
+            />
+          )}
         </div>
       )}
     </div>
@@ -400,18 +363,27 @@ function DeleteConfirm({
   }
 
   return (
-    <div className="border-t border-border bg-danger/5 px-3 py-2.5">
-      <p className={cn("text-xs", error ? "text-danger" : "text-muted")}>
-        {error ?? "Delete this post? The paper stays in Atlas."}
-      </p>
-      <div className="mt-2 flex gap-2">
+    <div className="bg-danger/5 px-3.5 py-3">
+      {error ? (
+        <p className="text-xs text-danger">{error}</p>
+      ) : (
+        <>
+          <p className="text-sm font-semibold text-fg">Remove this paper from your lab?</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            It disappears for <span className="font-medium text-fg">everyone in the lab</span>, not
+            just you. Its comments and reactions are kept, and come back if the paper is added
+            again.
+          </p>
+        </>
+      )}
+      <div className="mt-2.5 flex gap-2">
         <button
           type="button"
           onClick={del}
           disabled={busy}
           className="rounded-control bg-danger px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
         >
-          {busy ? "Deleting…" : "Delete"}
+          {busy ? "Removing…" : "Remove for everyone"}
         </button>
         <button
           type="button"
@@ -420,92 +392,6 @@ function DeleteConfirm({
         >
           Cancel
         </button>
-      </div>
-    </div>
-  );
-}
-
-/** Edit the note — the one thing about a post that was write-once: you could
- *  add it when sharing the paper and never change it afterwards. Tags are
- *  already editable inline, and the paper's own metadata is not member-editable
- *  at all, so "edit" means this. */
-function NoteEditor({
-  postId,
-  teamId,
-  initial,
-  onDone,
-}: {
-  postId: string;
-  teamId: string;
-  initial: string;
-  onDone: () => void;
-}) {
-  const qc = useQueryClient();
-  const [value, setValue] = useState(initial);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const area = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    area.current?.focus();
-    area.current?.setSelectionRange(initial.length, initial.length);
-  }, [initial.length]);
-
-  async function save() {
-    setBusy(true);
-    setError(null);
-    const next = value.trim();
-    const { error: err } = await supabase
-      .from("paper_posts")
-      // Empty clears the note rather than storing "", so the blockquote
-      // disappears instead of rendering a pair of empty quotation marks.
-      .update({ note: next || null })
-      .eq("id", postId);
-    setBusy(false);
-    if (err) {
-      setError(err.message);
-      return;
-    }
-    await qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
-    onDone();
-  }
-
-  return (
-    <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5">
-      <label htmlFor={`note-${postId}`} className="sr-only">
-        Why you shared this paper
-      </label>
-      <textarea
-        id={`note-${postId}`}
-        ref={area}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          // Escape cancels; the capture-phase handler in useDismissable is not
-          // active here, so this must not bubble to Modal and close the dialog.
-          if (e.key === "Escape") {
-            e.stopPropagation();
-            onDone();
-          }
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
-        }}
-        rows={3}
-        placeholder="Why is this worth the lab's time?"
-        className="w-full resize-y bg-transparent text-sm text-fg outline-none placeholder:text-faint"
-      />
-      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
-      <div className="mt-2 flex items-center gap-2">
-        <Button size="sm" onClick={save} disabled={busy}>
-          {busy ? "Saving…" : "Save note"}
-        </Button>
-        <button
-          type="button"
-          onClick={onDone}
-          className="text-xs font-medium text-muted transition hover:text-fg"
-        >
-          Cancel
-        </button>
-        <span className="ml-auto text-xs text-faint">⌘↵ to save</span>
       </div>
     </div>
   );
