@@ -285,7 +285,11 @@ export default function ReadingList() {
         </div>
       </div>
 
-      {total > 0 && (
+      {/* Only in "Date added". The recommended run is ranked by the API and
+          carries no progress, so these filters cannot apply to it — and a
+          control that stays lit, keeps showing live counts and changes nothing
+          is worse than one that is not there. */}
+      {total > 0 && sort === "added" && (
         <div className="flex flex-col gap-1.5">
           <div
             // radiogroup, not tablist: these are three mutually exclusive
