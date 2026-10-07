@@ -97,13 +97,21 @@ set search_path = public
 as $$
 declare
     r public.removed_posts;
+    restored int;
 begin
     select * into r from public.removed_posts where id = p_post;
     if not found then
         raise exception 'That removal can no longer be undone.' using errcode = 'no_data_found';
     end if;
-    if not public.is_team_member(r.team_id) then
-        raise exception 'That paper is not in one of your labs.' using errcode = '42501';
+    -- Mirrors paper_posts_delete (20260712150000): membership alone is weaker
+    -- than the policy this undoes, so a plain member could reverse an owner's
+    -- deliberate removal — and removed_posts is readable by every member, so
+    -- the ids to replay are not even hidden.
+    if not (
+        public.is_team_member(r.team_id)
+        and (r.posted_by = auth.uid() or r.removed_by = auth.uid() or public.is_team_owner(r.team_id))
+    ) then
+        raise exception 'That removal is not yours to undo.' using errcode = '42501';
     end if;
     if not exists (select 1 from public.papers where id = r.paper_id) then
         raise exception 'That paper no longer exists.' using errcode = 'no_data_found';
@@ -117,9 +125,16 @@ begin
         r.id, r.paper_id, r.team_id, r.posted_by, r.posted_by_label, r.posted_at,
         r.source, r.source_pdf, r.page, r.via, r.note, r.tags
     )
-    -- Someone may have re-added it by hand in the meantime; the paper being back
-    -- is what was asked for either way.
     on conflict (paper_id, team_id) do nothing;
+
+    get diagnostics restored = row_count;
+    if restored = 0 then
+        -- Someone re-added the paper inside the undo window, so it is back but
+        -- as a new post. Raising keeps the tombstone: deleting it here would
+        -- destroy the only surviving copy of the original sharer, date, note
+        -- and tags while reporting success.
+        raise exception 'Someone has already added this paper back.' using errcode = 'unique_violation';
+    end if;
 
     delete from public.removed_posts where id = p_post;
     return r.paper_id;
@@ -136,7 +151,13 @@ create policy removed_posts_select on public.removed_posts for select
 
 grant select on public.removed_posts to authenticated;
 grant select, insert, update, delete on public.removed_posts to service_role;
+-- Postgres grants EXECUTE on a new function to PUBLIC, so granting to a role
+-- adds nothing until PUBLIC is revoked. Both of these are SECURITY DEFINER;
+-- prune in particular takes no arguments, does no team scoping, and would
+-- otherwise be a cross-tenant definer DELETE reachable by anon. Same pattern as
+-- 20260713220000_rls_write_checks.sql.
+revoke execute on function public.restore_post(uuid) from public;
+revoke execute on function public.prune_removed_posts() from public;
+
 grant execute on function public.restore_post(uuid) to authenticated;
--- Not granted to authenticated: the trigger calls it as definer, and nothing in
--- the app has a reason to prune on demand.
 grant execute on function public.prune_removed_posts() to service_role;

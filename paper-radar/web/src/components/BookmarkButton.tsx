@@ -46,12 +46,23 @@ export function BookmarkButton({
       ? await supabase
           .from("paper_status")
           .upsert(
-            { user_id: userId, team_id: teamId, paper_id: paperId, saved: true },
+            {
+              user_id: userId,
+              team_id: teamId,
+              paper_id: paperId,
+              saved: true,
+              // Explicit: there is no updated_at trigger, and the column
+              // default only fires on INSERT. Saving a paper you read months
+              // ago would otherwise keep that old timestamp — which orders
+              // the reading list, buckets it under "Earlier", and decays the
+              // save to ~3% of its weight in the taste vector.
+              updated_at: new Date().toISOString(),
+            },
             { onConflict: "user_id,paper_id,team_id" },
           )
       : await supabase
           .from("paper_status")
-          .update({ saved: false })
+          .update({ saved: false, updated_at: new Date().toISOString() })
           .eq("user_id", userId)
           .eq("team_id", teamId)
           .eq("paper_id", paperId);

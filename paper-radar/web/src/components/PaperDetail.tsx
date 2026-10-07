@@ -435,10 +435,24 @@ function DeleteConfirm({
   async function del() {
     setBusy(true);
     setError(null);
-    const { error: err } = await supabase.from("paper_posts").delete().eq("id", postId);
+    // .select(), so a delete that matched nothing is distinguishable from one
+    // that worked: PostgREST answers 204 with no error when RLS or a race
+    // filters every candidate row. Without this, a stale dialog (someone else
+    // removed the paper first) reported success and then offered an Undo that
+    // would have reverted *their* removal.
+    const { data, error: err } = await supabase
+      .from("paper_posts")
+      .delete()
+      .eq("id", postId)
+      .select("id");
     setBusy(false);
     if (err) {
       setError(err.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      setError("That paper has already been removed.");
+      refresh();
       return;
     }
     refresh();

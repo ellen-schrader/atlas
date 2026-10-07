@@ -340,7 +340,9 @@ export function AddPaperDialog({
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
             {imported
-              ? "Imported to your lab"
+              ? imported.imported > 0
+                ? "Imported to your lab"
+                : "Nothing new to import"
               : step === "recover"
                 ? "Try the DOI or PubMed instead"
                 : step !== "done"
@@ -350,7 +352,10 @@ export function AddPaperDialog({
                     : "Added to your lab"}
           </h2>
           <p className="mt-1 text-sm text-muted">
-            {imported && "Your lab’s back-catalogue is in."}
+            {imported &&
+              (imported.imported > 0
+                ? "Your lab’s back-catalogue is in."
+                : "Everything in that file was already here.")}
             {!imported &&
               step === "url" &&
               (mode === "link"
@@ -386,7 +391,15 @@ export function AddPaperDialog({
         {step === "url" && !imported && mode === "bib" && (
           <BibtexImportPanel
             teamId={teamId}
-            onImported={setImported}
+            // Clear `importing` here as well as through onImportingChange: a
+            // successful import sets `imported` and unmounts the panel in the
+            // same React commit, so the panel's own effect pushing `false` up
+            // never runs — and the Modal's onClose stays disabled, leaving the
+            // X, Escape and the backdrop silently dead on the success screen.
+            onImported={(r) => {
+              setImporting(false);
+              setImported(r);
+            }}
             onImportingChange={setImporting}
           />
         )}

@@ -55,7 +55,10 @@ as $$
 begin
     insert into public.paper_status (user_id, paper_id, team_id, saved, status)
     values (new.mentioned_user, new.paper_id, new.team_id, true, 'unread')
-    on conflict (user_id, paper_id, team_id) do update set saved = true;
+    -- updated_at too: it has no trigger and its default only fires on INSERT,
+    -- so being mentioned on a paper you read months ago would leave the save
+    -- dated to the read rather than to the mention.
+    on conflict (user_id, paper_id, team_id) do update set saved = true, updated_at = now();
     return new;
 end;
 $$;
