@@ -296,12 +296,22 @@ function PostMenu({
 
   function dismiss() {
     setOpen(false);
-    setConfirming(false);
     // Focus returns to the control that opened the menu; otherwise Escape drops
     // a keyboard user at the top of the document.
     trigger.current?.focus();
   }
   useDismissable(ref, open, dismiss);
+
+  // A closed menu is never mid-confirmation. Resetting this where the menu is
+  // closed instead — in dismiss() — missed the commonest path: clicking the
+  // trigger to close it. The trigger lives inside the dismissable ref, so the
+  // outside-click handler deliberately ignores it, and `confirming` survived;
+  // reopening the menu then dropped the user straight back into the warning
+  // with no way to reach the menu itself. Keyed off `open`, every close path is
+  // covered, including ones added later.
+  useEffect(() => {
+    if (!open) setConfirming(false);
+  }, [open]);
 
   return (
     <div ref={ref} className="relative">
@@ -322,7 +332,7 @@ function PostMenu({
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className={cn(POPOVER, "w-72")}>
+        <div className={cn(POPOVER, "w-64")}>
           {confirming ? (
             <DeleteConfirm
               postId={postId}
@@ -435,26 +445,28 @@ function DeleteConfirm({
       ) : (
         <>
           <p className="text-sm font-semibold text-fg">Remove from {teamName}?</p>
-          {/* Leads with the effect on people, then the recovery path. The old
-              copy described storage ("its comments are kept") that nobody can
-              see, which reassures about the wrong thing. */}
+          {/* The consequence, and nothing else. A softening clause about what can
+              be recovered belongs nowhere near the moment of commitment — it
+              invites a faster yes to an action that affects other people. */}
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            Everyone in the lab will lose access to this paper. If anyone adds it again, its
-            comments and reactions will be restored.
+            Everyone in the lab will lose access to this paper.
           </p>
         </>
       )}
-      {/* Cancel first, destructive last and right-aligned — the standard order,
-          and it keeps either button from landing exactly where the menu item
-          was, where a second click could confirm by accident. */}
-      <div className="mt-3 flex items-center justify-end gap-2">
+      {/* Sized to their labels and pushed right. The earlier awkwardness was
+          Cancel looking like indented text, not the alignment itself — with a
+          border and a fill it reads as a button, and a panel this narrow leaves
+          no void worth closing. Cancel first, destructive last. */}
+      <div className="mt-3 flex items-stretch justify-end gap-2">
         <button
           type="button"
           ref={cancelRef}
           onClick={onCancel}
           className={cn(
-            "inline-flex h-9 items-center rounded-control border border-border px-3 text-xs font-medium",
-            "text-fg transition hover:bg-surface-3",
+            "inline-flex h-9 items-center justify-center rounded-control px-3 text-xs font-medium",
+            // border-strong and a solid fill: plain `border` is near-invisible
+            // against the danger tint, which is what made this read as text.
+            "border border-border-strong bg-surface text-fg transition hover:bg-surface-3",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
           )}
         >
@@ -465,7 +477,7 @@ function DeleteConfirm({
           onClick={del}
           disabled={busy}
           className={cn(
-            "inline-flex h-9 items-center rounded-control bg-danger px-3 text-xs font-semibold",
+            "inline-flex h-9 items-center justify-center rounded-control bg-danger px-3 text-xs font-semibold",
             // danger-fg, not white: white on the dark theme's #ef6a55 is 3.06:1,
             // under the 4.5:1 AA needs for text this size. The token flips per
             // theme (6.35:1 dark, 5.13:1 light).
