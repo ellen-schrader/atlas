@@ -14,7 +14,9 @@ export type PaperSort = "shared" | "published";
 /** Reading status — per *user*, not per lab: "unread" means unread by you.
  *  A paper you saved but haven't read is still unread; that's the point of a
  *  reading list. */
-export type PaperStatus = "unread" | "to_read" | "reading" | "read";
+// Mirrors search_papers' p_status: three progress values plus "saved", which
+// asks the other axis (see 20261006120000).
+export type PaperStatus = "unread" | "reading" | "read" | "saved";
 
 export interface PaperFilters {
   tag: string | null;

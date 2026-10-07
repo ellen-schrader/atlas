@@ -20,10 +20,12 @@ export const usePaperModal = () => useContext(PaperModalContext);
  *  shows the detail + engagement over whatever page you're on. */
 export function PaperModalProvider({
   teamId,
+  teamName,
   userId,
   children,
 }: {
   teamId: string;
+  teamName: string;
   userId: string;
   children: ReactNode;
 }) {
@@ -57,7 +59,7 @@ export function PaperModalProvider({
       const { data, error } = await supabase
         .from("paper_posts")
         .select(
-          "id, posted_at, note, posted_by, posted_by_label, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
+          "id, posted_at, note, posted_by, posted_by_label, source, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
         )
         .eq("team_id", teamId)
         .eq("paper_id", paperId!)
@@ -76,6 +78,7 @@ export function PaperModalProvider({
             key={post.id}
             post={post}
             teamId={teamId}
+            teamName={teamName}
             userId={userId}
             bookmarked={bookmarked}
             onClose={close}

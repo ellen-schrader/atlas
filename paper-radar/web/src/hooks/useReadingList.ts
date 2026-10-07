@@ -1,10 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 
+import type { Progress } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 
 export interface ReadingRow {
   paper_id: string;
   updated_at: string;
+  /** Reading progress. Membership is `saved`, which the query already filters —
+   *  this decides which view of the list the paper belongs in, not whether it
+   *  is still yours. */
+  status: Progress;
   papers: {
     id: string;
     title: string | null;
@@ -25,10 +30,12 @@ export function useReadingList(userId: string, teamId: string) {
     queryFn: async (): Promise<ReadingRow[]> => {
       const { data, error } = await supabase
         .from("paper_status")
-        .select("paper_id, updated_at, papers(id, title, venue, year, authors, doi, url, abstract)")
+        .select(
+          "paper_id, updated_at, status, papers(id, title, venue, year, authors, doi, url, abstract)",
+        )
         .eq("user_id", userId)
         .eq("team_id", teamId)
-        .eq("status", "to_read")
+        .eq("saved", true)
         .order("updated_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as unknown as ReadingRow[];

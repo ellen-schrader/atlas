@@ -948,7 +948,7 @@ class MapPaper(BaseModel):
     similarity: float | None = None  # relevance to the map's seed
     reactions: int = 0
     comments: int = 0
-    read_status: str | None = None  # 'to_read'|'reading'|'read'|None, for the caller
+    read_status: str | None = None  # 'unread'|'reading'|'read'|None, for the caller
     posted_at: str | None = None
     pinned: bool = False
 
@@ -1182,7 +1182,7 @@ def _l2norm(v: np.ndarray) -> np.ndarray:
 _W_REACTION = 1.0
 _W_SKEPTIC = 0.3  # 🤔
 _W_COMMENT = 0.75
-_W_BOOKMARK = 1.5  # to_read — an explicit, deliberate save
+_W_BOOKMARK = 1.5  # paper_status.saved — an explicit, deliberate save
 _W_READ = 0.25  # read / reading — consumed, but says little about preference
 _HALFLIFE_DAYS = 90.0
 
@@ -1236,14 +1236,18 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
         add(c["paper_id"], _W_COMMENT * _recency_decay(_parse_ts(c.get("created_at")), now))
     for s in (
         uc.table("paper_status")
-        .select("paper_id, status, updated_at")
+        .select("paper_id, saved, status, updated_at")
         .eq("team_id", team_id)
         .eq("user_id", user_id)
         .execute()
         .data
         or []
     ):
-        base = _W_BOOKMARK if s.get("status") == "to_read" else _W_READ
+        # Keyed off `saved`, not a status value. Since the two-axis split
+        # (20261006120000) a save is a boolean that survives being read, so the
+        # old `status == "to_read"` test would never fire again and every saved
+        # paper would quietly collapse to the much weaker _W_READ.
+        base = _W_BOOKMARK if s.get("saved") else _W_READ
         add(s["paper_id"], base * _recency_decay(_parse_ts(s.get("updated_at")), now))
     return weights
 
@@ -1370,13 +1374,13 @@ def _hydrate(
 def _reading_list_ranked(
     uc, user_id: str, team_id: str, taste, limit: int
 ) -> RecommendationsResponse:
-    """The user's saved (to_read) papers, ranked by taste similarity."""
+    """The user's saved papers, ranked by taste similarity."""
     saved = (
         uc.table("paper_status")
         .select("paper_id")
         .eq("user_id", user_id)
         .eq("team_id", team_id)
-        .eq("status", "to_read")
+        .eq("saved", True)
         .order("updated_at", desc=True)
         .execute()
         .data

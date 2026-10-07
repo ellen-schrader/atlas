@@ -95,9 +95,15 @@ export default function Dashboard() {
   // The single next paper to read: the oldest still-saved one (most at risk of
   // going stale — the list is newest-first, so that's the tail), skipping any
   // already surfaced above as a mention. The full backlog lives on /reading.
-  const readingQueue = (toRead ?? []).filter((r) => !seen.has(r.paper_id));
+  // `status !== "read"` as well as the mention filter: since the two-axis split
+  // useReadingList returns everything saved, read included, so without this the
+  // "Next up" card pins to a finished paper forever and the badge counts papers
+  // already read. ReadingList's queue view draws the same line.
+  const readingQueue = (toRead ?? []).filter(
+    (r) => r.status !== "read" && !seen.has(r.paper_id),
+  );
   const nextUp = readingQueue[readingQueue.length - 1];
-  const readingCount = toRead?.length ?? 0;
+  const readingCount = (toRead ?? []).filter((r) => r.status !== "read").length;
 
   const empty = !search.isLoading && posts.length === 0;
 

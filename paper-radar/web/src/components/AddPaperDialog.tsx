@@ -1,8 +1,9 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Check, Loader2, Search, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, FileUp, Link as LinkIcon, Loader2, Search, Wand2 } from "lucide-react";
 
+import { BibtexImportDone, BibtexImportPanel } from "@/components/BibtexImportPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,8 @@ const EMPTY: PaperFields = {
  *  reading the paper's *DOI*. So a failed lookup isn't "type it all in yourself",
  *  it's "try the DOI"; typing it all in is only the last resort. */
 type Step = "url" | "recover" | "review" | "done";
+/** Step 1 offers two ways in; the rest of the wizard only exists for "link". */
+type Mode = "link" | "bib";
 
 /** Accept a bare DOI, a `doi:` prefix, or a full doi.org URL — people paste all three.
  *  Returns the bare DOI, which is what `papers.doi` dedupes on: storing the doi.org
@@ -110,16 +113,27 @@ export function AddPaperDialog({
   open,
   onClose,
   teamId,
+  teamName,
   onAdded,
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
+  teamName: string;
   /** Called with the new paper's id once it's in the lab (so the list can open it). */
   onAdded?: (paperId: string) => void;
 }) {
   const qc = useQueryClient();
   const [step, setStep] = useState<Step>("url");
+  const [mode, setMode] = useState<Mode>("link");
+  /** True only while the .bib commit write is in flight — see the Modal below. */
+  const [importing, setImporting] = useState(false);
+  /** Set once a .bib import has written papers; swaps step 1 for its summary. */
+  const [imported, setImported] = useState<{
+    imported: number;
+    skipped: number;
+    failed: number;
+  } | null>(null);
   const [url, setUrl] = useState("");
   /** The DOI typed on the recover step, when the publisher's page wouldn't load. */
   const [doi, setDoi] = useState("");
@@ -148,6 +162,9 @@ export function AddPaperDialog({
   useEffect(() => {
     if (!open) return;
     setStep("url");
+    setMode("link");
+    setImported(null);
+    setImporting(false);
     setUrl("");
     setDoi("");
     setFields(EMPTY);
@@ -313,20 +330,37 @@ export function AddPaperDialog({
   const canSave = Boolean(url.trim()) && Boolean(fields.title?.trim());
 
   return (
-    <Modal open={open} onClose={onClose} label="Add a paper">
-      <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pr-14">
+    // Refuse dismissal mid-write. Modal closes on Escape and on a backdrop click,
+    // but the POST completes regardless — so abandoning here lands every paper in
+    // the file with no confirmation and no counts, and re-importing is then the
+    // obvious next move. The standalone /import page had no way to abandon it;
+    // moving the flow into a dialog is what introduced one.
+    <Modal open={open} onClose={importing ? () => {} : onClose} label="Add a paper">
+      <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pl-14">
         <div>
           <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">
-            {step === "recover"
-              ? "Try the DOI or PubMed instead"
-              : step !== "done"
-                ? "Add a paper"
-                : added?.already
-                  ? "Already in your lab"
-                  : "Added to your lab"}
+            {imported
+              ? imported.imported > 0
+                ? "Imported to your lab"
+                : "Nothing new to import"
+              : step === "recover"
+                ? "Try the DOI or PubMed instead"
+                : step !== "done"
+                  ? "Add a paper"
+                  : added?.already
+                    ? "Already in your lab"
+                    : "Added to your lab"}
           </h2>
           <p className="mt-1 text-sm text-muted">
-            {step === "url" && "Paste a link — we’ll fill in the details for you."}
+            {imported &&
+              (imported.imported > 0
+                ? "Your lab’s back-catalogue is in."
+                : "Everything in that file was already here.")}
+            {!imported &&
+              step === "url" &&
+              (mode === "link"
+                ? "Paste a link — we’ll fill in the details for you."
+                : "Upload a .bib and we’ll show you what it would add, before it adds it.")}
             {step === "recover" &&
               "That publisher blocks automated lookups — the paper’s DOI or PubMed page won’t be."}
             {step === "review" &&
@@ -342,7 +376,35 @@ export function AddPaperDialog({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        {step === "url" && (
+        {step === "url" && imported && (
+          <BibtexImportDone result={imported} teamName={teamName} />
+        )}
+
+        {step === "url" && !imported && (
+          <div className="mb-4">
+            {/* `looking` is the link lookup; `importing` is the .bib write. Either
+                in flight means switching would unmount work that still completes. */}
+            <ModeSwitch mode={mode} onChange={setMode} disabled={looking || importing} />
+          </div>
+        )}
+
+        {step === "url" && !imported && mode === "bib" && (
+          <BibtexImportPanel
+            teamId={teamId}
+            // Clear `importing` here as well as through onImportingChange: a
+            // successful import sets `imported` and unmounts the panel in the
+            // same React commit, so the panel's own effect pushing `false` up
+            // never runs — and the Modal's onClose stays disabled, leaving the
+            // X, Escape and the backdrop silently dead on the success screen.
+            onImported={(r) => {
+              setImporting(false);
+              setImported(r);
+            }}
+            onImportingChange={setImporting}
+          />
+        )}
+
+        {step === "url" && !imported && mode === "link" && (
           <form onSubmit={lookUp} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="paper-url">Paper link or DOI</Label>
@@ -615,13 +677,17 @@ export function AddPaperDialog({
           </>
         ) : (
           <>
+            {/* Only on the step that actually shows the ModeSwitch: on "recover"
+                and "done" this pointed at a control that isn't on screen, and
+                after an import it advertised a job already finished. */}
             <p className="text-xs text-faint">
-              Adding a back-catalogue?{" "}
-              <Link to="/import" onClick={onClose} className="font-medium text-muted underline hover:text-fg">
-                Import a .bib file
-              </Link>
+              {step === "url" && !imported
+                ? mode === "link"
+                  ? "Adding a back-catalogue? Switch to “Upload a .bib”."
+                  : "Every reference manager exports BibTeX."
+                : ""}
             </p>
-            {step === "done" && (
+            {(step === "done" || imported) && (
               <Button variant="secondary" size="sm" onClick={onClose}>
                 Done
               </Button>
@@ -630,6 +696,48 @@ export function AddPaperDialog({
         )}
       </div>
     </Modal>
+  );
+}
+
+/** The two ways into the dialog. A segmented control rather than two buttons:
+ *  these are modes of one task, and only one can be active, which is what a
+ *  radiogroup says and a pair of buttons doesn't. */
+function ModeSwitch({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+  disabled?: boolean;
+}) {
+  const options: { value: Mode; label: string; icon: ReactNode }[] = [
+    { value: "link", label: "Paste a link", icon: <LinkIcon size={14} /> },
+    { value: "bib", label: "Upload a .bib", icon: <FileUp size={14} /> },
+  ];
+  return (
+    <div role="radiogroup" aria-label="How to add" className="flex gap-1 rounded-control bg-surface-2 p-1">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={mode === o.value}
+          disabled={disabled}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "inline-flex flex-1 items-center justify-center gap-1.5 rounded-control px-3 py-1.5 text-sm font-medium transition",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+            mode === o.value
+              ? "bg-surface text-fg shadow-sm"
+              : "text-muted hover:text-fg disabled:opacity-50",
+          )}
+        >
+          {o.icon}
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

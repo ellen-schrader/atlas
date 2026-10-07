@@ -68,7 +68,7 @@ const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4";
 
 const STATUS_LABEL: Record<PaperStatus, string> = {
   unread: "Unread",
-  to_read: "Saved to read",
+  saved: "Saved",
   reading: "Reading",
   read: "Read",
 };
@@ -460,6 +460,7 @@ export default function Papers() {
         open={adding}
         onClose={() => setAdding(false)}
         teamId={team.id}
+        teamName={team.name}
         onAdded={(paperId) => {
           setAdding(false);
           openPaper(paperId);
@@ -804,21 +805,28 @@ function PaperTable({
   isSelected?: (id: string) => boolean;
   onToggleSelect?: (id: string) => void;
 }) {
+  const activate = (paperId: string) =>
+    selecting ? onToggleSelect?.(paperId) : onOpen(paperId);
+
   return (
     <div className="overflow-x-auto rounded-card border border-border shadow-sm">
-      <table className="w-full min-w-[680px] border-collapse text-sm">
+      {/* table-fixed, not auto: with content-based sizing a single long author
+          list widens its column and shunts Posted/Save sideways, so the columns
+          don't line up as you scroll. Fixed widths on everything but Paper give
+          the title the remaining space and keep the grid steady. */}
+      <table className="w-full min-w-[680px] table-fixed border-collapse text-sm">
         <thead>
           <tr className="bg-surface-2 text-left text-eyebrow uppercase tracking-eyebrow text-muted">
             {selecting && (
-              <th className="w-10 px-4 py-2.5 font-semibold">
+              <th className="w-12 px-3 py-2.5 font-semibold">
                 <span className="sr-only">Select</span>
               </th>
             )}
             <th className="px-4 py-2.5 font-semibold">Paper</th>
-            <th className="px-4 py-2.5 font-semibold">Authors</th>
-            <th className="px-4 py-2.5 font-semibold">Engagement</th>
-            <th className="px-4 py-2.5 font-semibold">Posted</th>
-            <th className="px-4 py-2.5 font-semibold">
+            <th className="w-48 px-4 py-2.5 font-semibold">Authors</th>
+            <th className="w-32 px-4 py-2.5 font-semibold">Engagement</th>
+            <th className="w-28 px-4 py-2.5 font-semibold">Posted</th>
+            <th className="w-16 px-3 py-2.5 font-semibold">
               <span className="sr-only">Save</span>
             </th>
           </tr>
@@ -830,16 +838,22 @@ function PaperTable({
             const read = readIds?.has(p.id) ?? false;
             const checked = isSelected?.(p.id) ?? false;
             return (
+              // The row stays a row. role="button" on a <tr> overrides its
+              // implicit `row`, orphaning the cells from any row ancestor, and
+              // `button` is children-presentational — it flattens the select
+              // checkbox and the bookmark out of the accessibility tree entirely.
+              // The keyboard-operable control is the title button in the first
+              // cell; onClick here is a mouse convenience on top of it.
               <tr
                 key={post.id}
-                onClick={() => (selecting ? onToggleSelect?.(p.id) : onOpen(p.id))}
+                onClick={() => activate(p.id)}
                 className={cn(
                   "cursor-pointer border-t border-border align-middle transition hover:bg-surface-2",
                   selecting && checked && "bg-accent-weak",
                 )}
               >
                 {selecting && (
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                     <SelectCheckbox checked={checked} onChange={() => onToggleSelect?.(p.id)} />
                   </td>
                 )}
@@ -853,26 +867,44 @@ function PaperTable({
                       )}
                     />
                     <div className="min-w-0">
-                      <div className={cn("truncate", read ? "text-muted" : "font-medium text-fg")}>
+                      <button
+                        type="button"
+                        aria-pressed={selecting ? checked : undefined}
+                        onClick={(e) => {
+                          // The row handles the click; without this the action
+                          // would fire twice.
+                          e.stopPropagation();
+                          activate(p.id);
+                        }}
+                        className={cn(
+                          "block w-full truncate text-left",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                          read ? "text-muted" : "font-medium text-fg",
+                        )}
+                      >
                         {p.title ?? p.url}
-                      </div>
+                      </button>
                       <SourceLabel venue={p.venue} year={p.year} className="mt-0.5 block" />
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-3 text-muted">{formatAuthors(p.authors)}</td>
+                <td className="px-4 py-3 text-muted">
+                  <div className="truncate" title={p.authors.join(", ")}>
+                    {formatAuthors(p.authors)}
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <EngagementSummary reactions={c?.reactions ?? 0} comments={c?.comments ?? 0} />
                 </td>
                 <td
-                  className="whitespace-nowrap px-4 py-3 text-meta text-muted tabular-nums"
+                  className="truncate px-4 py-3 text-meta text-muted tabular-nums"
                   title={formatDate(post.posted_at)}
                 >
                   {formatRelative(post.posted_at)}
                 </td>
                 {/* The card view has always had a bookmark; the table view hadn't, so
                     the same paper was saveable in one view and not the other. */}
-                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                   <BookmarkButton
                     paperId={p.id}
                     teamId={teamId}

@@ -2,10 +2,15 @@ import { type MouseEvent, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bookmark } from "lucide-react";
 
+import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
-/** Toggles a paper on the current user's reading list (paper_status = to_read).
+/** Toggles `paper_status.saved` — "this one is mine": on my reading list, and
+ *  the strongest taste signal there is (1.5x in the API's taste vector). It is
+ *  deliberately independent of reading progress, so a paper central to your
+ *  project stays saved after you have read it.
+ *
  *  Optimistic: flips immediately, reverts on error, and refreshes the reading
  *  list (which the dashboard + card bookmark states read from). */
 export function BookmarkButton({
@@ -35,20 +40,36 @@ export function BookmarkButton({
     const next = !on;
     setOn(next);
     setBusy(true);
+    // The payload carries `saved` only, so an existing row keeps whatever
+    // progress it has; a new row takes the 'unread' column default.
     const res = next
       ? await supabase
           .from("paper_status")
           .upsert(
-            { user_id: userId, team_id: teamId, paper_id: paperId, status: "to_read" },
+            {
+              user_id: userId,
+              team_id: teamId,
+              paper_id: paperId,
+              saved: true,
+              // Explicit: there is no updated_at trigger, and the column
+              // default only fires on INSERT. Saving a paper you read months
+              // ago would otherwise keep that old timestamp — which orders
+              // the reading list, buckets it under "Earlier", and decays the
+              // save to ~3% of its weight in the taste vector.
+              updated_at: new Date().toISOString(),
+            },
             { onConflict: "user_id,paper_id,team_id" },
           )
       : await supabase
           .from("paper_status")
-          .delete()
+          .update({ saved: false, updated_at: new Date().toISOString() })
           .eq("user_id", userId)
           .eq("team_id", teamId)
-          .eq("paper_id", paperId)
-          .eq("status", "to_read");
+          .eq("paper_id", paperId);
+    // Un-saving a paper with no progress leaves an all-default row, and
+    // recommend_v2 excludes every paper that has ANY row — so the paper would
+    // vanish from Discover instead of returning to it.
+    if (!next && !res.error) await deleteIfDefault(supabase, userId, teamId, paperId);
     setBusy(false);
     if (res.error) {
       setOn(!next); // revert

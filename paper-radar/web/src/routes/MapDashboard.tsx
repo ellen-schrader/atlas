@@ -30,6 +30,7 @@ import {
   updateMap,
 } from "@/lib/api";
 import { usePalette } from "@/lib/palette";
+import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
 import type { MapOverviewData, MapPaper, MapSummary } from "@/lib/types";
 import { cn, formatRelative } from "@/lib/utils";
@@ -91,21 +92,27 @@ export default function MapDashboard() {
     onSuccess: () => navigate("/maps"),
     onError: (e) => window.alert(`Couldn’t delete the map — ${(e as Error).message}`),
   });
-  // Quick read toggle from a row: mark read, or clear back to unread. (Clearing
-  // also drops a reading-list "to_read" on that paper — an accepted simplification.)
+  // Quick read toggle from a row. Writes the progress axis only: clearing used
+  // to delete the whole paper_status row, which also threw away `saved` — so
+  // un-reading a saved paper silently dropped it off the reading list and cost
+  // it the 1.5x save weight in the taste vector. The two-axis split
+  // (20261006120000) converted BookmarkButton, MarkReadButton and the reading
+  // list; this writer was missed.
   const setRead = useMutation({
     mutationFn: async ({ paperId, read }: { paperId: string; read: boolean }) => {
-      const base = supabase.from("paper_status");
-      if (read) {
-        await base.upsert(
-          { user_id: userId, team_id: team.id, paper_id: paperId, status: "read" },
-          { onConflict: "user_id,team_id,paper_id" },
-        );
-      } else {
-        await base.delete().eq("user_id", userId).eq("team_id", team.id).eq("paper_id", paperId);
-      }
+      const { error } = await supabase.from("paper_status").upsert(
+        { user_id: userId, team_id: team.id, paper_id: paperId, status: read ? "read" : "unread" },
+        { onConflict: "user_id,team_id,paper_id" },
+      );
+      if (error) throw error;
+      if (!read) await deleteIfDefault(supabase, userId, team.id, paperId);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["map-papers", mapId] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["map-papers", mapId] });
+      // The reading list and the unread dots read the same row.
+      void qc.invalidateQueries({ queryKey: ["reading-list"] });
+      void qc.invalidateQueries({ queryKey: ["read-papers"] });
+    },
   });
   // A cited paper can drop out of the map after curation; resolve to undefined so
   // the summary can hide a now-stale source chip rather than showing "source".
@@ -444,7 +451,7 @@ function MapEditPanel({
   return (
     <Modal open onClose={onClose} label="Edit map" className="max-w-md">
       <div className="p-5">
-        <div className="mb-3 pr-8">
+        <div className="mb-3 pl-8">
           <h2 className="font-serif text-lg font-semibold tracking-tight">Edit map</h2>
         </div>
 
@@ -667,7 +674,7 @@ function PaperRow({
       ? "bg-faint border-faint"
       : p.read_status === "reading"
         ? "bg-accent border-accent"
-        : "bg-transparent border-accent"; // to_read / null = unread
+        : "bg-transparent border-accent"; // unread / null
   return (
     <li className="group flex gap-3 border-t border-border py-2.5 first:border-t-0">
       <span

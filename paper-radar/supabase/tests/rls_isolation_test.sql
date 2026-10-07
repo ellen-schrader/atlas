@@ -6,7 +6,7 @@
 -- (exactly what auth.uid() reads). No external extensions beyond pgTAP.
 
 begin;
-select plan(10);
+select plan(12);
 
 -- === seed (runs as the superuser test role, so RLS is bypassed here) =======
 
@@ -45,16 +45,25 @@ insert into public.comments (paper_id, team_id, author_id, body) values
 
 -- === trigger: mention → auto-TBR (checked as superuser) ====================
 
--- Ada is mentioned on paper 1 → a 'to_read' status appears for her.
+-- Ada is mentioned on paper 1 → the paper is saved to her list, unstarted.
+-- Two assertions since the two-axis split (20261006120000): status alone proves
+-- nothing now, because 'unread' is also the column default for a row that
+-- exists for some other reason. `saved` is what the trigger is actually for.
 insert into public.mentions (paper_id, team_id, mentioned_user, mentioned_by) values
     ('10000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
      '00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000a');
 select is(
+    (select saved from public.paper_status
+     where user_id = '00000000-0000-0000-0000-00000000000a'
+       and paper_id = '10000000-0000-0000-0000-000000000001'),
+    true,
+    'mention auto-adds the paper to the mentioned user''s list');
+select is(
     (select status from public.paper_status
      where user_id = '00000000-0000-0000-0000-00000000000a'
        and paper_id = '10000000-0000-0000-0000-000000000001'),
-    'to_read',
-    'mention auto-adds the paper to the mentioned user''s TBR');
+    'unread',
+    'mention leaves the paper unstarted');
 
 -- Ada has already read paper 3; a later mention must NOT overwrite that.
 insert into public.paper_status (user_id, paper_id, team_id, status) values
@@ -69,6 +78,12 @@ select is(
        and paper_id = '30000000-0000-0000-0000-000000000003'),
     'read',
     'mention does not overwrite an existing read status');
+select is(
+    (select saved from public.paper_status
+     where user_id = '00000000-0000-0000-0000-00000000000a'
+       and paper_id = '30000000-0000-0000-0000-000000000003'),
+    true,
+    'mention still saves a paper that was already read');
 
 -- === isolation as Ada (Lab A) ==============================================
 

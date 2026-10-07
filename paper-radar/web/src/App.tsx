@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 
 import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
@@ -11,12 +11,12 @@ import Layout from "@/routes/Layout";
 import Landing from "@/routes/Landing";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
-import Import from "@/routes/Import";
 import MapView from "@/routes/Map";
 import MapDashboard from "@/routes/MapDashboard";
 import MapsLibrary from "@/routes/MapsLibrary";
 import MoodBoard from "@/routes/MoodBoard";
 import Onboarding from "@/routes/Onboarding";
+import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
 import ReadingList from "@/routes/ReadingList";
 import Settings from "@/routes/Settings";
@@ -60,12 +60,32 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
+        {/* A shared /papers/:id link is the one signed-out URL worth keeping.
+            The catch-all below replaces the URL, so without this the paper id is
+            gone from the address bar and from history before the recipient has
+            even logged in — and sharing is the whole point of the route. */}
+        <Route path="/papers/:paperId" element={<LoginWithReturn />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
   }
 
   return <AuthedApp session={session} />;
+}
+
+/** Send a signed-out visitor to the login screen without losing where they were. */
+function LoginWithReturn() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={`/login?next=${encodeURIComponent(pathname + search)}`} replace />;
+}
+
+/** The signed-in half of the above. Only same-origin paths are honoured — `next`
+ *  comes from the URL bar, so an absolute one would be an open redirect. */
+function ReturnToNext() {
+  const [params] = useSearchParams();
+  const next = params.get("next");
+  const safe = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  return <Navigate to={safe} replace />;
 }
 
 function AuthedApp({ session }: { session: Session }) {
@@ -91,7 +111,10 @@ function AuthedApp({ session }: { session: Session }) {
       <Route element={<Layout session={session} team={team} />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/papers" element={<Papers />} />
-        <Route path="/import" element={<Import />} />
+        <Route path="/papers/:paperId" element={<PaperPage />} />
+        {/* Retired: importing a .bib is a mode of the Add-paper dialog now.
+            Kept as a redirect so an old bookmark lands somewhere sensible. */}
+        <Route path="/import" element={<Navigate to="/papers" replace />} />
         <Route path="/reading" element={<ReadingList />} />
         <Route path="/board" element={<MoodBoard />} />
         <Route path="/map" element={<MapView />} />
@@ -101,6 +124,9 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/connect" element={<Connect />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
+      {/* Signed in at /login: honour ?next= from LoginWithReturn, so a shared
+          paper link resumes where it left off. */}
+      <Route path="/login" element={<ReturnToNext />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

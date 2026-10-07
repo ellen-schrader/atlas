@@ -44,6 +44,7 @@ export interface PaperPost {
   posted_by: string | null;
   posted_by_label: string | null;
   poster?: { display_name: string } | null; // joined profile — fallback when label is null
+  source: string; // 'web' | 'teams_pdf' | 'teams' — how the paper reached the lab
   tags: string[]; // lab-scoped custom tags (distinct from papers.tags/keywords)
   papers: Paper; // the joined canonical paper
 }
@@ -183,7 +184,7 @@ export interface MapPaper {
   similarity: number | null; // relevance to the seed
   reactions: number;
   comments: number;
-  read_status: "to_read" | "reading" | "read" | null;
+  read_status: "unread" | "reading" | "read" | null;
   posted_at: string | null;
   pinned: boolean;
 }

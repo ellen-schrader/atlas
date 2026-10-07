@@ -11,7 +11,11 @@ import {
 } from "@/lib/paperExport";
 import { cn } from "@/lib/utils";
 
-const FORMATS: ExportFormat[] = ["markdown", "text", "bibtex"];
+// Every format in ExportFormat. An array literal is not exhaustiveness-checked,
+// so omitting one here is invisible to TypeScript — "ris" was offered on a
+// single paper via Cite but not on a selection, which is backwards: the
+// reference-manager formats are exactly the ones you want in bulk.
+const FORMATS: ExportFormat[] = ["markdown", "text", "bibtex", "ris", "csv"];
 
 /** A floating action bar for multi-select export. Shown while a list is in select
  *  mode: it reports the count, toggles select-all, and opens the export popover

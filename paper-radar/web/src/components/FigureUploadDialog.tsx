@@ -119,7 +119,7 @@ export function FigureUploadDialog({
   return (
     <Modal open={open} onClose={close} label="Upload a figure">
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-        <h2 className="text-[19px] font-bold tracking-tight">Upload a figure</h2>
+        <h2 className="pl-10 text-[19px] font-bold tracking-tight">Upload a figure</h2>
 
         <input
           ref={fileInput}
