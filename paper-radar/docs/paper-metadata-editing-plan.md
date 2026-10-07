@@ -30,6 +30,15 @@ and `api/backfill_metadata.py` rewrites fields from Crossref. Without a flag,
 **the next backfill silently overwrites a human correction** — and because both
 run in the background, nobody finds out.
 
+**Everything here is sized for more than one lab.** Today Atlas has one, and a
+design that only works at one would be fine for months and then quietly wrong:
+at two labs sharing a paper, an edit made in one lab lands in the other, made by
+someone its members cannot see and cannot ask. The three decisions below —
+per-field provenance, a history table, an audit line that degrades — are all
+answers to that, and all cost roughly what the naive version costs *if done
+now*. Retrofitting per-field provenance in particular means backfilling guesses
+about which fields a human once touched.
+
 ## Permissions
 
 To start: in a lab that has posted this paper, the caller must be the **poster**
@@ -47,12 +56,16 @@ exists (
 )
 ```
 
-Softening to any member later is one predicate — drop the final clause.
-
 Worth knowing going in: most production posts arrived through
 `import_teams_pdfs`, which writes `posted_by = null`, so in practice this means
-**owners** for the existing corpus. That is an argument for softening sooner
-rather than later, but starting tight and relaxing is the safer direction.
+**owners** for the existing corpus.
+
+**Do not soften this to any member yet**, tempting as that reads. Softening is
+one predicate — drop the final clause — but with several labs it means any
+member of any lab holding the paper may rewrite the row every other lab sees.
+The dimension worth shrinking first is not who may edit, it is how much damage
+an edit does: per-field provenance, a history to read, and a conflict that is
+detected rather than silently won. With those in place this relaxes safely.
 
 ## Editable fields
 
@@ -63,7 +76,8 @@ rather than later, but starting tight and relaxing is the safer direction.
 (`papers_doi_key`, `papers_url_norm_key`). Editing a DOI can collide with another
 row outright, or silently split one paper into two identities across labs that
 have already posted it. Correcting a wrong DOI is a *merge* problem, not an edit
-problem, and deserves its own design. It is also far rarer than a wrong title.
+problem, and deserves its own design. It is also far rarer than a wrong title —
+and the more labs hold a paper, the worse splitting its identity gets.
 
 **`published_at` moves with `year`.** It is a separate column
 (`20260713140000_bibtex_import.sql`) that the Papers page sorts on, and it was
@@ -108,7 +122,16 @@ Both are API endpoints rather than one being a `SECURITY DEFINER` RPC (as
 splitting the pair across layers would mean two copies of the authorization rule
 to keep in step.
 
-## The flag, and who must respect it
+**Both reject a stale write.** The caller sends the `edited_at` it rendered the
+form from; if the stored value has moved, the write is refused with a 409 and
+the client reloads. Two people correcting one paper — or one correcting it while
+another hits Re-resolve — is close to impossible in a single lab and ordinary
+across several, because the papers many labs hold are the well-known ones, which
+are also the ones most likely to be interestingly wrong. Without the check the
+loser of that race is never told. A null token means "this row had never been
+edited when I loaded it", which is itself a claim worth checking.
+
+## The flag: which fields a human holds
 
 **Not `metadata_source = 'manual'` — that value is already taken.**
 `PaperFields.source` defaults to `"manual"` (`api/app.py`), and the
@@ -118,34 +141,106 @@ paper anyone has ever typed into the Add dialog therefore already reads as
 population the backfill exists to repair: paste a bioRxiv `…v1` rendition DOI by
 hand today and the row could never be fixed again.
 
-So the flag is **`edited_at is not null`** — a column this plan adds anyway for
-audit, and one that means only what it says: a person deliberately corrected
-this row. `metadata_source = 'manual'` is still written on a hand edit, as
-provenance; it is simply not load-bearing.
+**And not a single flag for the whole row, either.** A boolean (`edited_at is
+not null`, say) opts the row out of *all* future backfill, not just the field
+someone fixed. Correct a title today and the abstract Crossref publishes next
+month never arrives — so the paper keeps a thin embedding, which is the precise
+failure this feature exists to remove. Nothing surfaces that a row has opted
+out, so nobody ever finds out. One lab and a dozen corrections hides this;
+several labs and a growing corpus compounds it.
 
-Two places must check it, or the feature quietly undoes itself:
+So the flag is **`edited_fields`** — the list of keys a human holds:
+
+```
+edited_fields  jsonb not null default '[]'::jsonb   -- e.g. ["title", "venue"]
+```
+
+`jsonb` rather than `text[]` only to match `authors`, `keywords` and `tags` on
+the same table; the set is small and every reader of it is Python.
+
+A hand edit adds the keys it wrote. Re-resolve clears the list, because asking
+for it is an explicit override. `metadata_source = 'manual'` is still written on
+a hand edit, as provenance; it is simply not load-bearing.
+
+Two places must respect it, or the feature quietly undoes itself:
 
 | Where | Change |
 | --- | --- |
-| `api/app.py::_repair_untitled` | return early when `edited_at is not null` |
-| `api/backfill_metadata.py::needs_backfill` | exclude edited rows |
+| `api/app.py::_repair_untitled` | skip when `"title"` is held — it writes nothing else into a titled row |
+| `api/backfill_metadata.py::plan_update` | drop held keys from the patch before writing |
+
+Note the second is a change to `plan_update`, not to `needs_backfill`: the row
+still *qualifies* for backfill, it just doesn't get its corrected fields
+overwritten. That is the whole point — a row with a hand-fixed title and an
+empty abstract should still be offered the abstract. `plan_update` already
+builds its patch field by field, so this is one filter. `needs_backfill` stays
+as it is.
 
 `import_paper_background` and the MCP server's `post_paper` both write through
-`_upsert_paper`, so they are covered by the first.
+`_upsert_paper`, so they are covered by the first row.
 
-**Editing must also reset the derived state**, exactly as `_repair_untitled`
-already does: `embedded_at = null` and `enriched_at = null`.
-`papers.embedding` is computed from title + abstract, so a corrected title with
-a stale embedding is a paper that stays unfindable by meaning — which is the
-silent failure this feature exists to remove.
+**Reset derived state only when it is actually derived from what changed.**
+`papers.embedding` is computed from title + abstract (`embeddings.paper_text`),
+and enrichment reads the same two fields. So `embedded_at = null` and
+`enriched_at = null` belong on an edit that touched `title` or `abstract`, and
+nowhere else. Resetting unconditionally would mean correcting a `code_url` buys
+a Voyage embed and an Anthropic enrichment call — and re-tagging rewrites
+`papers.tags`, which is the `canonical` tag list rendered in *every* lab holding
+the paper. Fixing a link should not silently re-tag a paper for five other labs.
 
-## Audit
+## Audit and history
 
-Two columns on `papers`: `edited_by uuid`, `edited_at timestamptz`.
+Two columns on `papers` for the latest edit, so the common read is still one
+row:
 
-A shared record changed by one person should say who — the same reasoning as
-`removed_by` on the removal tombstone. Surfaced quietly in the detail view:
-*"Metadata corrected by Ellen · 2 Oct"*.
+```
+edited_by  uuid
+edited_at  timestamptz
+```
+
+and a table behind them for what actually happened:
+
+```sql
+create table public.paper_edits (
+    id         uuid primary key default gen_random_uuid(),
+    paper_id   uuid not null references public.papers (id) on delete cascade,
+    edited_by  uuid,
+    edited_at  timestamptz not null default now(),
+    before     jsonb not null,   -- only the keys this edit touched
+    after      jsonb not null
+);
+```
+
+The two columns alone were the original proposal, modelled on `removed_by`. But
+removal did not stop at `removed_by` — it got `removed_posts`, holding the prior
+values, and `restore_post` to put them back. Editing deserves the same half of
+the pattern for the same reason, and more so: the person who notices a bad edit
+may be in a different lab from the person who made it, cannot reach them through
+Atlas, and otherwise has no way to learn what the title said before. Storing
+`before`/`after` for the touched keys answers "what did it say", "who keeps
+changing this", and makes an undo a matter of writing `before` back.
+
+Pruned on write the way `removed_posts` is (`prune_removed_posts`), so there is
+no cron to own.
+
+RLS: readable by anyone who can already see the paper — the same predicate as
+`papers_select`.
+
+```sql
+create policy paper_edits_select on public.paper_edits for select
+    to authenticated using (exists (
+        select 1 from public.paper_posts p
+        where p.paper_id = paper_edits.paper_id and public.is_team_member(p.team_id)
+    ));
+```
+
+Written only by the API as the service role, so there is no member-facing
+insert, update or delete.
+
+**The undo button itself is not in this PR.** The table is, because the shape of
+what gets recorded is the part that cannot be added later — an edit that
+happened before the history existed is gone. Restoring from it is a UI
+affordance on top of data that will already be there.
 
 ## UI
 
@@ -160,33 +255,51 @@ In the `⋯` menu, above the removal and divided from it:
 
 **"Fix metadata", not "Edit"** — it is a repair affordance, and the name sets the
 expectation that this is for when something is wrong, not general authorship.
+This copy is doing more work than it looks: one global row per paper is only
+tenable while edits are *corrections*, which are right for everyone. The moment
+it reads as general authorship, labs start expressing preferences through it —
+"Nat. Methods" against "Nature Methods" — and a shared corpus cannot hold both.
 The form opens pre-filled in the dialog, with a line noting that the change
 applies wherever the paper appears.
 
-**Re-resolve confirms when the row has already been corrected by hand.** As
-first drafted it cleared the flag unconditionally, so one click could discard a
-careful correction. The alternative — make Re-resolve fill only empty fields —
-was rejected: a button whose behaviour depends on state the user cannot see is
-worse than one extra click on a rare path. So Re-resolve keeps one meaning
-everywhere ("fetch again and take what you find"), and on an edited row it says
-so first. Confirming clears `edited_at`, because asking for it is an explicit
-override.
+**Re-resolve confirms when fields are held by hand.** As first drafted it
+cleared the flag unconditionally, so one click could discard a careful
+correction. The alternative — make Re-resolve fill only empty fields — was
+rejected: a button whose behaviour depends on state the user cannot see is worse
+than one extra click on a rare path. So Re-resolve keeps one meaning everywhere
+("fetch again and take what you find"), and on a row with a non-empty
+`edited_fields` it names what it is about to overwrite first.
+
+**The audit line degrades across labs.** *"Metadata corrected by Ellen · 2 Oct"*
+cannot render for a lab the editor does not share: `profiles_select` is
+`id = auth.uid() or shares_team_with(id)`, so the profile row simply isn't
+readable, and the line renders with a hole in it. Resolving the name server-side
+with the service role would fix the hole by leaking a person's identity across
+exactly the boundary that policy draws, which is worse. So when
+`shares_team_with(edited_by)` is false, the line reads *"Metadata corrected
+outside your lab · 2 Oct"*. The useful half — that it was touched by a human,
+and when — survives, and the attribution is only shown to people entitled to it.
 
 ## Migration
 
 ```sql
 alter table public.papers
-    add column edited_by uuid,
-    add column edited_at timestamptz;
+    add column edited_by     uuid,
+    add column edited_at     timestamptz,
+    add column edited_fields jsonb not null default '[]'::jsonb;
 ```
 
-No member `UPDATE` grant: both writes go through the API as the service role,
-which is what keeps the authorization rule in exactly one place.
+plus `paper_edits` and its policy above.
+
+No member `UPDATE` grant on `papers`: both writes go through the API as the
+service role, which is what keeps the authorization rule in exactly one place.
 
 ## Out of scope
 
 - Correcting a DOI or URL (a merge problem — see above).
 - Merging two `papers` rows that turn out to be the same work.
+- An undo button for an edit. The history it would read from ships here; the
+  affordance does not.
 - Per-lab metadata overrides. One paper, one record; per-lab titles would make
   the corpus inconsistent to avoid a governance decision, and search and
   embeddings read `papers` regardless.
