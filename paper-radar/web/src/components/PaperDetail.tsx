@@ -1,11 +1,12 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Download, ExternalLink, Maximize2, Quote, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Pencil, Quote, Share2, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Cover } from "@/components/Cover";
+import { Button } from "@/components/ui/button";
 import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
@@ -18,10 +19,12 @@ import {
   downloadText,
   exportFilename,
   formatPapers,
+  paperLink,
 } from "@/lib/paperExport";
+import { useDismissable } from "@/hooks/useDismissable";
 import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
-import type { PaperPost, SimilarPaper } from "@/lib/types";
+import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
 
 export function PaperDetail({
@@ -46,7 +49,15 @@ export function PaperDetail({
   const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
   const canonical = [...new Set([...p.tags, ...p.keywords])];
   const { data: role } = useMyRole(teamId, userId);
-  const canDelete = post.posted_by === userId || role === "owner";
+  const mine = post.posted_by === userId;
+  const isOwner = role === "owner";
+  const canDelete = mine || isOwner;
+  // The note is the poster's words, shown under their name — a colleague
+  // silently rewriting it would make the byline a lie. RLS is more permissive
+  // (any member may UPDATE the post, which is right for the collaborative tag
+  // list), so this restriction is the UI's, deliberately.
+  const canEdit = canDelete;
+  const [editingNote, setEditingNote] = useState(false);
 
   return (
     <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
@@ -137,12 +148,32 @@ export function PaperDetail({
               Posted {posterName ? `by ${posterName} ` : ""}· {formatRelative(post.posted_at)}
             </span>
           </span>
-          {canDelete && <DeletePost postId={post.id} teamId={teamId} onDeleted={onClose} />}
+          <span className="flex items-center gap-1">
+            <SharePost paper={p} />
+            {canEdit && (
+              <PostMenu
+                post={post}
+                teamId={teamId}
+                canDelete={canDelete}
+                onDeleted={onClose}
+                onEditNote={() => setEditingNote(true)}
+              />
+            )}
+          </span>
         </div>
-        {post.note && (
-          <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
-            “{post.note}”
-          </div>
+        {editingNote ? (
+          <NoteEditor
+            postId={post.id}
+            teamId={teamId}
+            initial={post.note ?? ""}
+            onDone={() => setEditingNote(false)}
+          />
+        ) : (
+          post.note && (
+            <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
+              “{post.note}”
+            </div>
+          )
         )}
 
         <SimilarPapers paperId={p.id} teamId={teamId} fullPage={fullPage} />
@@ -150,6 +181,331 @@ export function PaperDetail({
         <hr className="my-6 border-border" />
         <MetaLabel>Discussion</MetaLabel>
         <PaperEngagement paperId={p.id} teamId={teamId} userId={userId} />
+      </div>
+    </div>
+  );
+}
+
+/** Copy a link to this paper — for a person, not a bibliography (that is Cite).
+ *  Two links, because they answer different questions: the Atlas one keeps the
+ *  reader inside the lab's discussion, the publisher one is what you send to
+ *  someone who has no Atlas account. */
+function SharePost({ paper }: { paper: Paper }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<"atlas" | "paper" | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useDismissable(ref, open, () => setOpen(false));
+
+  // Absolute, not the in-app route: a link someone pastes into Teams has to
+  // work from outside the SPA.
+  const atlasUrl = `${window.location.origin}/papers/${paper.id}`;
+  // The same DOI-first resolution the exporters use, so a shared link and a
+  // copied citation never disagree about where the paper lives.
+  const paperUrl = paperLink({
+    id: paper.id,
+    title: paper.title,
+    authors: paper.authors ?? [],
+    venue: paper.venue,
+    year: paper.year,
+    doi: paper.doi,
+    url: paper.url,
+    abstract: paper.abstract,
+  });
+
+  async function copy(which: "atlas" | "paper", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(which);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(null), 2000);
+    } catch {
+      // Clipboard blocked: leave the menu open so the link can be selected by
+      // hand rather than failing silently.
+      window.prompt("Copy this link", value);
+    }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-muted transition hover:bg-surface-2 hover:text-fg"
+      >
+        <Share2 size={13} /> Share
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
+          <MenuItem
+            icon={copied === "atlas" ? <Check size={14} className="text-accent" /> : <LinkIcon size={14} />}
+            label={copied === "atlas" ? "Copied" : "Copy Atlas link"}
+            hint="Opens the discussion"
+            onClick={() => void copy("atlas", atlasUrl)}
+          />
+          <MenuItem
+            icon={copied === "paper" ? <Check size={14} className="text-accent" /> : <ExternalLink size={14} />}
+            label={copied === "paper" ? "Copied" : "Copy link to paper"}
+            hint={paper.doi ? "Resolves via doi.org" : "The publisher page"}
+            disabled={!paperUrl}
+            onClick={() => paperUrl && void copy("paper", paperUrl)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Post-level actions that are rare, restricted, or destructive. Share stays
+ *  outside this menu on purpose: it is the frequent, safe one, and burying it
+ *  would cost a click every time while putting Delete a slip away from it. */
+function PostMenu({
+  post,
+  teamId,
+  canDelete,
+  onDeleted,
+  onEditNote,
+}: {
+  post: PaperPost;
+  teamId: string;
+  canDelete: boolean;
+  onDeleted?: () => void;
+  onEditNote: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useDismissable(ref, open, () => {
+    setOpen(false);
+    setConfirming(false);
+  });
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label="Post actions"
+        onClick={() => setOpen((o) => !o)}
+        className="grid h-7 w-7 place-items-center rounded-control text-muted transition hover:bg-surface-2 hover:text-fg"
+      >
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1.5 w-56 overflow-hidden rounded-card border border-border bg-surface text-left shadow-xl">
+          <MenuItem
+            icon={<Pencil size={14} />}
+            label={post.note ? "Edit note" : "Add a note"}
+            hint="Why you shared it"
+            onClick={() => {
+              setOpen(false);
+              onEditNote();
+            }}
+          />
+          {canDelete &&
+            (confirming ? (
+              <DeleteConfirm
+                postId={post.id}
+                teamId={teamId}
+                onCancel={() => setConfirming(false)}
+                onDeleted={onDeleted}
+              />
+            ) : (
+              <MenuItem
+                icon={<Trash2 size={14} />}
+                label="Delete post"
+                hint="Removes it from this lab"
+                danger
+                onClick={() => setConfirming(true)}
+              />
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  hint,
+  onClick,
+  danger = false,
+  disabled = false,
+}: {
+  icon: ReactNode;
+  label: string;
+  hint?: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition",
+        "disabled:cursor-not-allowed disabled:opacity-40",
+        danger ? "text-danger hover:bg-danger/10" : "text-fg hover:bg-surface-2",
+      )}
+    >
+      <span className="shrink-0">{icon}</span>
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{label}</span>
+        {hint && <span className="block truncate text-xs text-faint">{hint}</span>}
+      </span>
+    </button>
+  );
+}
+
+/** The delete confirmation, inline in the menu. Same two-step as before — a
+ *  destructive action one click from "Edit note" needs the pause — but it no
+ *  longer sits bare in the byline row where it was the only thing on offer. */
+function DeleteConfirm({
+  postId,
+  teamId,
+  onCancel,
+  onDeleted,
+}: {
+  postId: string;
+  teamId: string;
+  onCancel: () => void;
+  onDeleted?: () => void;
+}) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function del() {
+    setBusy(true);
+    setError(null);
+    const { error: err } = await supabase.from("paper_posts").delete().eq("id", postId);
+    setBusy(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
+    void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
+    void qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
+    void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
+    onDeleted?.();
+  }
+
+  return (
+    <div className="border-t border-border bg-danger/5 px-3 py-2.5">
+      <p className={cn("text-xs", error ? "text-danger" : "text-muted")}>
+        {error ?? "Delete this post? The paper stays in Atlas."}
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={del}
+          disabled={busy}
+          className="rounded-control bg-danger px-2.5 py-1 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
+        >
+          {busy ? "Deleting…" : "Delete"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-control px-2.5 py-1 text-xs font-medium text-muted transition hover:text-fg"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Edit the note — the one thing about a post that was write-once: you could
+ *  add it when sharing the paper and never change it afterwards. Tags are
+ *  already editable inline, and the paper's own metadata is not member-editable
+ *  at all, so "edit" means this. */
+function NoteEditor({
+  postId,
+  teamId,
+  initial,
+  onDone,
+}: {
+  postId: string;
+  teamId: string;
+  initial: string;
+  onDone: () => void;
+}) {
+  const qc = useQueryClient();
+  const [value, setValue] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    area.current?.focus();
+    area.current?.setSelectionRange(initial.length, initial.length);
+  }, [initial.length]);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    const next = value.trim();
+    const { error: err } = await supabase
+      .from("paper_posts")
+      // Empty clears the note rather than storing "", so the blockquote
+      // disappears instead of rendering a pair of empty quotation marks.
+      .update({ note: next || null })
+      .eq("id", postId);
+    setBusy(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    await qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
+    onDone();
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5">
+      <label htmlFor={`note-${postId}`} className="sr-only">
+        Why you shared this paper
+      </label>
+      <textarea
+        id={`note-${postId}`}
+        ref={area}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          // Escape cancels; the capture-phase handler in useDismissable is not
+          // active here, so this must not bubble to Modal and close the dialog.
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onDone();
+          }
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
+        }}
+        rows={3}
+        placeholder="Why is this worth the lab's time?"
+        className="w-full resize-y bg-transparent text-sm text-fg outline-none placeholder:text-faint"
+      />
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+      <div className="mt-2 flex items-center gap-2">
+        <Button size="sm" onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Save note"}
+        </Button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="text-xs font-medium text-muted transition hover:text-fg"
+        >
+          Cancel
+        </button>
+        <span className="ml-auto text-xs text-faint">⌘↵ to save</span>
       </div>
     </div>
   );
@@ -235,34 +591,7 @@ function CitePaperButton({ paper }: { paper: ExportPaper }) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => () => clearTimeout(timer.current), []);
-  useEffect(() => {
-    if (!open) return;
-    // pointerdown, not mousedown: Modal dismisses on a pointerdown/pointerup pair
-    // on its backdrop, and pointer events precede mouse events — so a backdrop
-    // click closed this popover AND the dialog behind it. Taking the pointerdown
-    // and stopping it leaves the Modal's pair unarmed.
-    const onDown = (e: PointerEvent) => {
-      if (ref.current?.contains(e.target as Node)) return;
-      e.stopPropagation();
-      setOpen(false);
-    };
-    // Capture phase, and stop the event: Modal also listens for Escape on
-    // document, so without this one press closes the popover AND the dialog
-    // behind it. A capture listener on document runs before document's own
-    // bubble listener, which is what lets the inner layer win. Escape again
-    // (popover now closed, this listener gone) closes the dialog as usual.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      setOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("pointerdown", onDown, true);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open]);
+  useDismissable(ref, open, () => setOpen(false));
 
   // Drop the confirmation when the format changes, so "Copied" never sits beside
   // a format other than the one actually on the clipboard.
@@ -482,69 +811,6 @@ function MarkReadButton({
           "Save" then "Saved". The action lives in the title and aria-pressed. */}
       <Check size={14} /> {isRead ? "Read" : "Mark read"}
     </button>
-  );
-}
-
-function DeletePost({
-  postId,
-  teamId,
-  onDeleted,
-}: {
-  postId: string;
-  teamId: string;
-  onDeleted?: () => void;
-}) {
-  const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function del() {
-    setBusy(true);
-    setError(null);
-    const { error: err } = await supabase.from("paper_posts").delete().eq("id", postId);
-    setBusy(false);
-    if (err) {
-      setError(err.message);
-      return;
-    }
-    // Including the post itself: /papers/:id reads this key, so without it the
-    // page keeps rendering a live detail for a post that no longer exists.
-    void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
-    void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
-    void qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
-    void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
-    onDeleted?.();
-  }
-
-  if (!confirming) {
-    return (
-      <button
-        type="button"
-        onClick={() => setConfirming(true)}
-        className="inline-flex items-center gap-1.5 text-muted transition hover:text-danger"
-      >
-        <Trash2 size={13} /> Delete post
-      </button>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className={cn(error ? "text-danger" : "text-muted")}>{error ?? "Delete this post?"}</span>
-      <button type="button" onClick={del} disabled={busy} className="font-medium text-danger hover:underline">
-        {busy ? "…" : "Delete"}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setConfirming(false);
-          setError(null);
-        }}
-        className="text-muted hover:text-fg"
-      >
-        Cancel
-      </button>
-    </span>
   );
 }
 
