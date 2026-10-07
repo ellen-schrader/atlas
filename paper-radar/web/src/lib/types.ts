@@ -44,6 +44,7 @@ export interface PaperPost {
   posted_by: string | null;
   posted_by_label: string | null;
   poster?: { display_name: string } | null; // joined profile — fallback when label is null
+  source: string; // 'web' | 'teams_pdf' | 'teams' — how the paper reached the lab
   tags: string[]; // lab-scoped custom tags (distinct from papers.tags/keywords)
   papers: Paper; // the joined canonical paper
 }

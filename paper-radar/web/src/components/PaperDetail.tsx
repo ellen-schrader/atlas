@@ -20,6 +20,7 @@ import {
   formatPapers,
   paperLink,
 } from "@/lib/paperExport";
+import { useToast } from "@/components/Toast";
 import { useDismissable } from "@/hooks/useDismissable";
 import { deleteIfDefault } from "@/lib/paperStatus";
 import { supabase } from "@/lib/supabase";
@@ -414,6 +415,7 @@ function DeleteConfirm({
   onDeleted?: () => void;
 }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -421,6 +423,14 @@ function DeleteConfirm({
   // Focus the safe choice: this appears under the pointer, and Enter must not
   // be the key that removes a paper for a whole lab.
   useEffect(() => cancelRef.current?.focus(), []);
+
+  function refresh() {
+    void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
+    void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
+    void qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
+    void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
+    void qc.invalidateQueries({ queryKey: ["reading-list"] });
+  }
 
   async function del() {
     setBusy(true);
@@ -431,10 +441,21 @@ function DeleteConfirm({
       setError(err.message);
       return;
     }
-    void qc.invalidateQueries({ queryKey: ["paper-post", teamId] });
-    void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
-    void qc.invalidateQueries({ queryKey: ["paper-count", teamId] });
-    void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
+    refresh();
+    // Removing closes this dialog, so the way back has to live outside it.
+    // restore_post takes only the removal's id — every value it writes comes
+    // from the tombstone the delete trigger captured, so the paper returns with
+    // its original sharer, date, note and tags rather than being re-posted as
+    // whoever happened to click undo.
+    toast({
+      message: `Removed from ${teamName}`,
+      actionLabel: "Undo",
+      onAction: async () => {
+        const { error: undoErr } = await supabase.rpc("restore_post", { p_post: postId });
+        refresh();
+        if (undoErr) toast({ message: `Couldn't undo: ${undoErr.message}` });
+      },
+    });
     onDeleted?.();
   }
 

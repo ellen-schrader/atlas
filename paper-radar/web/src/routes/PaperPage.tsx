@@ -45,7 +45,7 @@ export default function PaperPage() {
       const { data, error } = await supabase
         .from("paper_posts")
         .select(
-          "id, posted_at, note, posted_by, posted_by_label, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
+          "id, posted_at, note, posted_by, posted_by_label, source, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
         )
         .eq("team_id", team.id)
         .eq("paper_id", paperId!)

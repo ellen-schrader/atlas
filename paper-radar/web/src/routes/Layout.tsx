@@ -20,6 +20,7 @@ import { AtlasMark } from "@/components/Brand";
 import { FigureModalProvider } from "@/components/FigureModal";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
+import { ToastProvider } from "@/components/Toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useProfile } from "@/hooks/useProfile";
@@ -145,11 +146,13 @@ export default function Layout({ session, team }: { session: Session; team: Team
         </aside>
 
         <main className="min-w-0 flex-1 overflow-auto">
-          <PaperModalProvider teamId={team.id} teamName={team.name} userId={session.user.id}>
+          <ToastProvider>
+            <PaperModalProvider teamId={team.id} teamName={team.name} userId={session.user.id}>
             <FigureModalProvider teamId={team.id} userId={session.user.id}>
               <Outlet context={ctx} />
             </FigureModalProvider>
-          </PaperModalProvider>
+            </PaperModalProvider>
+          </ToastProvider>
         </main>
     </div>
   );
