@@ -5,7 +5,7 @@
 -- Same JWT-claims trick as rls_isolation_test.sql to act as a user.
 
 begin;
-select plan(11);
+select plan(12);
 
 insert into auth.users (id, email, raw_user_meta_data) values
     ('00000000-0000-0000-0000-00000000000a', 'ada@lab.test', '{"display_name":"Ada"}'::jsonb),
@@ -118,6 +118,12 @@ select is(
     (select count(*)::int from public.search_papers('33333333-3333-3333-3333-333333333333', '', 'ignored')),
     0,
     'search_papers: a paper tag hidden by lab tags does not match'
+);
+
+select is(
+    (select n from public.team_tags('33333333-3333-3333-3333-333333333333') where tag = 'spatial'),
+    public.search_papers_count('33333333-3333-3333-3333-333333333333', '', 'spatial'),
+    'team_tags: the tag menu''s count equals the filtered result count'
 );
 
 select * from finish();

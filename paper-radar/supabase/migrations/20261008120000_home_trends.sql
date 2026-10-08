@@ -5,9 +5,9 @@
 -- paper's own enrichment tags (papers.tags). That is what every list row already
 -- shows (PaperListRow, Home's feed, cards), and in practice most posts carry no
 -- lab tags, so counting lab tags alone would leave Trending empty. post_tags()
--- states that rule once, and search_papers / search_papers_count are reissued
--- so that the ?tag= filter Trending links to matches the same set; otherwise
--- clicking a trending tag could open an empty list.
+-- states that rule once, and search_papers / search_papers_count / team_tags
+-- are reissued on it, so the ?tag= filter Trending links to, the Papers tag
+-- menu's counts and the result list all agree.
 --
 -- All three RPCs are security invoker: they aggregate over paper_posts and
 -- papers, whose RLS already limits a caller to their own labs.
@@ -216,4 +216,19 @@ as $$
              coalesce(p.title, '') || ' ' || coalesce(p.abstract, '') || ' ' || coalesce(p.authors::text, ''))
            @@ public.prefix_tsquery(p_q)
       );
+$$;
+
+-- The Papers tag menu: same rule, so "imaging (8)" opens 8 results.
+create or replace function public.team_tags(p_team uuid)
+returns table(tag text, n int)
+language sql
+stable
+as $$
+    select t.tag, count(*)::int as n
+    from public.paper_posts pp
+    join public.papers p on p.id = pp.paper_id
+    cross join lateral jsonb_array_elements_text(public.post_tags(pp.tags, p.tags)) as t(tag)
+    where pp.team_id = p_team
+    group by t.tag
+    order by n desc, t.tag;
 $$;
