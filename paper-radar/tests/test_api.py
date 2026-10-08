@@ -760,29 +760,33 @@ def test_pick_reason_names_the_nearest_anchor_and_respects_the_floor():
 
 
 def _post(pid: str, tags: list[str] | None = None, **kw) -> dict:
-    return {"papers": {"id": pid, "tags": tags or []}, "tags": [], **kw}
+    return {"id": f"post-{pid}", "papers": {"id": pid, "tags": tags or []}, "tags": [], **kw}
 
 
-def _reasons_for(uc, posts):
+def _reasons_for(uc, posts, source="engagement"):
     """Run the reasons the way /recommendations does: anchors and embeddings come
-    from the same pass that builds the taste vector."""
-    from api.app import _engagement_weights, _recommendation_reasons, _taste_vector
+    from the same pass that builds the taste vector; every post found by
+    ``source`` (a name, or post id → name)."""
+    from api.app import _engagement_weights, _source_reasons, _taste_vector
 
     anchors: dict = {}
     loaded: dict = {}
     weights = _engagement_weights(uc, "user-1", "team-1", anchors)
     _taste_vector(uc, "user-1", weights, loaded)
-    return _recommendation_reasons(uc, posts, anchors, loaded)
+    origin = source if isinstance(source, dict) else {p["id"]: source for p in posts}
+    return _source_reasons(uc, posts, origin, anchors, loaded)
 
 
-def test_recommendation_reasons_engagement_profile_and_fallback():
-    """Rule 1 names the nearest engaged paper (strongest engagement kind wins,
-    a 🤔 isn't an endorsement, 'reading' isn't 'read'); rule 2 falls back to the
-    profile with the tags it names; with neither, the line is generic."""
-    profile = {
-        "profile_md": "We study spatial transcriptomics of breast tumours.",
-        "profile_vec": _unit(1, 1, 1, 1, 1, 1, 1),
-    }
+_PROFILE = {
+    "profile_md": "We study spatial transcriptomics of breast tumours.",
+    "profile_vec": [0.4] * 7,
+    "interests": ["imaging"],
+}
+
+
+def test_engagement_sourced_cards_name_the_nearest_engaged_paper():
+    """Strongest engagement kind wins; a 🤔 isn't an endorsement; 'reading'
+    isn't 'read'; with no close paper the line is generic, never a stretch."""
     uc = _FakeClient(
         paper_status=[
             {"paper_id": "saved", "saved": True, "status": "read", "updated_at": None},
@@ -797,7 +801,7 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
             {"paper_id": "saved", "emoji": "👍", "created_at": None},
         ],
         comments=[{"paper_id": "talked", "created_at": None}],
-        profiles=[profile],
+        profiles=[_PROFILE],
         papers=[
             {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0, 0, 0, 0)},
             {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0, 0, 0, 0)},
@@ -820,11 +824,11 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
         _post("rec-read"),
         _post("rec-liked"),
         _post("rec-talked"),
-        _post("rec-doubted", ["spatial-transcriptomics", "lung-cancer", "breast-cancer"]),
+        _post("rec-doubted"),
         _post("rec-started"),
         _post("rec-none"),
     ]
-    reasons = _reasons_for(uc, posts)
+    reasons = _reasons_for(uc, posts, "engagement")
 
     assert reasons["rec-saved"] == {
         "kind": "similar_saved",
@@ -835,26 +839,63 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
     assert reasons["rec-liked"]["kind"] == "similar_reacted"
     assert reasons["rec-talked"]["kind"] == "similar_discussed"
     assert reasons["rec-started"]["kind"] == "similar_reading"
-    # Only near the 🤔 paper → not an anchor → the profile explains it, naming
-    # the tags the profile text mentions ("tumours" doesn't make "cancer").
-    assert reasons["rec-doubted"] == {
+    assert reasons["rec-doubted"]["kind"] == "engagement"  # only near the 🤔 paper
+    assert reasons["rec-none"]["kind"] == "engagement"
+
+
+def test_profile_and_tag_sourced_cards_say_so_even_near_a_saved_paper():
+    """The point of searching per signal: a card the profile or a followed tag
+    found says that, even when it also happens to sit next to a saved paper."""
+    uc = _FakeClient(
+        paper_status=[{"paper_id": "saved", "saved": True, "status": "unread", "updated_at": None}],
+        profiles=[{**_PROFILE, "profile_vec": _unit(1, 1)}],
+        papers=[
+            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0)},
+            {"id": "rec-p", "title": "P", "embedding": _unit(1, 0.05)},
+            {"id": "rec-t", "title": "T", "embedding": _unit(1, 0.05)},
+            {"id": "rec-q", "title": "Q", "embedding": _unit(1, 0.05)},
+        ],
+    )
+    posts = [
+        _post("rec-p", ["spatial-transcriptomics", "lung-cancer"]),
+        _post("rec-t", ["imaging", "spatial-transcriptomics"]),
+        _post("rec-q", ["lung-cancer"]),
+    ]
+    reasons = _reasons_for(
+        uc, posts, {"post-rec-p": "profile", "post-rec-t": "tags", "post-rec-q": "profile"}
+    )
+    assert reasons["rec-p"] == {
         "kind": "profile",
         "ref_id": None,
         "ref_label": "spatial-transcriptomics",
         "extra_labels": [],
     }
-    assert reasons["rec-none"]["kind"] == "profile"
-    assert reasons["rec-none"]["ref_label"] == ""
+    assert reasons["rec-t"] == {
+        "kind": "tag",
+        "ref_id": None,
+        "ref_label": "imaging",
+        "extra_labels": [],
+    }
+    assert reasons["rec-q"]["kind"] == "profile"
+    assert reasons["rec-q"]["ref_label"] == ""
 
-    # No profile vector: no profile claim, generic line; engagement unchanged.
-    uc._tables["profiles"] = [{"profile_md": profile["profile_md"], "profile_vec": None}]
-    reasons = _reasons_for(uc, posts)
-    assert reasons["rec-doubted"]["kind"] == "engagement"
-    assert reasons["rec-saved"]["kind"] == "similar_saved"
 
-    # A vector left behind after the text was cleared doesn't count as a profile.
-    uc._tables["profiles"] = [{"profile_md": "  ", "profile_vec": profile["profile_vec"]}]
-    assert _reasons_for(uc, posts)["rec-doubted"]["kind"] == "engagement"
+def test_interleave_shares_slots_round_robin_without_duplicates():
+    from api.app import _interleave
+
+    sources = {
+        "engagement": [("e1", 0.9), ("shared", 0.8), ("e2", 0.7), ("e3", 0.6)],
+        "profile": [("shared", 0.5), ("p1", 0.4)],
+        "tags": [("t1", 0.3)],
+    }
+    order, sims, origin = _interleave(sources, 6)
+    # profile, tags, engagement, in turn; "shared" goes to whoever reached it
+    # first (profile), and engagement skips it; dry sources yield their turns.
+    assert order == ["shared", "t1", "e1", "p1", "e2", "e3"]
+    assert origin["shared"] == "profile" and origin["e1"] == "engagement"
+    assert sims["shared"] == 0.5
+    assert _interleave(sources, 2)[0] == ["shared", "t1"]
+    assert _interleave({}, 5) == ([], {}, {})
 
 
 def test_profile_tags_matches_whole_tags_as_phrases():
@@ -891,9 +932,8 @@ def test_new_reasons_say_who_shared_it():
     assert reasons["p-teams"]["ref_label"] == "Teams Tom"
 
 
-def test_followed_tags_use_post_tags_and_rank_between_engagement_and_profile():
-    """'Tagged X, which you follow' beats the profile text match but not a close
-    engaged paper; a post's lab tags replace its paper's tags for matching."""
+def test_followed_hits_use_post_tags():
+    """A post's lab tags replace its paper's tags for matching follows."""
     from api.app import _followed_hits, _follows
 
     assert _follows({"interests": ["spatial", " ", 3, "imaging "]}) == ["spatial", "imaging"]
@@ -904,39 +944,6 @@ def test_followed_tags_use_post_tags_and_rank_between_engagement_and_profile():
     paper_tagged = {"tags": [], "papers": {"tags": ["spatial", "imaging"]}}
     assert _followed_hits(lab_tagged, ["spatial"]) == []
     assert _followed_hits(paper_tagged, ["imaging", "spatial"]) == ["spatial", "imaging"]
-
-    uc = _FakeClient(
-        paper_status=[{"paper_id": "saved", "saved": True, "status": "unread", "updated_at": None}],
-        profiles=[
-            {
-                "profile_md": "spatial transcriptomics",
-                "profile_vec": _unit(1, 1, 1),
-                "interests": ["spatial"],
-            }
-        ],
-        papers=[
-            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0)},
-            {"id": "rec-near", "title": "A", "embedding": _unit(1, 0.1, 0)},
-            {"id": "rec-tagged", "title": "B", "embedding": _unit(0, 1, 0)},
-            {"id": "rec-profile", "title": "C", "embedding": _unit(0, 0, 1)},
-        ],
-    )
-    reasons = _reasons_for(
-        uc,
-        [
-            _post("rec-near", ["spatial"]),
-            _post("rec-tagged", ["spatial", "imaging"]),
-            _post("rec-profile", ["spatial-transcriptomics"]),
-        ],
-    )
-    assert reasons["rec-near"]["kind"] == "similar_saved"
-    assert reasons["rec-tagged"] == {
-        "kind": "tag",
-        "ref_id": None,
-        "ref_label": "spatial",
-        "extra_labels": [],
-    }
-    assert reasons["rec-profile"]["kind"] == "profile"
 
 
 def test_cold_start_puts_followed_tags_first_and_says_so():

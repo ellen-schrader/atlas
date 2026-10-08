@@ -1586,6 +1586,11 @@ def _taste_vector(
         if acc is not None and wsum > 0:
             centroid_np = _l2norm(acc / wsum)
 
+    if loaded is not None:
+        # Discover searches with each signal on its own (_discover_sources).
+        loaded["profile_q"] = profile_np.tolist() if profile_np is not None else None
+        loaded["engagement_q"] = centroid_np.tolist() if centroid_np is not None else None
+
     if profile_np is None and centroid_np is None:
         return None
     if centroid_np is None:
@@ -1766,27 +1771,21 @@ def _recency_fallback(
     return _hydrate(uc, [r["id"] for r in unseen[:limit]], {}, cold=True)
 
 
-# Every recommendation says why it is there (docs/dashboard.md §3.4), using the
-# most specific reason that is true of how it was ranked:
+# Every recommendation says why it is there (docs/dashboard.md §3.4): the signal
+# whose search found it (see _DISCOVER_SOURCES, _source_reasons):
 #
-#   1. engagement  "Similar to X, which you saved / reacted to / discussed / read /
-#      are reading" —
-#      the engaged paper nearest to it, if that paper is genuinely close (below
-#      _REASON_MIN_SIMILARITY, naming one paper would be a claim the embeddings
-#      don't support). Today most engagement happens in Teams, so this is rare
-#      until it syncs into Atlas; it needs no change when it does.
-#   1b. tag        "Tagged spatial-transcriptomics, which you follow" — a followed
-#      tag the paper carries (profiles.interests). Certain, so it beats the
-#      profile text match.
-#   2. profile     "Matches spatial transcriptomics in your research profile" —
-#      the paper's tags that the profile text mentions, else just "Matches your
-#      research profile". Only when the caller has a profile vector, i.e. the
-#      profile actually took part in the ranking.
-#   3. new         "New in {lab} · shared by Sara" — the cold-start fallback,
-#      which is newest-first.
-#
-# A taste built from engagement alone with no close paper gets "engagement"
-# ("In line with your activity in Atlas") rather than a stretched "Similar to".
+#   engagement  "Similar to X, which you saved / reacted to / discussed / read /
+#               are reading" — the engaged paper nearest to it, if genuinely
+#               close (below _REASON_MIN_SIMILARITY, naming one paper would be a
+#               claim the embeddings don't support; then "In line with your
+#               activity in Atlas"). Most engagement is in Teams today, so this
+#               grows once it syncs; nothing here changes when it does.
+#   tags        "Tagged X, which you follow" (profiles.interests).
+#   profile     "Matches spatial transcriptomics in your research profile" —
+#               the paper's tags the profile text names, else "Matches your
+#               research profile".
+#   new         "New in {lab} · shared by Sara" — the cold-start fallback, which
+#               is newest-first (followed-tag posts first, and they say so).
 _REASON_MIN_SIMILARITY = 0.5
 # When one paper carries several kinds of engagement, the strongest names it.
 _ANCHOR_RANK = {
@@ -1831,58 +1830,73 @@ def _profile_tags(profile_md: str, tags: list[str]) -> list[str]:
     return out
 
 
-def _recommendation_reasons(
-    uc, posts: list[dict], anchors: dict[str, str], loaded: dict
+def _source_reasons(
+    uc, posts: list[dict], source: dict[str, str], anchors: dict[str, str], loaded: dict
 ) -> dict[str, dict]:
-    """paper_id → reason for each recommended post (rules 1–2 above; rule 3 is
-    _new_reasons). Every post gets one: engagement if a paper is close enough,
-    else profile, else the generic engagement line.
+    """paper_id → reason, from the search that found each post (``source``: post
+    id → "profile" | "tags" | "engagement"), so a card names the signal that
+    actually put it there:
+
+    * engagement → the nearest engaged paper if it clears _REASON_MIN_SIMILARITY,
+      else the generic "In line with your activity in Atlas";
+    * tags → "Tagged X, which you follow";
+    * profile → "Matches X in your research profile" (tags the text names), else
+      "Matches your research profile".
 
     ``anchors`` and ``loaded`` come from _engagement_weights / _taste_vector, so
-    the engaged papers' embeddings aren't fetched twice; only the (≤ 50)
-    recommended papers' embeddings are read here."""
-    paper_ids = [p["papers"]["id"] for p in posts]
-    if not paper_ids:
+    engaged papers' embeddings aren't fetched twice; only the engagement-sourced
+    recommendations' embeddings are read here."""
+    if not posts:
         return {}
     vecs: dict[str, np.ndarray] = loaded.get("vecs", {})
     titles: dict[str, str | None] = loaded.get("titles", {})
-    rec_vecs = {
-        p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
-        for p in (
-            uc.table("papers").select("id, embedding").in_("id", paper_ids).execute().data or []
-        )
-        if p.get("embedding")
-    }
+    follows: list[str] = loaded.get("follows") or []
+    profile_md = loaded.get("profile_md") or ""
+
+    by_engagement = [p["papers"]["id"] for p in posts if source.get(p["id"]) == "engagement"]
+    rec_vecs = (
+        {
+            p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
+            for p in (
+                uc.table("papers").select("id, embedding").in_("id", by_engagement)
+                .execute().data or []
+            )
+            if p.get("embedding")
+        }
+        if by_engagement
+        else {}
+    )
     candidates = [
         (kind, pid, titles[pid], vecs[pid])
         for pid, kind in anchors.items()
         # An untitled anchor can't be named on the card.
         if pid in vecs and titles.get(pid)
     ]
-    # The profile only explains a card if it took part in the ranking (a vector)
-    # and there is still text behind it.
-    profile_md = loaded.get("profile_md") or ""
-    use_profile = bool(loaded.get("has_profile") and profile_md.strip())
 
-    follows: list[str] = loaded.get("follows") or []
+    def profile_reason(post: dict) -> dict:
+        tags = post.get("tags") or post["papers"].get("tags") or []
+        hits = _profile_tags(profile_md, tags)
+        return {
+            "kind": "profile",
+            "ref_id": None,
+            "ref_label": hits[0] if hits else "",
+            "extra_labels": hits[1:2],
+        }
 
     reasons: dict[str, dict] = {}
     for post in posts:
         pid = post["papers"]["id"]
-        reason = _pick_reason(rec_vecs[pid], candidates) if pid in rec_vecs else None
-        if reason is None:
-            reason = _tag_reason(post, follows)
-        if reason is None and use_profile:
-            tags = post.get("tags") or post["papers"].get("tags") or []
-            hits = _profile_tags(profile_md, tags)
-            reason = {
-                "kind": "profile",
+        kind = source.get(post["id"])
+        if kind == "engagement":
+            reason = (_pick_reason(rec_vecs[pid], candidates) if pid in rec_vecs else None) or {
+                "kind": "engagement",
                 "ref_id": None,
-                "ref_label": hits[0] if hits else "",
-                "extra_labels": hits[1:2],
+                "ref_label": "",
             }
-        if reason is None:
-            reason = {"kind": "engagement", "ref_id": None, "ref_label": ""}
+        elif kind == "tags":
+            reason = _tag_reason(post, follows) or profile_reason(post)
+        else:
+            reason = profile_reason(post)
         reasons[pid] = reason
     return reasons
 
@@ -1930,6 +1944,86 @@ def _attach_reasons(result: RecommendationsResponse, reasons: dict[str, dict]) -
         r.reason = reasons.get(r.post["papers"]["id"])
 
 
+# Discover runs one search per signal and interleaves them, rather than one search
+# with a blended vector: in a blend, a few saved papers took 50–70% of the
+# weight and followed tags only nudged papers that were already close, so a
+# researcher's description and tags could vanish from the feed. Each signal the
+# caller has gets an equal, round-robin share of the slots, in this order.
+_DISCOVER_SOURCES = ("profile", "tags", "engagement")
+
+
+def _rpc_recommend(
+    uc, team_id: str, query: list[float], limit: int, tags: list[str] | None = None
+) -> list[tuple[str, float]]:
+    rows = (
+        uc.rpc(
+            "recommend_papers",
+            {"p_team": team_id, "p_query": query, "p_limit": limit, "p_tags": tags or []},
+        )
+        .execute()
+        .data
+        or []
+    )
+    return [(r["post_id"], r["similarity"]) for r in rows]
+
+
+def _discover_sources(
+    uc, team_id: str, loaded: dict, limit: int
+) -> dict[str, list[tuple[str, float]]]:
+    """The caller's signals, each searched on its own: post ids with similarity,
+    best first. A signal the caller doesn't have is simply absent."""
+    profile_q = loaded.get("profile_q")
+    engagement_q = loaded.get("engagement_q")
+    follows: list[str] = loaded.get("follows") or []
+    sources: dict[str, list[tuple[str, float]]] = {}
+    if profile_q is not None:
+        sources["profile"] = _rpc_recommend(uc, team_id, profile_q, limit)
+    if engagement_q is not None:
+        sources["engagement"] = _rpc_recommend(uc, team_id, engagement_q, limit)
+    query = profile_q if profile_q is not None else engagement_q
+    if follows and query is not None:
+        # recommend_papers pools followed-tag posts with the query's nearest;
+        # keep only the ones that carry a followed tag, nearest first.
+        ranked = _rpc_recommend(uc, team_id, query, limit * 3, follows)
+        rows = (
+            uc.table("paper_posts").select("id, tags, papers(tags)")
+            .in_("id", [pid for pid, _ in ranked]).execute().data or []
+            if ranked
+            else []
+        )
+        tagged = {r["id"] for r in rows if _followed_hits(r, follows)}
+        sources["tags"] = [(pid, sim) for pid, sim in ranked if pid in tagged]
+    return sources
+
+
+def _interleave(
+    sources: dict[str, list[tuple[str, float]]], limit: int
+) -> tuple[list[str], dict[str, float], dict[str, str]]:
+    """Round-robin over the sources in _DISCOVER_SOURCES order, skipping a post
+    another source already placed; a source that runs dry yields its turns.
+    Returns (post ids in order, post id → similarity, post id → source)."""
+    lists = [(name, sources[name]) for name in _DISCOVER_SOURCES if sources.get(name)]
+    pos = {name: 0 for name, _ in lists}
+    order: list[str] = []
+    sims: dict[str, float] = {}
+    origin: dict[str, str] = {}
+    while len(order) < limit:
+        placed = False
+        for name, items in lists:
+            while pos[name] < len(items) and items[pos[name]][0] in origin:
+                pos[name] += 1
+            if pos[name] < len(items) and len(order) < limit:
+                post_id, sim = items[pos[name]]
+                pos[name] += 1
+                order.append(post_id)
+                sims[post_id] = sim
+                origin[post_id] = name
+                placed = True
+        if not placed:
+            break
+    return order, sims, origin
+
+
 @app.get("/recommendations", response_model=RecommendationsResponse)
 def recommendations(
     team_id: str,
@@ -1969,27 +2063,13 @@ def recommendations(
             log.warning("recommendation reasons failed for %s: %s", user_id, exc)
         return result
 
-    matches = (
-        uc.rpc(
-            "recommend_papers",
-            {
-                "p_team": team_id,
-                "p_query": taste,
-                "p_limit": limit,
-                "p_tags": loaded.get("follows") or [],
-            },
-        )
-        .execute()
-        .data
-        or []
-    )
-    sims = {m["post_id"]: m["similarity"] for m in matches}
-    result = _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)
+    order, sims, origin = _interleave(_discover_sources(uc, team_id, loaded, limit), limit)
+    result = _hydrate(uc, order, sims, cold=False)
     # Best-effort: a failure to explain must not cost the recommendations.
     try:
         _attach_reasons(
             result,
-            _recommendation_reasons(uc, [r.post for r in result.results], anchors, loaded),
+            _source_reasons(uc, [r.post for r in result.results], origin, anchors, loaded),
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("recommendation reasons failed for %s: %s", user_id, exc)
