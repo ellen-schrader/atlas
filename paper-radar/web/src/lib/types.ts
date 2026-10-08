@@ -101,10 +101,21 @@ export interface Recommendation {
   reason?: RecommendationReason | null;
 }
 
-/** The signal behind a recommendation (docs/dashboard.md §3.4). `ref_label` is the
- *  title, tag or author name the reason refers to. */
+/** The signal behind a recommendation (docs/dashboard.md §3.4; the rules are in
+ *  api/app.py above _REASON_MIN_SIMILARITY). `ref_label` is the paper title for
+ *  similar_*, the first profile tag for "profile" ("" = none matched), and who
+ *  shared it for "new". */
 export interface RecommendationReason {
-  kind: "similar_saved" | "similar_read" | "tag" | "author";
+  kind:
+    | "similar_saved"
+    | "similar_read"
+    | "similar_reacted"
+    | "similar_discussed"
+    | "profile"
+    | "engagement"
+    | "new"
+    | "tag"
+    | "author";
   ref_id: string | null;
   ref_label: string;
   extra_labels?: string[];

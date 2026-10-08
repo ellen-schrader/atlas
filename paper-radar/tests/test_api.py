@@ -759,50 +759,108 @@ def test_pick_reason_names_the_nearest_anchor_and_respects_the_floor():
     assert _pick_reason(near_read, []) is None
 
 
-def test_recommendation_reasons_uses_saved_and_read_papers_only():
-    """Saved → 'which you saved', read/reading → 'which you read'. A row that
-    says nothing (unsaved, unread) is not an anchor, nor is an untitled paper."""
+def _post(pid: str, tags: list[str] | None = None, **kw) -> dict:
+    return {"papers": {"id": pid, "tags": tags or []}, "tags": [], **kw}
+
+
+def test_recommendation_reasons_engagement_profile_and_fallback():
+    """Rule 1 names the nearest engaged paper (strongest engagement kind wins,
+    a 🤔 isn't an endorsement); rule 2 falls back to the profile with the tags it
+    mentions; with no close paper and no profile the line is generic."""
     from api.app import _recommendation_reasons
 
+    profile = {
+        "profile_md": "We study spatial transcriptomics of breast tumours.",
+        "profile_vec": [0.1],
+    }
     uc = _FakeClient(
         paper_status=[
             {"paper_id": "saved", "saved": True, "status": "read", "updated_at": None},
             {"paper_id": "read", "saved": False, "status": "reading", "updated_at": None},
             {"paper_id": "nothing", "saved": False, "status": "unread", "updated_at": None},
-            {"paper_id": "untitled", "saved": True, "status": "unread", "updated_at": None},
         ],
+        reactions=[
+            {"paper_id": "liked", "emoji": "👍", "created_at": None},
+            {"paper_id": "doubted", "emoji": "🤔", "created_at": None},
+            # also saved: "saved" outranks "reacted"
+            {"paper_id": "saved", "emoji": "👍", "created_at": None},
+        ],
+        comments=[{"paper_id": "talked", "created_at": None}],
+        profiles=[profile],
         papers=[
-            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0)},
-            {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0)},
-            {"id": "nothing", "title": "Ignored paper", "embedding": _unit(0, 0, 1, 0)},
-            {"id": "untitled", "title": None, "embedding": _unit(0, 0, 0, 1)},
-            # recommendations
-            {"id": "rec-a", "title": "A", "embedding": _unit(1, 0.1, 0, 0)},
-            {"id": "rec-b", "title": "B", "embedding": _unit(0.1, 1, 0, 0)},
-            {"id": "rec-c", "title": "C", "embedding": _unit(0, 0, 1, 0)},  # only near 'nothing'
-            {"id": "rec-d", "title": "D", "embedding": _unit(0, 0, 0.1, 1)},  # only near 'untitled'
-            {"id": "rec-e", "title": "E", "embedding": None},
+            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0, 0, 0)},
+            {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0, 0, 0)},
+            {"id": "liked", "title": "Liked paper", "embedding": _unit(0, 0, 1, 0, 0, 0)},
+            {"id": "talked", "title": "Talked paper", "embedding": _unit(0, 0, 0, 1, 0, 0)},
+            {"id": "doubted", "title": "Doubted paper", "embedding": _unit(0, 0, 0, 0, 1, 0)},
+            {"id": "nothing", "title": "Ignored", "embedding": _unit(0, 0, 0, 0, 0, 1)},
+            {"id": "rec-saved", "title": "A", "embedding": _unit(1, 0.1, 0, 0, 0, 0)},
+            {"id": "rec-read", "title": "B", "embedding": _unit(0.1, 1, 0, 0, 0, 0)},
+            {"id": "rec-liked", "title": "C", "embedding": _unit(0, 0, 1, 0.1, 0, 0)},
+            {"id": "rec-talked", "title": "D", "embedding": _unit(0, 0, 0, 1, 0, 0)},
+            {"id": "rec-doubted", "title": "E", "embedding": _unit(0, 0, 0, 0, 1, 0)},
+            {"id": "rec-none", "title": "F", "embedding": None},
         ],
     )
-    reasons = _recommendation_reasons(
-        uc, "user-1", "team-1", ["rec-a", "rec-b", "rec-c", "rec-d", "rec-e"]
-    )
+    posts = [
+        _post("rec-saved"),
+        _post("rec-read"),
+        _post("rec-liked"),
+        _post("rec-talked"),
+        _post("rec-doubted", ["spatial-transcriptomics", "lung-cancer", "breast-cancer"]),
+        _post("rec-none"),
+    ]
+    reasons = _recommendation_reasons(uc, "user-1", "team-1", posts)
 
-    assert reasons["rec-a"] == {
+    assert reasons["rec-saved"] == {
         "kind": "similar_saved",
         "ref_id": "saved",
         "ref_label": "Saved paper",
     }
-    assert reasons["rec-b"] == {"kind": "similar_read", "ref_id": "read", "ref_label": "Read paper"}
-    assert "rec-c" not in reasons
-    assert "rec-d" not in reasons
-    assert "rec-e" not in reasons
+    assert reasons["rec-read"]["kind"] == "similar_read"
+    assert reasons["rec-liked"]["kind"] == "similar_reacted"
+    assert reasons["rec-talked"]["kind"] == "similar_discussed"
+    # Only near the 🤔 paper → not an anchor → the profile explains it, naming
+    # the tags the profile text mentions ("tumours" doesn't make "cancer").
+    assert reasons["rec-doubted"] == {
+        "kind": "profile",
+        "ref_id": None,
+        "ref_label": "spatial-transcriptomics",
+        "extra_labels": [],
+    }
+    assert reasons["rec-none"]["kind"] == "profile"
+    assert reasons["rec-none"]["ref_label"] == ""
+
+    # Same picture without a profile vector: no profile claim, generic line.
+    uc._tables["profiles"] = [{"profile_md": profile["profile_md"], "profile_vec": None}]
+    reasons = _recommendation_reasons(uc, "user-1", "team-1", posts)
+    assert reasons["rec-doubted"]["kind"] == "engagement"
+    assert reasons["rec-saved"]["kind"] == "similar_saved"
 
 
-def test_recommendation_reasons_without_anchors_is_empty():
-    from api.app import _recommendation_reasons
+def test_profile_tags_matches_whole_tags_loosely():
+    from api.app import _profile_tags
 
-    uc = _FakeClient(
-        paper_status=[], papers=[{"id": "rec", "title": "R", "embedding": _unit(1, 0)}]
-    )
-    assert _recommendation_reasons(uc, "user-1", "team-1", ["rec"]) == {}
+    text = "Spatial transcriptomic atlases and graph neural networks in histopathology."
+    tags = ["spatial-transcriptomics", "graph-neural-networks", "histopathology", "lung-cancer"]
+    assert _profile_tags(text, tags) == [
+        "spatial-transcriptomics",
+        "graph-neural-networks",
+        "histopathology",
+    ]
+    assert _profile_tags("", tags) == []
+
+
+def test_new_reasons_say_who_shared_it():
+    from api.app import _new_reasons
+
+    uc = _FakeClient(profiles=[{"id": "u-sara", "display_name": "Sara"}])
+    posts = [
+        _post("p-mine", posted_by="user-1", posted_by_label=None),
+        _post("p-sara", posted_by="u-sara", posted_by_label=None),
+        _post("p-teams", posted_by=None, posted_by_label="Teams Tom"),
+    ]
+    reasons = _new_reasons(uc, "user-1", posts)
+    assert reasons["p-mine"]["ref_label"] == "you"
+    assert reasons["p-sara"] == {"kind": "new", "ref_id": None, "ref_label": "Sara"}
+    assert reasons["p-teams"]["ref_label"] == "Teams Tom"

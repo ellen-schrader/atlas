@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from collections import Counter
@@ -1604,9 +1605,9 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
 class Recommendation(BaseModel):
     similarity: float
     post: dict  # a paper_posts row with the joined paper (POST_COLUMNS)
-    # Why this paper: {kind, ref_id, ref_label}, kind "similar_saved" | "similar_read".
-    # None when nothing the caller saved or read is close enough to name honestly
-    # (or on the cold-start fallback, which has no taste to explain).
+    # Why this paper: {kind, ref_id, ref_label, extra_labels?}. Kinds and their
+    # rules are documented above _REASON_MIN_SIMILARITY. None only if working the
+    # reasons out failed.
     reason: dict | None = None
 
 
@@ -1701,13 +1702,29 @@ def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> Recommend
     return _hydrate(uc, order, {}, cold=True)
 
 
-# A recommendation is explained by the caller's saved/read paper nearest to it —
-# but only if that paper is genuinely close. Below this cosine, "Similar to X"
-# would be a claim the embeddings don't support, so the card shows no reason.
+# Every recommendation says why it is there (docs/dashboard.md §3.4), using the
+# most specific reason that is true of how it was ranked:
+#
+#   1. engagement  "Similar to X, which you saved / reacted to / discussed / read" —
+#      the engaged paper nearest to it, if that paper is genuinely close (below
+#      _REASON_MIN_SIMILARITY, naming one paper would be a claim the embeddings
+#      don't support). Today most engagement happens in Teams, so this is rare
+#      until it syncs into Atlas; it needs no change when it does.
+#   2. profile     "Matches spatial transcriptomics in your research profile" —
+#      the paper's tags that the profile text mentions, else just "Matches your
+#      research profile". Only when the caller has a profile vector, i.e. the
+#      profile actually took part in the ranking.
+#   3. new         "New in {lab} · shared by Sara" — the cold-start fallback,
+#      which is newest-first.
+#
+# A taste built from engagement alone with no close paper gets "engagement"
+# (generic copy) rather than a stretched "Similar to".
 _REASON_MIN_SIMILARITY = 0.5
-# Anchors are the caller's most recent saved/read papers; older ones say less
-# about what they want now, and the list bounds the embedding fetch.
+# Anchors are the caller's most recent engaged papers; older ones say less about
+# what they want now, and the cap bounds the embedding fetch.
 _REASON_MAX_ANCHORS = 200
+# When one paper carries several kinds of engagement, the strongest names it.
+_ANCHOR_RANK = {"similar_saved": 0, "similar_reacted": 1, "similar_discussed": 2, "similar_read": 3}
 
 
 def _pick_reason(
@@ -1726,42 +1743,77 @@ def _pick_reason(
     return {"kind": kind, "ref_id": paper_id, "ref_label": title}
 
 
-def _recommendation_reasons(
-    uc, user_id: str, team_id: str, paper_ids: list[str]
-) -> dict[str, dict]:
-    """paper_id → reason for each recommended paper that has one (docs/dashboard.md
-    §3.4). Anchors are papers the caller saved (preferred wording: "which you
-    saved") or has read/is reading ("which you read"); reactions and comments
-    feed the taste vector but have no reason copy, so they aren't anchors."""
-    rows = (
-        uc.table("paper_status")
-        .select("paper_id, saved, status, updated_at")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
-        .order("updated_at", desc=True)
-        .limit(_REASON_MAX_ANCHORS * 2)
-        .execute()
-        .data
-        or []
-    )
+def _profile_tags(profile_md: str, tags: list[str]) -> list[str]:
+    """The tags whose every word the profile text mentions ("spatial-transcriptomics"
+    → "spatial" and "transcriptomic…"). Words under 3 letters are ignored, and a
+    trailing "s" is dropped so "transcriptomics" also matches "transcriptomic"."""
+    text = profile_md.lower()
+    out: list[str] = []
+    for tag in tags:
+        words = [w for w in re.split(r"[-_\s/]+", tag.lower()) if len(w) >= 3]
+        if not words:
+            continue
+        if all(re.search(r"\b" + re.escape(w.removesuffix("s")), text) for w in words):
+            out.append(tag)
+    return out
+
+
+def _engagement_anchors(uc, user_id: str, team_id: str) -> dict[str, str]:
+    """paper_id → anchor kind for the caller's engaged papers, strongest kind
+    winning. A 🤔 reaction is skeptical, not an endorsement, so it isn't one; a
+    paper_status row that is neither saved nor started says nothing."""
     kinds: dict[str, str] = {}
-    for r in rows:
+
+    def add(pid: str, kind: str) -> None:
+        if pid not in kinds or _ANCHOR_RANK[kind] < _ANCHOR_RANK[kinds[pid]]:
+            kinds[pid] = kind
+
+    for r in (
+        uc.table("paper_status").select("paper_id, saved, status, updated_at")
+        .eq("team_id", team_id).eq("user_id", user_id)
+        .order("updated_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
+    ):
         if r.get("saved"):
-            kinds[r["paper_id"]] = "similar_saved"
+            add(r["paper_id"], "similar_saved")
         elif r.get("status") in ("read", "reading"):
-            kinds[r["paper_id"]] = "similar_read"
-        if len(kinds) >= _REASON_MAX_ANCHORS:
-            break
-    if not kinds or not paper_ids:
+            add(r["paper_id"], "similar_read")
+    for r in (
+        uc.table("reactions").select("paper_id, emoji, created_at")
+        .eq("team_id", team_id).eq("user_id", user_id)
+        .order("created_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
+    ):
+        if r.get("emoji") != "🤔":
+            add(r["paper_id"], "similar_reacted")
+    for r in (
+        uc.table("comments").select("paper_id, created_at")
+        .eq("team_id", team_id).eq("author_id", user_id)
+        .order("created_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
+    ):
+        add(r["paper_id"], "similar_discussed")
+    return kinds
+
+
+def _recommendation_reasons(
+    uc, user_id: str, team_id: str, posts: list[dict]
+) -> dict[str, dict]:
+    """paper_id → reason for each recommended post (rules 1–2 above; rule 3 is
+    _new_reasons). Every post gets one: engagement if a paper is close enough,
+    else profile, else the generic engagement line."""
+    paper_ids = [p["papers"]["id"] for p in posts]
+    if not paper_ids:
         return {}
+    kinds = _engagement_anchors(uc, user_id, team_id)
+
+    prof = (
+        uc.table("profiles").select("profile_md, profile_vec").eq("id", user_id)
+        .limit(1).execute().data or []
+    )
+    profile_md = (prof[0].get("profile_md") or "") if prof else ""
+    has_profile = bool(prof and prof[0].get("profile_vec"))
 
     papers = (
-        uc.table("papers")
-        .select("id, title, embedding")
-        .in_("id", list(set(kinds) | set(paper_ids)))
-        .execute()
-        .data
-        or []
+        uc.table("papers").select("id, title, embedding")
+        .in_("id", list(set(kinds) | set(paper_ids))).execute().data or []
     )
     vecs = {
         p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
@@ -1775,13 +1827,54 @@ def _recommendation_reasons(
         # An untitled anchor can't be named on the card.
         if pid in vecs and titles.get(pid)
     ]
+
     reasons: dict[str, dict] = {}
-    for pid in paper_ids:
-        if pid in vecs and pid not in kinds:
-            reason = _pick_reason(vecs[pid], anchors)
-            if reason:
-                reasons[pid] = reason
+    for post in posts:
+        pid = post["papers"]["id"]
+        reason = _pick_reason(vecs[pid], anchors) if pid in vecs else None
+        if reason is None and has_profile:
+            tags = post.get("tags") or post["papers"].get("tags") or []
+            hits = _profile_tags(profile_md, tags)
+            reason = {
+                "kind": "profile",
+                "ref_id": None,
+                "ref_label": hits[0] if hits else "",
+                "extra_labels": hits[1:2],
+            }
+        if reason is None:
+            reason = {"kind": "engagement", "ref_id": None, "ref_label": ""}
+        reasons[pid] = reason
     return reasons
+
+
+def _new_reasons(uc, user_id: str, posts: list[dict]) -> dict[str, dict]:
+    """Rule 3: the cold-start fallback is newest-first, so say that, and who
+    shared it ("you" for the caller's own posts)."""
+    ids = list({p["posted_by"] for p in posts if p.get("posted_by")})
+    names = (
+        {
+            r["id"]: r.get("display_name")
+            for r in uc.table("profiles").select("id, display_name").in_("id", ids)
+            .execute().data or []
+        }
+        if ids
+        else {}
+    )
+
+    def who(post: dict) -> str:
+        if post.get("posted_by") == user_id:
+            return "you"
+        return post.get("posted_by_label") or names.get(post.get("posted_by")) or ""
+
+    return {
+        p["papers"]["id"]: {"kind": "new", "ref_id": None, "ref_label": who(p)}
+        for p in posts
+    }
+
+
+def _attach_reasons(result: RecommendationsResponse, reasons: dict[str, dict]) -> None:
+    for r in result.results:
+        r.reason = reasons.get(r.post["papers"]["id"])
 
 
 @app.get("/recommendations", response_model=RecommendationsResponse)
@@ -1811,7 +1904,12 @@ def recommendations(
         return _reading_list_ranked(uc, user_id, team_id, taste, limit)
 
     if taste is None:
-        return _recency_fallback(uc, team_id, set(weights), limit)
+        result = _recency_fallback(uc, team_id, set(weights), limit)
+        try:
+            _attach_reasons(result, _new_reasons(uc, user_id, [r.post for r in result.results]))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("recommendation reasons failed for %s: %s", user_id, exc)
+        return result
 
     matches = (
         uc.rpc("recommend_papers", {"p_team": team_id, "p_query": taste, "p_limit": limit})
@@ -1823,11 +1921,10 @@ def recommendations(
     result = _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)
     # Best-effort: a failure to explain must not cost the recommendations.
     try:
-        reasons = _recommendation_reasons(
-            uc, user_id, team_id, [r.post["papers"]["id"] for r in result.results]
+        _attach_reasons(
+            result,
+            _recommendation_reasons(uc, user_id, team_id, [r.post for r in result.results]),
         )
-        for r in result.results:
-            r.reason = reasons.get(r.post["papers"]["id"])
     except Exception as exc:  # noqa: BLE001
         log.warning("recommendation reasons failed for %s: %s", user_id, exc)
     return result

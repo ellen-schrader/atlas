@@ -12,6 +12,7 @@ import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
+import { useProfile } from "@/hooks/useProfile";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
@@ -55,6 +56,7 @@ export default function Dashboard() {
   // 12, so the widest layouts can fill 4–5 cards and still have a page to scroll to.
   const recs = useRecommendations(team.id, "discover", 12);
   const { data: newCount } = useNewSinceLastVisit(team.id);
+  const { data: profile } = useProfile(userId);
   const trendingTags = useTrendingTags(team.id);
   const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
@@ -141,6 +143,9 @@ export default function Dashboard() {
       tier={tier}
       perPage={frame.recsPerPage}
       teamId={team.id}
+      teamName={team.name}
+      // Unknown until the profile loads: say "Tune" rather than flash the nudge.
+      hasProfile={profile ? Boolean(profile.profile_md?.trim()) : true}
       userId={userId}
       bookmarkedIds={bookmarkedIds}
       onOpen={openPaper}
