@@ -83,7 +83,7 @@ export function invalidateAfterPost(qc: QueryClient, teamId: string): Promise<un
       "team-venues",
       "paper-lookup",
       "trending-tags",
-      "trending-authors",
+      "trending-labs",
       "tag-volume",
     ].map((key) => qc.invalidateQueries({ queryKey: [key, teamId] })),
   );

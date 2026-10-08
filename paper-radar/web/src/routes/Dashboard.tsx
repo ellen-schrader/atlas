@@ -16,7 +16,7 @@ import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
-import { useTagVolume, useTrendingAuthors, useTrendingTags } from "@/hooks/useTrends";
+import { useTagVolume, useTrendingLabs, useTrendingTags } from "@/hooks/useTrends";
 import { supabase } from "@/lib/supabase";
 import { useAppContext } from "@/routes/Layout";
 
@@ -56,7 +56,7 @@ export default function Dashboard() {
   const recs = useRecommendations(team.id, "discover", 12);
   const { data: newCount } = useNewSinceLastVisit(team.id);
   const trendingTags = useTrendingTags(team.id);
-  const trendingAuthors = useTrendingAuthors(team.id);
+  const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
   const volume = useTagVolume(
     team.id,
@@ -169,14 +169,15 @@ export default function Dashboard() {
     <Trending
       key="trending"
       tags={tagRows}
-      authors={trendingAuthors.data ?? []}
+      labs={trendingLabs.data ?? []}
       tagsState={queryState(trendingTags)}
-      authorsState={queryState(trendingAuthors)}
+      labsState={queryState(trendingLabs)}
       hoveredTag={hoveredTag}
       onHoverTag={setHoveredTag}
       onTag={(tag) => navigate(`/papers?tag=${encodeURIComponent(tag)}`)}
-      // No author filter in Papers; its full-text search covers author names.
-      onAuthor={(author) => navigate(`/papers?q=${encodeURIComponent(author)}`)}
+      // No author filter in Papers; its full-text search covers author names
+      // (in any position, so this can also find the PI's non-senior papers).
+      onLab={(lab) => navigate(`/papers?q=${encodeURIComponent(lab)}`)}
     />,
     <TagVolume
       key="volume"

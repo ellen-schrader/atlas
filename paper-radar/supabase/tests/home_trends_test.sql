@@ -5,7 +5,7 @@
 -- Same JWT-claims trick as rls_isolation_test.sql to act as a user.
 
 begin;
-select plan(12);
+select plan(13);
 
 insert into auth.users (id, email, raw_user_meta_data) values
     ('00000000-0000-0000-0000-00000000000a', 'ada@lab.test', '{"display_name":"Ada"}'::jsonb),
@@ -80,6 +80,15 @@ select results_eq(
     $$ select author, n, sharers from public.trending_authors('33333333-3333-3333-3333-333333333333', 30, 5) $$,
     $$ values ('Wu'::text, 2, 2), ('Ali'::text, 2, 1) $$,
     'trending_authors: papers in window; a Teams label counts as a sharer; ties go to more sharers'
+);
+
+-- === trending_labs (20261008150000) ========================================
+-- Last authors only: Ali is last on papers 1 and 3, Wu only on 2. Wu is also
+-- first author of paper 1 and must not get credit for it.
+select results_eq(
+    $$ select lab, n, sharers from public.trending_labs('33333333-3333-3333-3333-333333333333', 30, 5) $$,
+    $$ values ('Ali'::text, 2, 1), ('Wu'::text, 1, 1) $$,
+    'trending_labs: counts the last author only'
 );
 
 -- === tag_volume =============================================================
