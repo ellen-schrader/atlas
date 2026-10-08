@@ -12,6 +12,7 @@ import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
 import { useProfile } from "@/hooks/useProfile";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
@@ -59,6 +60,7 @@ export default function Dashboard() {
   const recs = useRecommendations(team.id, "discover", 12);
   const { data: newCount } = useNewSinceLastVisit(team.id);
   const { data: profile } = useProfile(userId);
+  const { follows } = useFollowedTags(userId);
   const trendingTags = useTrendingTags(team.id);
   const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
@@ -154,7 +156,8 @@ export default function Dashboard() {
       teamId={team.id}
       teamName={team.name}
       // Unknown until the profile loads: say "Tune" rather than flash the nudge.
-      hasProfile={profile ? Boolean(profile.profile_md?.trim()) : true}
+      // Followed tags count: they steer Discover too.
+      hasProfile={profile ? Boolean(profile.profile_md?.trim()) || follows.length > 0 : true}
       userId={userId}
       bookmarkedIds={bookmarkedIds}
       onOpen={openPaper}
