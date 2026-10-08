@@ -1549,13 +1549,14 @@ def _taste_vector(
     reasons, instead of fetching it again: "vecs" (paper id → unit vector),
     "titles", "profile_md" and "has_profile"."""
     prof = (
-        uc.table("profiles").select("profile_vec, profile_md").eq("id", user_id).limit(1)
+        uc.table("profiles").select("profile_vec, profile_md, interests").eq("id", user_id).limit(1)
         .execute().data or []
     )
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
     if loaded is not None:
         loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
         loaded["has_profile"] = profile_vec is not None
+        loaded["follows"] = _follows(prof[0] if prof else None)
         loaded.setdefault("vecs", {})
         loaded.setdefault("titles", {})
     profile_np = (
@@ -1720,24 +1721,49 @@ def _reading_list_ranked(
     return _hydrate(uc, order, sims, cold=False)
 
 
-def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> RecommendationsResponse:
-    """Cold start (no profile, no engagement): recent unseen posts, newest first.
+def _follows(profile: dict | None) -> list[str]:
+    """The tags the caller follows (profiles.interests), as clean strings."""
+    raw = (profile or {}).get("interests") or []
+    if not isinstance(raw, list):
+        return []
+    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+
+
+def _followed_hits(post: dict, follows: list[str]) -> list[str]:
+    """The followed tags this post carries, by post_tags(): its lab tags if it
+    has any, else the paper's own — the rule every tag surface uses."""
+    if not follows:
+        return []
+    tags = post.get("tags") or (post.get("papers") or {}).get("tags") or []
+    wanted = set(follows)
+    return [t for t in tags if t in wanted]
+
+
+def _recency_fallback(
+    uc, team_id: str, seen: set[str], limit: int, follows: list[str] | None = None
+) -> RecommendationsResponse:
+    """Cold start (no profile, no engagement): recent unseen posts, newest first —
+    with posts carrying a followed tag first, if the caller follows any.
 
     ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
     this server-side; here it comes from the request's `_engagement_weights` keys —
     every engagement row gets a nonzero weight, so the keys are exactly the seen set)."""
     rows = (
         uc.table("paper_posts")
-        .select("id, paper_id, posted_at")
+        .select("id, paper_id, posted_at, tags, papers(tags)")
         .eq("team_id", team_id)
         .order("posted_at", desc=True)
-        .limit(limit * 4)
+        # A wider window when there are follows, so a followed-tag paper from a
+        # few weeks back can still lead.
+        .limit(limit * (10 if follows else 4))
         .execute()
         .data
         or []
     )
-    order = [r["id"] for r in rows if r["paper_id"] not in seen][:limit]
-    return _hydrate(uc, order, {}, cold=True)
+    unseen = [r for r in rows if r["paper_id"] not in seen]
+    # sorted() is stable, so newest-first holds within each group.
+    unseen = sorted(unseen, key=lambda r: not _followed_hits(r, follows or []))
+    return _hydrate(uc, [r["id"] for r in unseen[:limit]], {}, cold=True)
 
 
 # Every recommendation says why it is there (docs/dashboard.md §3.4), using the
@@ -1749,6 +1775,9 @@ def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> Recommend
 #      _REASON_MIN_SIMILARITY, naming one paper would be a claim the embeddings
 #      don't support). Today most engagement happens in Teams, so this is rare
 #      until it syncs into Atlas; it needs no change when it does.
+#   1b. tag        "Tagged spatial-transcriptomics, which you follow" — a followed
+#      tag the paper carries (profiles.interests). Certain, so it beats the
+#      profile text match.
 #   2. profile     "Matches spatial transcriptomics in your research profile" —
 #      the paper's tags that the profile text mentions, else just "Matches your
 #      research profile". Only when the caller has a profile vector, i.e. the
@@ -1835,10 +1864,14 @@ def _recommendation_reasons(
     profile_md = loaded.get("profile_md") or ""
     use_profile = bool(loaded.get("has_profile") and profile_md.strip())
 
+    follows: list[str] = loaded.get("follows") or []
+
     reasons: dict[str, dict] = {}
     for post in posts:
         pid = post["papers"]["id"]
         reason = _pick_reason(rec_vecs[pid], candidates) if pid in rec_vecs else None
+        if reason is None:
+            reason = _tag_reason(post, follows)
         if reason is None and use_profile:
             tags = post.get("tags") or post["papers"].get("tags") or []
             hits = _profile_tags(profile_md, tags)
@@ -1854,9 +1887,21 @@ def _recommendation_reasons(
     return reasons
 
 
-def _new_reasons(uc, user_id: str, posts: list[dict]) -> dict[str, dict]:
+def _tag_reason(post: dict, follows: list[str]) -> dict | None:
+    """'Tagged X (and Y), which you follow' — certain, so it outranks the profile
+    text match; a close engaged paper is still more specific and comes first."""
+    hits = _followed_hits(post, follows)
+    if not hits:
+        return None
+    return {"kind": "tag", "ref_id": None, "ref_label": hits[0], "extra_labels": hits[1:2]}
+
+
+def _new_reasons(
+    uc, user_id: str, posts: list[dict], follows: list[str] | None = None
+) -> dict[str, dict]:
     """Rule 3: the cold-start fallback is newest-first, so say that, and who
-    shared it ("you" for the caller's own posts)."""
+    shared it ("you" for the caller's own posts) — unless it leads because of a
+    followed tag, which is the truer reason."""
     ids = list({p["posted_by"] for p in posts if p.get("posted_by")})
     names = (
         {
@@ -1874,7 +1919,8 @@ def _new_reasons(uc, user_id: str, posts: list[dict]) -> dict[str, dict]:
         return post.get("posted_by_label") or names.get(post.get("posted_by")) or ""
 
     return {
-        p["papers"]["id"]: {"kind": "new", "ref_id": None, "ref_label": who(p)}
+        p["papers"]["id"]: _tag_reason(p, follows or [])
+        or {"kind": "new", "ref_id": None, "ref_label": who(p)}
         for p in posts
     }
 
@@ -1913,15 +1959,26 @@ def recommendations(
         return _reading_list_ranked(uc, user_id, team_id, taste, limit)
 
     if taste is None:
-        result = _recency_fallback(uc, team_id, set(weights), limit)
+        follows = loaded.get("follows") or []
+        result = _recency_fallback(uc, team_id, set(weights), limit, follows)
         try:
-            _attach_reasons(result, _new_reasons(uc, user_id, [r.post for r in result.results]))
+            _attach_reasons(
+                result, _new_reasons(uc, user_id, [r.post for r in result.results], follows)
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("recommendation reasons failed for %s: %s", user_id, exc)
         return result
 
     matches = (
-        uc.rpc("recommend_papers", {"p_team": team_id, "p_query": taste, "p_limit": limit})
+        uc.rpc(
+            "recommend_papers",
+            {
+                "p_team": team_id,
+                "p_query": taste,
+                "p_limit": limit,
+                "p_tags": loaded.get("follows") or [],
+            },
+        )
         .execute()
         .data
         or []

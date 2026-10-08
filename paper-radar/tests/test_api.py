@@ -889,3 +889,73 @@ def test_new_reasons_say_who_shared_it():
     assert reasons["p-mine"]["ref_label"] == "you"
     assert reasons["p-sara"] == {"kind": "new", "ref_id": None, "ref_label": "Sara"}
     assert reasons["p-teams"]["ref_label"] == "Teams Tom"
+
+
+def test_followed_tags_use_post_tags_and_rank_between_engagement_and_profile():
+    """'Tagged X, which you follow' beats the profile text match but not a close
+    engaged paper; a post's lab tags replace its paper's tags for matching."""
+    from api.app import _followed_hits, _follows
+
+    assert _follows({"interests": ["spatial", " ", 3, "imaging "]}) == ["spatial", "imaging"]
+    assert _follows({"interests": None}) == []
+    assert _follows(None) == []
+
+    lab_tagged = {"tags": ["imaging"], "papers": {"tags": ["spatial"]}}
+    paper_tagged = {"tags": [], "papers": {"tags": ["spatial", "imaging"]}}
+    assert _followed_hits(lab_tagged, ["spatial"]) == []
+    assert _followed_hits(paper_tagged, ["imaging", "spatial"]) == ["spatial", "imaging"]
+
+    uc = _FakeClient(
+        paper_status=[{"paper_id": "saved", "saved": True, "status": "unread", "updated_at": None}],
+        profiles=[
+            {
+                "profile_md": "spatial transcriptomics",
+                "profile_vec": _unit(1, 1, 1),
+                "interests": ["spatial"],
+            }
+        ],
+        papers=[
+            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0)},
+            {"id": "rec-near", "title": "A", "embedding": _unit(1, 0.1, 0)},
+            {"id": "rec-tagged", "title": "B", "embedding": _unit(0, 1, 0)},
+            {"id": "rec-profile", "title": "C", "embedding": _unit(0, 0, 1)},
+        ],
+    )
+    reasons = _reasons_for(
+        uc,
+        [
+            _post("rec-near", ["spatial"]),
+            _post("rec-tagged", ["spatial", "imaging"]),
+            _post("rec-profile", ["spatial-transcriptomics"]),
+        ],
+    )
+    assert reasons["rec-near"]["kind"] == "similar_saved"
+    assert reasons["rec-tagged"] == {
+        "kind": "tag",
+        "ref_id": None,
+        "ref_label": "spatial",
+        "extra_labels": [],
+    }
+    assert reasons["rec-profile"]["kind"] == "profile"
+
+
+def test_cold_start_puts_followed_tags_first_and_says_so():
+    from api.app import _new_reasons, _recency_fallback
+
+    def row(n: int, tags: list[str]) -> dict:
+        pid = f"p{n}"
+        return {"id": f"post-{n}", "paper_id": pid, "tags": [], "papers": {"id": pid, "tags": tags}}
+
+    rows = [row(1, []), row(2, ["spatial"]), row(3, [])]  # newest first, as queried
+    uc = _FakeClient(paper_posts=rows, profiles=[])
+    result = _recency_fallback(uc, "team-1", set(), 3, ["spatial"])
+    assert [r.post["id"] for r in result.results] == ["post-2", "post-1", "post-3"]
+    assert result.cold_start is True
+
+    # Without follows: plain newest-first.
+    plain = _recency_fallback(uc, "team-1", set(), 3)
+    assert [r.post["id"] for r in plain.results] == ["post-1", "post-2", "post-3"]
+
+    reasons = _new_reasons(uc, "user-1", [r.post for r in result.results], ["spatial"])
+    assert reasons["p2"]["kind"] == "tag"
+    assert reasons["p1"]["kind"] == "new"
