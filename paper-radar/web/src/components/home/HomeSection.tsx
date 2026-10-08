@@ -2,27 +2,8 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-/** A Home block: its heading sits OUTSIDE the card, in a fixed 28px row with 14px
- *  below, so card tops line up across columns whatever the headings contain. */
-export function HomeSection({
-  title,
-  right,
-  className,
-  children,
-}: {
-  title: ReactNode;
-  right?: ReactNode;
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className={cn("flex min-w-0 flex-col", className)}>
-      <SectionHeading title={title} right={right} />
-      {children}
-    </section>
-  );
-}
-
+/** A Home section heading: it sits OUTSIDE the card, in a fixed 28px row with
+ *  14px below, so card tops line up across columns whatever the headings contain. */
 export function SectionHeading({
   title,
   controls,

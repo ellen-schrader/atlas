@@ -19,6 +19,11 @@ import { useTagVolume, useTrendingAuthors, useTrendingTags } from "@/hooks/useTr
 import { supabase } from "@/lib/supabase";
 import { useAppContext } from "@/routes/Layout";
 
+/** Collapses a query into what a panel shows: skeleton, error line, or data. */
+function queryState(q: { isLoading: boolean; isError: boolean }): "loading" | "error" | "ready" {
+  return q.isLoading ? "loading" : q.isError ? "error" : "ready";
+}
+
 function greeting(): string {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
@@ -136,6 +141,8 @@ export default function Dashboard() {
       readIds={readIds}
       bookmarkedIds={bookmarkedIds}
       teamId={team.id}
+      teamName={team.name}
+      joinCode={team.join_code}
       userId={userId}
       mobile={mobile}
       onOpen={openPaper}
@@ -148,7 +155,8 @@ export default function Dashboard() {
       key="trending"
       tags={tagRows}
       authors={trendingAuthors.data ?? []}
-      loading={trendingTags.isLoading}
+      tagsState={queryState(trendingTags)}
+      authorsState={queryState(trendingAuthors)}
       hoveredTag={hoveredTag}
       onHoverTag={setHoveredTag}
       onTag={(tag) => navigate(`/papers?tag=${encodeURIComponent(tag)}`)}

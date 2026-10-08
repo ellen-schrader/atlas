@@ -6,6 +6,7 @@ import type { TrendingAuthor, TrendingTag } from "@/hooks/useTrends";
 import { cn } from "@/lib/utils";
 
 type Tab = "tags" | "authors";
+type PanelState = "loading" | "error" | "ready";
 
 /** A change of at least this many papers counts as a big rise (accent). */
 const BIG_RISE = 4;
@@ -21,7 +22,8 @@ export function formatChange(n: number, prev: number): string {
 export function Trending({
   tags,
   authors,
-  loading,
+  tagsState,
+  authorsState,
   hoveredTag,
   onHoverTag,
   onTag,
@@ -30,7 +32,8 @@ export function Trending({
 }: {
   tags: TrendingTag[];
   authors: TrendingAuthor[];
-  loading: boolean;
+  tagsState: PanelState;
+  authorsState: PanelState;
   hoveredTag: string | null;
   onHoverTag: (tag: string | null) => void;
   onTag: (tag: string) => void;
@@ -38,6 +41,7 @@ export function Trending({
   className?: string;
 }) {
   const [tab, setTab] = useState<Tab>("tags");
+  const state = tab === "tags" ? tagsState : authorsState;
   const max = Math.max(1, ...tags.flatMap((t) => [t.n, t.prev]));
 
   return (
@@ -57,12 +61,14 @@ export function Trending({
         }
       />
       <div className="rounded-card border border-border bg-surface p-2">
-        {loading ? (
+        {state === "loading" ? (
           <div className="flex flex-col gap-3 p-2">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="h-7 animate-pulse rounded bg-surface-2" />
             ))}
           </div>
+        ) : state === "error" ? (
+          <Empty>Trends are unavailable right now.</Empty>
         ) : tab === "tags" ? (
           tags.length === 0 ? (
             <Empty>No tagged papers in the last 30 days.</Empty>

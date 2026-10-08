@@ -3,6 +3,7 @@ import { MessageSquare } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
+import { InviteCode } from "@/components/InviteCode";
 import { HeadingLink, SectionHeading, Segmented, TopicDot } from "@/components/home/HomeSection";
 import type { Counts } from "@/hooks/useEngagementCounts";
 import type { PaperPost } from "@/lib/types";
@@ -22,6 +23,8 @@ export function LabFeed({
   readIds,
   bookmarkedIds,
   teamId,
+  teamName,
+  joinCode,
   userId,
   mobile,
   onOpen,
@@ -33,6 +36,8 @@ export function LabFeed({
   readIds: Set<string> | undefined;
   bookmarkedIds: Set<string>;
   teamId: string;
+  teamName: string;
+  joinCode: string;
   userId: string;
   mobile: boolean;
   onOpen: (paperId: string) => void;
@@ -75,13 +80,19 @@ export function LabFeed({
       <div className="flex flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface">
         {loading ? (
           <FeedSkeleton />
+        ) : posts.length === 0 ? (
+          // A brand-new lab: the first paper, and the join code to bring the lab in.
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+            <div className="font-semibold">No papers in {teamName} yet</div>
+            <p className="text-sm text-muted">Paste a DOI or link above to add the first one.</p>
+            <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
+              <span className="text-xs text-muted">Or invite your lab with this join code</span>
+              <InviteCode code={joinCode} />
+            </div>
+          </div>
         ) : shown.length === 0 ? (
           <div className="grid flex-1 place-items-center px-6 py-12 text-center text-sm text-muted">
-            {filter === "unread"
-              ? "You’re all caught up."
-              : filter === "comments"
-                ? "No discussions on recent papers yet."
-                : "No papers in your lab yet. Paste a DOI above to add the first one."}
+            {filter === "unread" ? "You’re all caught up." : "No discussions on recent papers yet."}
           </div>
         ) : (
           <div role="list">
@@ -117,7 +128,9 @@ export function LabFeed({
             onClick={onBrowseAll}
             className="mt-auto border-t border-border px-4 py-3 text-sm font-medium text-muted transition hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
           >
-            {moreThisWeek > 0 ? `Show ${moreThisWeek} more from this week` : "Browse all papers"}
+            {/* Opens Papers rather than expanding in place (plan, decision 2), so
+                the label says where it goes. */}
+            {moreThisWeek > 0 ? `${moreThisWeek} more from this week in Papers →` : "Browse all papers →"}
           </button>
         )}
       </div>
