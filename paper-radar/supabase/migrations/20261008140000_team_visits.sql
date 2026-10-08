@@ -5,9 +5,9 @@
 -- reads the count on arrival and stamps the visit after 10 seconds on the page
 -- (or when it leaves), so the number shown isn't reset under the reader.
 --
--- Your own posts are not "new" to you. A user with no row yet (first visit since
--- this shipped) gets NULL, not a count of the lab's whole history: the client
--- shows its generic subtitle instead.
+-- Your own posts are not "new" to you, including the ones you sent from Teams.
+-- A user with no row yet (first visit since this shipped) gets NULL, not a
+-- count of the lab's whole history: the client shows its generic subtitle.
 
 create table public.team_visits (
     user_id      uuid not null references public.profiles(id) on delete cascade,
@@ -43,8 +43,24 @@ as $$
         where pp.team_id = p_team
           and pp.posted_at > v.last_seen_at
           and pp.posted_by is distinct from auth.uid()
+          -- A Teams post has no posted_by, only the sender's Teams name, and
+          -- most sharing happens from Teams. Match that name to yours (exactly,
+          -- or as "First Last" when your Atlas name is "First") so your own
+          -- @Atlas posts aren't news to you. Two members sharing a first name
+          -- can hide each other's Teams posts from the count; accepted until
+          -- Teams users are linked to Atlas accounts.
+          and not (
+              pp.posted_by is null
+              and me.name <> ''
+              and (lower(pp.posted_by_label) = me.name
+                   or lower(pp.posted_by_label) like me.name || ' %')
+          )
     )
     from public.team_visits v
+    cross join lateral (
+        select lower(btrim(coalesce(display_name, ''))) as name
+        from public.profiles where id = auth.uid()
+    ) me
     where v.user_id = auth.uid() and v.team_id = p_team;
 $$;
 

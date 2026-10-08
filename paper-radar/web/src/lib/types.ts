@@ -111,6 +111,7 @@ export interface RecommendationReason {
     | "similar_read"
     | "similar_reacted"
     | "similar_discussed"
+    | "similar_reading"
     | "profile"
     | "engagement"
     | "new"

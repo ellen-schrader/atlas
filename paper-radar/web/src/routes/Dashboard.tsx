@@ -10,6 +10,7 @@ import { RecommendationsRow } from "@/components/home/Recommendations";
 import { TagVolume } from "@/components/home/TagVolume";
 import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
+import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
 import { useProfile } from "@/hooks/useProfile";
@@ -40,6 +41,7 @@ export default function Dashboard() {
   const { openPaper } = usePaperModal();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const frame = homeFrame(shellWidth);
   const { cols, tier } = frame;
   const mobile = tier === "mobile";
@@ -69,24 +71,31 @@ export default function Dashboard() {
   const [touch] = useState(() => window.matchMedia?.("(hover: none)").matches ?? false);
 
   async function markPaperRead(paperId: string) {
-    await supabase
+    const { error } = await supabase
       .from("paper_status")
       .update({ status: "read", updated_at: new Date().toISOString() })
       .eq("user_id", userId)
       .eq("team_id", team.id)
       .eq("paper_id", paperId);
-    void qc.invalidateQueries({ queryKey: ["reading-list"] });
-    void qc.invalidateQueries({ queryKey: ["read-papers"] });
+    if (error) {
+      toast({ message: "Couldn’t mark that as read. Try again." });
+      return;
+    }
+    // The same set ReadingList's markRead refreshes.
+    for (const key of ["reading-list", "read-this-week", "recommendations", "read-papers"]) {
+      void qc.invalidateQueries({ queryKey: [key] });
+    }
   }
 
   const firstName = displayName.split(/[\s@]/)[0];
   const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
 
-  // The single next paper to read: the oldest still-unread saved one (the list is
-  // newest-first, so that's the tail). useReadingList returns read papers too —
-  // saving is independent of progress — so filter them out here.
+  // The single next paper to read: one you've started (the most recently
+  // touched), else the oldest still-unread saved one (the list is newest-first,
+  // so that's the tail). useReadingList returns read papers too — saving is
+  // independent of progress — so filter them out here.
   const queue = (toRead ?? []).filter((r) => r.status !== "read");
-  const nextUp = queue[queue.length - 1];
+  const nextUp = queue.find((r) => r.status === "reading") ?? queue[queue.length - 1];
 
   const greetingBlock = (
     <div className="min-w-0">

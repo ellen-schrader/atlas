@@ -47,7 +47,10 @@ export function ContinueReadingCard({
     );
   }
   const p = next.papers;
-  const meta = [p?.venue, p?.year, `saved ${formatRelative(next.updated_at)}`]
+  // updated_at is the last status write: the start for a paper in progress,
+  // otherwise (usually) the save.
+  const when = `${next.status === "reading" ? "started" : "saved"} ${formatRelative(next.updated_at)}`;
+  const meta = [p?.venue, p?.year, when]
     .filter(Boolean)
     .join(" · ");
   return (

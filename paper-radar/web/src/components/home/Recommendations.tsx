@@ -279,6 +279,8 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
       return <>Similar to {ref}, which you reacted to</>;
     case "similar_discussed":
       return <>Similar to {ref}, which you discussed</>;
+    case "similar_reading":
+      return <>Similar to {ref}, which you’re reading</>;
     case "profile": {
       if (!reason.ref_label) return <>Matches your research profile</>;
       // Tags are slugs ("spatial-transcriptomics"); the sentence wants words.
@@ -298,7 +300,8 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
       );
     }
     case "engagement":
-      return <>In line with papers you’ve saved and read</>;
+      // The taste can come from reactions or comments too, not only saves.
+      return <>In line with your activity in Atlas</>;
     case "new":
       return (
         <>
