@@ -682,6 +682,15 @@ class _FakeTable:
     def eq(self, *_a, **_k):
         return self
 
+    def in_(self, *_a, **_k):
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
     def execute(self):
         return type("Result", (), {"data": self._rows})()
 
@@ -719,3 +728,81 @@ def test_engagement_weights_ignores_a_paper_status_row_that_says_nothing():
     assert "discarded" not in weights
     assert weights["saved"] == pytest.approx(_W_BOOKMARK)
     assert weights["read"] == pytest.approx(_W_READ)
+
+
+def _unit(*xs: float) -> list[float]:
+    import numpy as np
+
+    v = np.asarray(xs, dtype=np.float32)
+    return (v / np.linalg.norm(v)).tolist()
+
+
+def test_pick_reason_names_the_nearest_anchor_and_respects_the_floor():
+    import numpy as np
+
+    from api.app import _REASON_MIN_SIMILARITY, _pick_reason
+
+    a_saved = ("similar_saved", "s1", "Saved paper", np.asarray(_unit(1, 0, 0)))
+    a_read = ("similar_read", "r1", "Read paper", np.asarray(_unit(0, 1, 0)))
+
+    near_read = np.asarray(_unit(0.2, 1, 0))
+    assert _pick_reason(near_read, [a_saved, a_read]) == {
+        "kind": "similar_read",
+        "ref_id": "r1",
+        "ref_label": "Read paper",
+    }
+
+    # Orthogonal to every anchor: naming one would be a claim the vectors don't make.
+    far = np.asarray(_unit(0, 0, 1))
+    assert float(np.dot(far, a_saved[3])) < _REASON_MIN_SIMILARITY
+    assert _pick_reason(far, [a_saved, a_read]) is None
+    assert _pick_reason(near_read, []) is None
+
+
+def test_recommendation_reasons_uses_saved_and_read_papers_only():
+    """Saved → 'which you saved', read/reading → 'which you read'. A row that
+    says nothing (unsaved, unread) is not an anchor, nor is an untitled paper."""
+    from api.app import _recommendation_reasons
+
+    uc = _FakeClient(
+        paper_status=[
+            {"paper_id": "saved", "saved": True, "status": "read", "updated_at": None},
+            {"paper_id": "read", "saved": False, "status": "reading", "updated_at": None},
+            {"paper_id": "nothing", "saved": False, "status": "unread", "updated_at": None},
+            {"paper_id": "untitled", "saved": True, "status": "unread", "updated_at": None},
+        ],
+        papers=[
+            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0)},
+            {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0)},
+            {"id": "nothing", "title": "Ignored paper", "embedding": _unit(0, 0, 1, 0)},
+            {"id": "untitled", "title": None, "embedding": _unit(0, 0, 0, 1)},
+            # recommendations
+            {"id": "rec-a", "title": "A", "embedding": _unit(1, 0.1, 0, 0)},
+            {"id": "rec-b", "title": "B", "embedding": _unit(0.1, 1, 0, 0)},
+            {"id": "rec-c", "title": "C", "embedding": _unit(0, 0, 1, 0)},  # only near 'nothing'
+            {"id": "rec-d", "title": "D", "embedding": _unit(0, 0, 0.1, 1)},  # only near 'untitled'
+            {"id": "rec-e", "title": "E", "embedding": None},
+        ],
+    )
+    reasons = _recommendation_reasons(
+        uc, "user-1", "team-1", ["rec-a", "rec-b", "rec-c", "rec-d", "rec-e"]
+    )
+
+    assert reasons["rec-a"] == {
+        "kind": "similar_saved",
+        "ref_id": "saved",
+        "ref_label": "Saved paper",
+    }
+    assert reasons["rec-b"] == {"kind": "similar_read", "ref_id": "read", "ref_label": "Read paper"}
+    assert "rec-c" not in reasons
+    assert "rec-d" not in reasons
+    assert "rec-e" not in reasons
+
+
+def test_recommendation_reasons_without_anchors_is_empty():
+    from api.app import _recommendation_reasons
+
+    uc = _FakeClient(
+        paper_status=[], papers=[{"id": "rec", "title": "R", "embedding": _unit(1, 0)}]
+    )
+    assert _recommendation_reasons(uc, "user-1", "team-1", ["rec"]) == {}

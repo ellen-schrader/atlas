@@ -1604,6 +1604,10 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
 class Recommendation(BaseModel):
     similarity: float
     post: dict  # a paper_posts row with the joined paper (POST_COLUMNS)
+    # Why this paper: {kind, ref_id, ref_label}, kind "similar_saved" | "similar_read".
+    # None when nothing the caller saved or read is close enough to name honestly
+    # (or on the cold-start fallback, which has no taste to explain).
+    reason: dict | None = None
 
 
 class RecommendationsResponse(BaseModel):
@@ -1697,6 +1701,89 @@ def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> Recommend
     return _hydrate(uc, order, {}, cold=True)
 
 
+# A recommendation is explained by the caller's saved/read paper nearest to it —
+# but only if that paper is genuinely close. Below this cosine, "Similar to X"
+# would be a claim the embeddings don't support, so the card shows no reason.
+_REASON_MIN_SIMILARITY = 0.5
+# Anchors are the caller's most recent saved/read papers; older ones say less
+# about what they want now, and the list bounds the embedding fetch.
+_REASON_MAX_ANCHORS = 200
+
+
+def _pick_reason(
+    vec: np.ndarray, anchors: list[tuple[str, str, str, np.ndarray]]
+) -> dict | None:
+    """The anchor (kind, paper_id, title, unit vector) nearest to ``vec`` (a unit
+    vector), as a reason dict — or None when none clears _REASON_MIN_SIMILARITY."""
+    best: tuple[float, tuple[str, str, str, np.ndarray]] | None = None
+    for a in anchors:
+        sim = float(np.dot(vec, a[3]))
+        if best is None or sim > best[0]:
+            best = (sim, a)
+    if best is None or best[0] < _REASON_MIN_SIMILARITY:
+        return None
+    kind, paper_id, title, _ = best[1]
+    return {"kind": kind, "ref_id": paper_id, "ref_label": title}
+
+
+def _recommendation_reasons(
+    uc, user_id: str, team_id: str, paper_ids: list[str]
+) -> dict[str, dict]:
+    """paper_id → reason for each recommended paper that has one (docs/dashboard.md
+    §3.4). Anchors are papers the caller saved (preferred wording: "which you
+    saved") or has read/is reading ("which you read"); reactions and comments
+    feed the taste vector but have no reason copy, so they aren't anchors."""
+    rows = (
+        uc.table("paper_status")
+        .select("paper_id, saved, status, updated_at")
+        .eq("team_id", team_id)
+        .eq("user_id", user_id)
+        .order("updated_at", desc=True)
+        .limit(_REASON_MAX_ANCHORS * 2)
+        .execute()
+        .data
+        or []
+    )
+    kinds: dict[str, str] = {}
+    for r in rows:
+        if r.get("saved"):
+            kinds[r["paper_id"]] = "similar_saved"
+        elif r.get("status") in ("read", "reading"):
+            kinds[r["paper_id"]] = "similar_read"
+        if len(kinds) >= _REASON_MAX_ANCHORS:
+            break
+    if not kinds or not paper_ids:
+        return {}
+
+    papers = (
+        uc.table("papers")
+        .select("id, title, embedding")
+        .in_("id", list(set(kinds) | set(paper_ids)))
+        .execute()
+        .data
+        or []
+    )
+    vecs = {
+        p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
+        for p in papers
+        if p.get("embedding")
+    }
+    titles = {p["id"]: p.get("title") for p in papers}
+    anchors = [
+        (kind, pid, titles[pid], vecs[pid])
+        for pid, kind in kinds.items()
+        # An untitled anchor can't be named on the card.
+        if pid in vecs and titles.get(pid)
+    ]
+    reasons: dict[str, dict] = {}
+    for pid in paper_ids:
+        if pid in vecs and pid not in kinds:
+            reason = _pick_reason(vecs[pid], anchors)
+            if reason:
+                reasons[pid] = reason
+    return reasons
+
+
 @app.get("/recommendations", response_model=RecommendationsResponse)
 def recommendations(
     team_id: str,
@@ -1733,7 +1820,17 @@ def recommendations(
         or []
     )
     sims = {m["post_id"]: m["similarity"] for m in matches}
-    return _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)
+    result = _hydrate(uc, [m["post_id"] for m in matches], sims, cold=False)
+    # Best-effort: a failure to explain must not cost the recommendations.
+    try:
+        reasons = _recommendation_reasons(
+            uc, user_id, team_id, [r.post["papers"]["id"] for r in result.results]
+        )
+        for r in result.results:
+            r.reason = reasons.get(r.post["papers"]["id"])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("recommendation reasons failed for %s: %s", user_id, exc)
+    return result
 
 
 # --- BibTeX import ---------------------------------------------------------
