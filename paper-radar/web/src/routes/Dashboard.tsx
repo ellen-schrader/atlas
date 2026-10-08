@@ -117,7 +117,6 @@ export default function Dashboard() {
         isLoading: recs.isLoading,
         isError: recs.isError,
         waking: isWakingRecommendations(recs),
-        coldStart: Boolean(recs.data?.cold_start),
       }}
       tier={tier}
       perPage={frame.recsPerPage}

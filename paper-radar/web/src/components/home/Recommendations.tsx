@@ -3,12 +3,8 @@ import { ChevronLeft, ChevronRight, Sparkle, Sparkles } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Chip } from "@/components/Chip";
-import {
-  HeadingLink,
-  SectionHeading,
-  TopicDot,
-  topicColor,
-} from "@/components/home/HomeSection";
+import { Cover } from "@/components/Cover";
+import { HeadingLink, SectionHeading, TopicDot } from "@/components/home/HomeSection";
 import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
 import type { Recommendation, RecommendationReason } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
@@ -18,7 +14,6 @@ interface RecsState {
   isLoading: boolean;
   isError: boolean;
   waking: boolean;
-  coldStart: boolean;
 }
 
 /** "Recommended for you": a horizontal, snap-scrolling row of cards, each one
@@ -74,34 +69,22 @@ export function RecommendationsRow({
 
   const itemStyle: CSSProperties = { width: mobile ? "84%" : cardWidth(perPage) };
 
-  const right = (
+  // Arrows alone on the right edge; Tune sits with the title, where the Lab feed
+  // keeps its filter.
+  const right = !mobile && recs.results.length > perPage && (
     <>
-      {!mobile && recs.results.length > perPage && (
-        <>
-          <ArrowButton dir="left" disabled={edges.start} onClick={() => page(-1)} />
-          <ArrowButton dir="right" disabled={edges.end} onClick={() => page(1)} />
-        </>
-      )}
-      <HeadingLink onClick={onTune}>Tune</HeadingLink>
+      <ArrowButton dir="left" disabled={edges.start} onClick={() => page(-1)} />
+      <ArrowButton dir="right" disabled={edges.end} onClick={() => page(1)} />
     </>
   );
 
   return (
     <section className="min-w-0">
-      <SectionHeading title="Recommended for you" right={right} />
-
-      {/* Outside the has-results branch on purpose: a brand-new lab is exactly the
-          case it explains, and often has nothing to show yet. */}
-      {recs.coldStart && !recs.isError && (
-        <p className="mb-3 text-xs text-muted">
-          Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
-          and this becomes yours, or{" "}
-          <button onClick={onTune} className="tap-target font-medium text-accent hover:underline">
-            describe your research
-          </button>{" "}
-          to give it a head start.
-        </p>
-      )}
+      <SectionHeading
+        title="Recommended for you"
+        controls={<HeadingLink onClick={onTune}>Tune</HeadingLink>}
+        right={right}
+      />
 
       {recs.isLoading ? (
         <div className="flex gap-6 overflow-hidden">
@@ -222,15 +205,14 @@ export function RecCard({
           onOpen();
         }
       }}
-      className="relative box-border flex w-full cursor-pointer flex-col overflow-hidden rounded-card border border-border bg-surface p-4 text-left transition hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="relative box-border flex w-full cursor-pointer flex-col overflow-hidden rounded-card border border-border bg-surface p-4 pt-[22px] text-left transition hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
-      <span
-        aria-hidden
-        className="absolute inset-x-0 top-0 h-0.5"
-        style={{
-          background: `linear-gradient(90deg, transparent, color-mix(in srgb, ${topicColor(topic)} 40%, transparent), transparent)`,
-        }}
-      />
+      {/* The same generative spine as PaperCard, so a paper wears the same colour
+          on Home as in Papers. Stronger than PaperCard's 0.35: a row of three to
+          five cards doesn't shout the way a full grid does. */}
+      <div className="absolute inset-x-0 top-0 h-1.5 opacity-75" aria-hidden>
+        <Cover seed={p.id} />
+      </div>
       <div className="flex min-w-0 items-center gap-2 text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
         <TopicDot topic={topic} />
         <span className="truncate">{eyebrow}</span>
