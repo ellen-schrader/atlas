@@ -285,24 +285,22 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
   const qc = useQueryClient();
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [unused, setUnused] = useState(false);
+  const [outcome, setOutcome] = useState<"used" | "unused" | "cleared" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => setText(initial), [initial]);
 
   async function save() {
     setBusy(true);
-    setSaved(false);
+    setOutcome(null);
     setError(null);
     try {
       // Save + re-embed via the API so profile_vec stays in sync with the text
       // (recommendations rank against it). The service holds the embedding key.
       const { embedded } = await updateProfile(text);
-      // Saved but not embedded means recommendations can't use it — say so
-      // rather than "Saved." (An empty description is never embedded.)
-      setSaved(true);
-      setUnused(!embedded && Boolean(text.trim()));
+      // Say what recommendations will actually do with it. Saved but not
+      // embedded means they keep using the previous description, if any.
+      setOutcome(!text.trim() ? "cleared" : embedded ? "used" : "unused");
       await qc.invalidateQueries({ queryKey: ["profile", userId] });
       await qc.invalidateQueries({ queryKey: ["recommendations"] });
     } catch (e) {
@@ -322,7 +320,7 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
         value={text}
         onChange={(e) => {
           setText(e.target.value);
-          setSaved(false);
+          setOutcome(null);
         }}
         placeholder="e.g. Oncologist working on an immunotherapy dataset focused on myeloid cells."
       />
@@ -330,15 +328,18 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
         <Button size="sm" onClick={save} disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </Button>
-        {saved &&
-          (unused ? (
-            <span className="text-xs text-danger">
-              Saved, but recommendations can’t use it yet: the embedding service didn’t respond.
-              Try saving again shortly.
-            </span>
-          ) : (
-            <span className="text-xs text-muted">Saved. Your recommendations now use it.</span>
-          ))}
+        {outcome === "used" && (
+          <span className="text-xs text-muted">Saved. Your recommendations now use it.</span>
+        )}
+        {outcome === "cleared" && (
+          <span className="text-xs text-muted">Saved. Recommendations no longer use a description.</span>
+        )}
+        {outcome === "unused" && (
+          <span className="text-xs text-danger">
+            Saved, but it couldn’t be processed, so recommendations still use your previous
+            description (if any).
+          </span>
+        )}
         {error && <span className="text-xs text-danger">{error}</span>}
       </div>
     </Panel>
@@ -368,7 +369,7 @@ function FollowedTagsPanel({
   teamName: string;
   profileText: string;
 }) {
-  const { follows, save } = useFollowedTags(userId);
+  const { follows, ready, follow, unfollow } = useFollowedTags(userId);
   const { data: tags } = useTeamTags(teamId);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -382,9 +383,9 @@ function FollowedTagsPanel({
     .filter((t, i, all) => all.indexOf(t) === i && !follows.includes(t))
     .slice(0, 8);
 
-  async function update(next: string[]) {
+  async function run(write: Promise<boolean>) {
     setError(null);
-    if (!(await save(next))) setError("Couldn’t save. Try again.");
+    if (!(await write)) setError("Couldn’t save. Try again.");
   }
 
   /** Tags are matched exactly, so reuse the lab's spelling when there is one;
@@ -403,7 +404,7 @@ function FollowedTagsPanel({
       return;
     }
     setDraft("");
-    void update([...follows, tag]);
+    void run(follow(tag));
   }
 
   return (
@@ -419,7 +420,7 @@ function FollowedTagsPanel({
                 {t}
                 <button
                   type="button"
-                  onClick={() => void update(follows.filter((x) => x !== t))}
+                  onClick={() => void run(unfollow(t))}
                   aria-label={`Unfollow ${t}`}
                   className="tap-target grid h-5 w-5 place-items-center rounded text-muted transition hover:text-fg"
                 >
@@ -448,7 +449,7 @@ function FollowedTagsPanel({
               <option key={t} value={t} />
             ))}
         </datalist>
-        <Button size="sm" type="submit" disabled={!draft.trim()}>
+        <Button size="sm" type="submit" disabled={!draft.trim() || !ready}>
           Follow
         </Button>
       </form>
@@ -462,7 +463,8 @@ function FollowedTagsPanel({
               <button
                 key={t}
                 type="button"
-                onClick={() => void update([...follows, t])}
+                onClick={() => void run(follow(t))}
+                disabled={!ready}
                 className="rounded-chip border border-dashed border-border-strong px-2 py-0.5 font-mono text-xs text-muted transition hover:border-solid hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 + {t}

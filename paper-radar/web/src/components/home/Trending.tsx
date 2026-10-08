@@ -30,6 +30,7 @@ export function Trending({
   onTag,
   onLab,
   followed,
+  followReady,
   onToggleFollow,
   className,
 }: {
@@ -43,6 +44,8 @@ export function Trending({
   onLab: (lab: string) => void;
   /** Tags the user follows, and how to follow / unfollow one. */
   followed: Set<string>;
+  /** False until the profile has loaded: following before then would overwrite it. */
+  followReady: boolean;
   onToggleFollow: (tag: string) => void;
   className?: string;
 }) {
@@ -132,6 +135,7 @@ export function Trending({
                       <FollowToggle
                         tag={t.tag}
                         following={followed.has(t.tag)}
+                        disabled={!followReady}
                         onToggle={() => onToggleFollow(t.tag)}
                       />
                     </li>
@@ -183,22 +187,26 @@ export function Trending({
 function FollowToggle({
   tag,
   following,
+  disabled,
   onToggle,
 }: {
   tag: string;
   following: boolean;
+  disabled: boolean;
   onToggle: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onToggle}
+      disabled={disabled}
       aria-pressed={following}
       aria-label={following ? `Unfollow ${tag}` : `Follow ${tag}`}
       title={following ? "Following — papers with this tag rank higher for you" : "Follow this tag"}
       className={cn(
         "tap-target mt-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-control transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         following ? "text-fg" : "text-faint hover:text-fg",
+        "disabled:opacity-40",
       )}
     >
       {following ? <Check size={14} /> : <Plus size={14} />}
