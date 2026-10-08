@@ -11,6 +11,7 @@ import { TagVolume } from "@/components/home/TagVolume";
 import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
@@ -53,6 +54,7 @@ export default function Dashboard() {
   const { data: readIds } = useReadPapers(userId, team.id);
   // 12, so the widest layouts can fill 4–5 cards and still have a page to scroll to.
   const recs = useRecommendations(team.id, "discover", 12);
+  const { data: newCount } = useNewSinceLastVisit(team.id);
   const trendingTags = useTrendingTags(team.id);
   const trendingAuthors = useTrendingAuthors(team.id);
   const tagRows = trendingTags.data ?? [];
@@ -95,7 +97,20 @@ export default function Dashboard() {
       >
         {greeting()}, {firstName}
       </h1>
-      <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
+      <p className="mt-1.5 text-sm text-muted">
+        {newCount == null ? (
+          <>What’s moving in {team.name}.</>
+        ) : newCount === 0 ? (
+          <>Nothing new in {team.name} since your last visit.</>
+        ) : (
+          <>
+            <span className="text-fg">
+              {newCount} new {newCount === 1 ? "paper" : "papers"}
+            </span>{" "}
+            in {team.name} since your last visit.
+          </>
+        )}
+      </p>
     </div>
   );
   const omnibar = <Omnibar teamId={team.id} teamName={team.name} mobile={mobile} />;
