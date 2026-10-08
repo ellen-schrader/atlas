@@ -5,8 +5,9 @@ import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
 
-/** The tags the user follows (profiles.interests): they get their own Discover
- *  search and "Tagged X, which you follow" reasons. Per person, across labs.
+/** The tags the user follows (profiles.interests), set in Settings: they get
+ *  their own Discover search and "Tagged X, which you follow" reasons. Per
+ *  person, across labs.
  *
  *  Every write replaces the whole array, so two rules keep it from losing tags:
  *  - nothing is written until the profile has loaded (`ready`) — otherwise the
@@ -45,11 +46,6 @@ export function useFollowedTags(userId: string) {
     [qc, ready, userId],
   );
 
-  const toggle = useCallback(
-    (tag: string) =>
-      update((cur) => (cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag])),
-    [update],
-  );
   const follow = useCallback(
     (tag: string) => update((cur) => (cur.includes(tag) ? cur : [...cur, tag])),
     [update],
@@ -59,5 +55,5 @@ export function useFollowedTags(userId: string) {
     [update],
   );
 
-  return { follows, followed, ready, toggle, follow, unfollow };
+  return { follows, followed, ready, follow, unfollow };
 }

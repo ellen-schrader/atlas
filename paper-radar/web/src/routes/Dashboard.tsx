@@ -60,7 +60,7 @@ export default function Dashboard() {
   const recs = useRecommendations(team.id, "discover", 12);
   const { data: newCount } = useNewSinceLastVisit(team.id);
   const { data: profile } = useProfile(userId);
-  const { follows, followed, ready: followsReady, toggle: toggleFollow } = useFollowedTags(userId);
+  const { follows } = useFollowedTags(userId);
   const trendingTags = useTrendingTags(team.id);
   const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
@@ -195,13 +195,6 @@ export default function Dashboard() {
       // No author filter in Papers; its full-text search covers author names
       // (in any position, so this can also find the PI's non-senior papers).
       onLab={(lab) => navigate(`/papers?q=${encodeURIComponent(lab)}`)}
-      followed={followed}
-      followReady={followsReady}
-      onToggleFollow={(tag) =>
-        void toggleFollow(tag).then(
-          (ok) => !ok && toast({ message: "Couldn’t update the tags you follow. Try again." }),
-        )
-      }
     />,
     <TagVolume
       key="volume"
