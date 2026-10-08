@@ -12,6 +12,7 @@ import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
 import { useProfile } from "@/hooks/useProfile";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
@@ -59,6 +60,7 @@ export default function Dashboard() {
   const recs = useRecommendations(team.id, "discover", 12);
   const { data: newCount } = useNewSinceLastVisit(team.id);
   const { data: profile } = useProfile(userId);
+  const { follows, toggle: toggleFollow } = useFollowedTags(userId);
   const trendingTags = useTrendingTags(team.id);
   const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
@@ -154,7 +156,8 @@ export default function Dashboard() {
       teamId={team.id}
       teamName={team.name}
       // Unknown until the profile loads: say "Tune" rather than flash the nudge.
-      hasProfile={profile ? Boolean(profile.profile_md?.trim()) : true}
+      // Followed tags count: they steer Discover too.
+      hasProfile={profile ? Boolean(profile.profile_md?.trim()) || follows.length > 0 : true}
       userId={userId}
       bookmarkedIds={bookmarkedIds}
       onOpen={openPaper}
@@ -192,6 +195,12 @@ export default function Dashboard() {
       // No author filter in Papers; its full-text search covers author names
       // (in any position, so this can also find the PI's non-senior papers).
       onLab={(lab) => navigate(`/papers?q=${encodeURIComponent(lab)}`)}
+      followed={new Set(follows)}
+      onToggleFollow={(tag) =>
+        void toggleFollow(tag).then(
+          (ok) => !ok && toast({ message: "Couldn’t update the tags you follow. Try again." }),
+        )
+      }
     />,
     <TagVolume
       key="volume"

@@ -313,7 +313,7 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
       const extra = reason.extra_labels?.[0];
       return extra ? (
         <>
-          Tagged {ref} and {extra}, which you follow
+          Tagged {ref} and <span className="text-fg">{extra}</span>, which you follow
         </>
       ) : (
         <>Tagged {ref}, which you follow</>

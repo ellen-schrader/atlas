@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useProfile } from "@/hooks/useProfile";
+import { useTeamTags } from "@/hooks/useTeamTags";
 import { updateProfile } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
@@ -34,6 +36,13 @@ export default function Settings() {
       />
 
       <ProfilePanel userId={userId} initial={profile?.profile_md ?? ""} />
+
+      <FollowedTagsPanel
+        userId={userId}
+        teamId={team.id}
+        teamName={team.name}
+        profileText={profile?.profile_md ?? ""}
+      />
 
       <ClaudePrivacyPanel teamId={team.id} teamName={team.name} userId={userId} />
 
@@ -320,6 +329,136 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
         {saved && <span className="text-xs text-muted">Saved.</span>}
         {error && <span className="text-xs text-danger">{error}</span>}
       </div>
+    </Panel>
+  );
+}
+
+/** Does `text` name `tag` as a phrase ("spatial-transcriptomics" ↔ "spatial
+ *  transcriptomic(s)")? The same rule the API uses for profile reasons. */
+function mentionsTag(text: string, tag: string): boolean {
+  const words = tag.toLowerCase().split(/[-_\s/]+/).filter(Boolean);
+  if (!words.length) return false;
+  const esc = (w: string) => w.replace(/s$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const phrase = words.map((w) => `${esc(w)}s?`).join("[\\s\\-/]+");
+  return new RegExp(`(?<![a-z0-9])${phrase}(?![a-z0-9])`).test(text.toLowerCase());
+}
+
+/** Followed tags: a cheaper way than prose to steer Discover. Papers with these
+ *  tags rank higher and say "Tagged X, which you follow". */
+function FollowedTagsPanel({
+  userId,
+  teamId,
+  teamName,
+  profileText,
+}: {
+  userId: string;
+  teamId: string;
+  teamName: string;
+  profileText: string;
+}) {
+  const { follows, save } = useFollowedTags(userId);
+  const { data: tags } = useTeamTags(teamId);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const labTags = (tags ?? []).map((t) => t.tag);
+
+  // Tags your description already names first, then the lab's most used.
+  const suggestions = [
+    ...labTags.filter((t) => mentionsTag(profileText, t)),
+    ...labTags,
+  ]
+    .filter((t, i, all) => all.indexOf(t) === i && !follows.includes(t))
+    .slice(0, 8);
+
+  async function update(next: string[]) {
+    setError(null);
+    if (!(await save(next))) setError("Couldn’t save. Try again.");
+  }
+
+  /** Tags are matched exactly, so reuse the lab's spelling when there is one;
+   *  otherwise write it the way enrichment writes tags (lowercase-hyphenated). */
+  function normalise(raw: string): string {
+    const typed = raw.trim();
+    const known = labTags.find((t) => t.toLowerCase() === typed.toLowerCase());
+    return known ?? typed.toLowerCase().replace(/\s+/g, "-");
+  }
+
+  function add(e?: FormEvent) {
+    e?.preventDefault();
+    const tag = normalise(draft);
+    if (!tag || follows.includes(tag)) {
+      setDraft("");
+      return;
+    }
+    setDraft("");
+    void update([...follows, tag]);
+  }
+
+  return (
+    <Panel
+      title="Tags you follow"
+      desc="Papers with these tags rank higher in your recommendations, and say so. Quicker than a description, and they work together."
+    >
+      {follows.length > 0 ? (
+        <ul className="flex flex-wrap gap-1.5">
+          {follows.map((t) => (
+            <li key={t}>
+              <span className="inline-flex items-center gap-1 rounded-chip border border-border-strong bg-surface-2 py-0.5 pl-2 pr-1 font-mono text-xs text-fg">
+                {t}
+                <button
+                  type="button"
+                  onClick={() => void update(follows.filter((x) => x !== t))}
+                  aria-label={`Unfollow ${t}`}
+                  className="tap-target grid h-5 w-5 place-items-center rounded text-muted transition hover:text-fg"
+                >
+                  ×
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted">You don’t follow any tags yet.</p>
+      )}
+
+      <form onSubmit={add} className="mt-3 flex gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          list="followable-tags"
+          placeholder={`A tag from ${teamName}, e.g. ${labTags[0] ?? "spatial-transcriptomics"}`}
+          aria-label="Tag to follow"
+        />
+        <datalist id="followable-tags">
+          {labTags
+            .filter((t) => !follows.includes(t))
+            .map((t) => (
+              <option key={t} value={t} />
+            ))}
+        </datalist>
+        <Button size="sm" type="submit" disabled={!draft.trim()}>
+          Follow
+        </Button>
+      </form>
+      {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
+
+      {suggestions.length > 0 && (
+        <div className="mt-4">
+          <div className="text-xs font-medium text-muted">Suggestions</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {suggestions.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => void update([...follows, t])}
+                className="rounded-chip border border-dashed border-border-strong px-2 py-0.5 font-mono text-xs text-muted transition hover:border-solid hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                + {t}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </Panel>
   );
 }

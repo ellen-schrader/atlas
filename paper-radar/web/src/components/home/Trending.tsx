@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check, Plus } from "lucide-react";
 
 import { Avatar } from "@/components/Avatar";
 import { SectionHeading, Segmented } from "@/components/home/HomeSection";
@@ -28,6 +29,8 @@ export function Trending({
   onHoverTag,
   onTag,
   onLab,
+  followed,
+  onToggleFollow,
   className,
 }: {
   tags: TrendingTag[];
@@ -38,6 +41,9 @@ export function Trending({
   onHoverTag: (tag: string | null) => void;
   onTag: (tag: string) => void;
   onLab: (lab: string) => void;
+  /** Tags the user follows, and how to follow / unfollow one. */
+  followed: Set<string>;
+  onToggleFollow: (tag: string) => void;
   className?: string;
 }) {
   const [tab, setTab] = useState<Tab>("tags");
@@ -78,18 +84,21 @@ export function Trending({
                 {tags.map((t) => {
                   const rising = t.n > t.prev;
                   return (
-                    <li key={t.tag}>
+                    <li
+                      key={t.tag}
+                      onMouseEnter={() => onHoverTag(t.tag)}
+                      className={cn(
+                        "flex items-start rounded-control transition",
+                        hoveredTag === t.tag && "bg-surface-2",
+                      )}
+                    >
                       <button
                         type="button"
                         onClick={() => onTag(t.tag)}
-                        onMouseEnter={() => onHoverTag(t.tag)}
                         onFocus={() => onHoverTag(t.tag)}
                         onBlur={() => onHoverTag(null)}
                         aria-label={`${t.tag}: ${t.n} papers in 30 days, ${formatChange(t.n, t.prev)} on the previous 30`}
-                        className={cn(
-                          "block min-h-11 w-full rounded-control px-2.5 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                          hoveredTag === t.tag && "bg-surface-2",
-                        )}
+                        className="block min-h-11 min-w-0 flex-1 rounded-control py-2 pl-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
                         <span className="flex items-baseline gap-2">
                           <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-fg">
@@ -120,6 +129,11 @@ export function Trending({
                           />
                         </span>
                       </button>
+                      <FollowToggle
+                        tag={t.tag}
+                        following={followed.has(t.tag)}
+                        onToggle={() => onToggleFollow(t.tag)}
+                      />
                     </li>
                   );
                 })}
@@ -161,6 +175,34 @@ export function Trending({
         )}
       </div>
     </section>
+  );
+}
+
+/** Follow / unfollow a tag in place. Quiet until hovered unless already
+ *  followed, so the list still reads as data first. */
+function FollowToggle({
+  tag,
+  following,
+  onToggle,
+}: {
+  tag: string;
+  following: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={following}
+      aria-label={following ? `Unfollow ${tag}` : `Follow ${tag}`}
+      title={following ? "Following — papers with this tag rank higher for you" : "Follow this tag"}
+      className={cn(
+        "tap-target mt-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-control transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        following ? "text-fg" : "text-faint hover:text-fg",
+      )}
+    >
+      {following ? <Check size={14} /> : <Plus size={14} />}
+    </button>
   );
 }
 
