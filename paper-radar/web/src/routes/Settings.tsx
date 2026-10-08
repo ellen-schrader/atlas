@@ -286,6 +286,7 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [unused, setUnused] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => setText(initial), [initial]);
@@ -297,8 +298,11 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
     try {
       // Save + re-embed via the API so profile_vec stays in sync with the text
       // (recommendations rank against it). The service holds the embedding key.
-      await updateProfile(text);
+      const { embedded } = await updateProfile(text);
+      // Saved but not embedded means recommendations can't use it — say so
+      // rather than "Saved." (An empty description is never embedded.)
       setSaved(true);
+      setUnused(!embedded && Boolean(text.trim()));
       await qc.invalidateQueries({ queryKey: ["profile", userId] });
       await qc.invalidateQueries({ queryKey: ["recommendations"] });
     } catch (e) {
@@ -326,7 +330,15 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
         <Button size="sm" onClick={save} disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </Button>
-        {saved && <span className="text-xs text-muted">Saved.</span>}
+        {saved &&
+          (unused ? (
+            <span className="text-xs text-danger">
+              Saved, but recommendations can’t use it yet: the embedding service didn’t respond.
+              Try saving again shortly.
+            </span>
+          ) : (
+            <span className="text-xs text-muted">Saved. Your recommendations now use it.</span>
+          ))}
         {error && <span className="text-xs text-danger">{error}</span>}
       </div>
     </Panel>
