@@ -58,8 +58,10 @@ export function Omnibar({
   // dismiss hook takes it in the capture phase. So "Esc clears" lives here too.
   // Off while our own AddPaperDialog is up: its Escape and backdrop clicks are
   // the dialog's, and this capture-phase listener would otherwise swallow them.
+  // Once a paper is added, the link has done its job: any way of leaving the
+  // dropdown resets the bar rather than leaving the URL sitting in it.
   useDismissable(wrapRef, open && dialog === null, (reason) =>
-    reason === "escape" ? clear() : setOpen(false),
+    reason === "escape" || added ? clear() : setOpen(false),
   );
 
   // ⌘K / Ctrl+K focuses the bar from anywhere on Home.
@@ -123,7 +125,8 @@ export function Omnibar({
   }
 
   function openResult(paperId: string) {
-    setOpen(false);
+    if (added) clear();
+    else setOpen(false);
     openPaper(paperId);
   }
 
