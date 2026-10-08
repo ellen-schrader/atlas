@@ -37,7 +37,11 @@ export function useNewSinceLastVisit(teamId: string) {
     const mark = () => {
       if (marked) return;
       marked = true;
-      void supabase.rpc("mark_team_visit", { p_team: teamId });
+      // .then() is what sends it: a supabase-js query builder is lazy, and a
+      // bare `void supabase.rpc(...)` never leaves the browser.
+      supabase
+        .rpc("mark_team_visit", { p_team: teamId })
+        .then(({ error }) => error && console.warn("mark_team_visit failed:", error.message));
     };
     const timer = window.setTimeout(mark, MARK_AFTER_MS);
     return () => {
