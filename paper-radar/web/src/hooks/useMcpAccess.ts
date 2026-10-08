@@ -63,3 +63,44 @@ export function useMcpToolCalls(teamId: string, limit = 12) {
     refetchInterval: 15_000, // it's a live log; a stale one invites false confidence
   });
 }
+
+export interface ClaudeConnection {
+  /** First successful tool call from this member — when they connected. */
+  connectedAt: string;
+  lastUsedAt: string;
+}
+
+/**
+ * Whether *this member* has connected their own Claude client, as opposed to
+ * the lab-wide switch above. There is no per-member token to look at: each
+ * member's MCP server logs in with their own credentials, and the one trace it
+ * leaves here is the audit log. So "connected" means "has made a call that
+ * succeeded" — a refused call (lab switched off, bad team id) doesn't count.
+ * `null` until then.
+ */
+export function useClaudeConnection(teamId: string, userId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["claude-connection", teamId, userId],
+    enabled,
+    queryFn: async (): Promise<ClaudeConnection | null> => {
+      const calls = () =>
+        supabase
+          .from("mcp_tool_calls")
+          .select("called_at")
+          .eq("team_id", teamId)
+          .eq("user_id", userId)
+          .eq("ok", true);
+      const [first, last] = await Promise.all([
+        calls().order("called_at", { ascending: true }).limit(1).maybeSingle(),
+        calls().order("called_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      if (first.error) throw first.error;
+      if (last.error) throw last.error;
+      if (!first.data || !last.data) return null;
+      return { connectedAt: first.data.called_at, lastUsedAt: last.data.called_at };
+    },
+    // Someone sets Claude up in another window and comes back expecting the
+    // sidebar to have noticed; the default refetch-on-focus covers that.
+    staleTime: 30_000,
+  });
+}

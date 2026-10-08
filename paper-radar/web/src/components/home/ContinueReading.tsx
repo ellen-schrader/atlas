@@ -19,7 +19,7 @@ export function ContinueReadingHeading({
     <SectionHeading
       className={className}
       title="Continue reading"
-      right={<HeadingLink onClick={onOpenList}>Reading list · {count}</HeadingLink>}
+      right={<HeadingLink onClick={onOpenList}>My reading list · {count}</HeadingLink>}
     />
   );
 }

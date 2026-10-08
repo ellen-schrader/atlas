@@ -42,6 +42,9 @@
   --accent-fg: #ffffff;
   --danger: #c2412f;
   --danger-fg: #ffffff;  /* 5.13:1 on --danger */
+  /* Status, not data: "this is working" (e.g. Claude connected). Chrome only in
+     a dot or icon, never as a text colour on its own. 4.3:1 on --surface. */
+  --success: #2a8a4c;
 
   /* Data channels — the fluorophore set from a multiplexed panel. These colour
      DATA ONLY (map clusters, venues, themes), never chrome, so a colour on
@@ -87,6 +90,7 @@
   --accent-fg: #04100f;
   --danger: #ef6a55;
   --danger-fg: #140b09;  /* white would be 3.06:1 here; this is 6.2:1 */
+  --success: #4ec97b;
 
   --ch-1: #2fd4cf;
   --ch-2: #e75fae;
@@ -131,6 +135,7 @@
   --color-accent-fg: var(--accent-fg);
   --color-danger: var(--danger);
   --color-danger-fg: var(--danger-fg);
+  --color-success: var(--success);
 
   /* data channels — charts and the map only, never chrome */
   --color-ch-1: var(--ch-1);

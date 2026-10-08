@@ -131,12 +131,12 @@ export default function Landing() {
         <div className="mt-7 grid gap-4 md:grid-cols-3">
           <Surface
             icon={<LibraryBig size={17} />}
-            title="Papers"
+            title="Library"
             body="Everything your lab has shared, deduplicated and enriched with real metadata. Full-text and semantic search, an interactive map of the corpus, and the stats behind it."
           />
           <Surface
             icon={<ImageIcon size={17} />}
-            title="Your lab’s look"
+            title="Figure gallery"
             body="The figures your lab admires. Atlas derives your palette from them — and a real matplotlib style sheet, so a figure Claude makes in your repo already looks like it belongs in your paper."
           />
           <Surface
