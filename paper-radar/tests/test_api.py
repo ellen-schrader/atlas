@@ -702,6 +702,10 @@ class _FakeClient:
     def table(self, name: str):
         return _FakeTable(self._tables.get(name, []))
 
+    def rpc(self, name: str, _params: dict | None = None):
+        """An RPC returns whatever was registered as ``rpc:<name>``."""
+        return _FakeTable(self._tables.get(f"rpc:{name}", []))
+
 
 def test_engagement_weights_ignores_a_paper_status_row_that_says_nothing():
     """A row with saved=false and status='unread' is what un-saving a paper (or
@@ -954,7 +958,12 @@ def test_cold_start_puts_followed_tags_first_and_says_so():
         return {"id": f"post-{n}", "paper_id": pid, "tags": [], "papers": {"id": pid, "tags": tags}}
 
     rows = [row(1, []), row(2, ["spatial"]), row(3, [])]  # newest first, as queried
-    uc = _FakeClient(paper_posts=rows, profiles=[])
+    # recommend_tagged finds the followed-tag post wherever it sits in time.
+    uc = _FakeClient(
+        paper_posts=rows,
+        profiles=[],
+        **{"rpc:recommend_tagged": [{"post_id": "post-2", "similarity": None}]},
+    )
     result = _recency_fallback(uc, "team-1", set(), 3, ["spatial"])
     assert [r.post["id"] for r in result.results] == ["post-2", "post-1", "post-3"]
     assert result.cold_start is True
@@ -966,3 +975,26 @@ def test_cold_start_puts_followed_tags_first_and_says_so():
     reasons = _new_reasons(uc, "user-1", [r.post for r in result.results], ["spatial"])
     assert reasons["p2"]["kind"] == "tag"
     assert reasons["p1"]["kind"] == "new"
+
+
+def test_discover_sources_only_for_signals_the_caller_has():
+    from api.app import _discover_sources
+
+    uc = _FakeClient(
+        **{
+            "rpc:recommend_papers": [{"post_id": "near", "similarity": 0.7}],
+            "rpc:recommend_tagged": [{"post_id": "tagged", "similarity": None}],
+        }
+    )
+    full = _discover_sources(
+        uc, "team-1", {"profile_q": [1.0], "engagement_q": [1.0], "follows": ["x"]}, 12
+    )
+    assert full == {
+        "profile": [("near", 0.7)],
+        "engagement": [("near", 0.7)],
+        "tags": [("tagged", 0.0)],
+    }
+    # Engagement only: no profile search, and no tag search without follows.
+    assert set(_discover_sources(uc, "team-1", {"engagement_q": [1.0]}, 12)) == {"engagement"}
+    # Follows with no vector at all is the cold start's job, but still searchable.
+    assert set(_discover_sources(uc, "team-1", {"follows": ["x"]}, 12)) == {"tags"}

@@ -1547,7 +1547,8 @@ def _taste_vector(
 
     Pass ``loaded`` (a dict) to keep what was fetched for the recommendation
     reasons, instead of fetching it again: "vecs" (paper id → unit vector),
-    "titles", "profile_md" and "has_profile"."""
+    "titles", "profile_md", "follows", and the per-signal query vectors
+    "profile_q" / "engagement_q" that Discover searches with."""
     prof = (
         uc.table("profiles").select("profile_vec, profile_md, interests").eq("id", user_id).limit(1)
         .execute().data or []
@@ -1555,7 +1556,6 @@ def _taste_vector(
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
     if loaded is not None:
         loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
-        loaded["has_profile"] = profile_vec is not None
         loaded["follows"] = _follows(prof[0] if prof else None)
         loaded.setdefault("vecs", {})
         loaded.setdefault("titles", {})
@@ -1748,27 +1748,25 @@ def _recency_fallback(
     uc, team_id: str, seen: set[str], limit: int, follows: list[str] | None = None
 ) -> RecommendationsResponse:
     """Cold start (no profile, no engagement): recent unseen posts, newest first —
-    with posts carrying a followed tag first, if the caller follows any.
+    led by the newest posts carrying a followed tag, however old, if the caller
+    follows any.
 
     ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
     this server-side; here it comes from the request's `_engagement_weights` keys —
     every engagement row gets a nonzero weight, so the keys are exactly the seen set)."""
+    lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit)]
     rows = (
         uc.table("paper_posts")
-        .select("id, paper_id, posted_at, tags, papers(tags)")
+        .select("id, paper_id, posted_at")
         .eq("team_id", team_id)
         .order("posted_at", desc=True)
-        # A wider window when there are follows, so a followed-tag paper from a
-        # few weeks back can still lead.
-        .limit(limit * (10 if follows else 4))
+        .limit(limit * 4)
         .execute()
         .data
         or []
     )
-    unseen = [r for r in rows if r["paper_id"] not in seen]
-    # sorted() is stable, so newest-first holds within each group.
-    unseen = sorted(unseen, key=lambda r: not _followed_hits(r, follows or []))
-    return _hydrate(uc, [r["id"] for r in unseen[:limit]], {}, cold=True)
+    rest = [r["id"] for r in rows if r["paper_id"] not in seen and r["id"] not in lead]
+    return _hydrate(uc, (lead + rest)[:limit], {}, cold=True)
 
 
 # Every recommendation says why it is there (docs/dashboard.md §3.4): the signal
@@ -1952,19 +1950,34 @@ def _attach_reasons(result: RecommendationsResponse, reasons: dict[str, dict]) -
 _DISCOVER_SOURCES = ("profile", "tags", "engagement")
 
 
-def _rpc_recommend(
-    uc, team_id: str, query: list[float], limit: int, tags: list[str] | None = None
-) -> list[tuple[str, float]]:
+def _rpc_recommend(uc, team_id: str, query: list[float], limit: int) -> list[tuple[str, float]]:
     rows = (
-        uc.rpc(
-            "recommend_papers",
-            {"p_team": team_id, "p_query": query, "p_limit": limit, "p_tags": tags or []},
-        )
+        uc.rpc("recommend_papers", {"p_team": team_id, "p_query": query, "p_limit": limit})
         .execute()
         .data
         or []
     )
     return [(r["post_id"], r["similarity"]) for r in rows]
+
+
+def _rpc_tagged(
+    uc, team_id: str, follows: list[str], query: list[float] | None, limit: int
+) -> list[tuple[str, float]]:
+    """recommend_tagged: unseen posts carrying a followed tag — nearest to
+    ``query`` first, or newest first without one. Only tagged posts are ranked,
+    so a followed tag far from the caller's other interests still surfaces."""
+    if not follows:
+        return []
+    rows = (
+        uc.rpc(
+            "recommend_tagged",
+            {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit},
+        )
+        .execute()
+        .data
+        or []
+    )
+    return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
 
 
 def _discover_sources(
@@ -1980,19 +1993,10 @@ def _discover_sources(
         sources["profile"] = _rpc_recommend(uc, team_id, profile_q, limit)
     if engagement_q is not None:
         sources["engagement"] = _rpc_recommend(uc, team_id, engagement_q, limit)
-    query = profile_q if profile_q is not None else engagement_q
-    if follows and query is not None:
-        # recommend_papers pools followed-tag posts with the query's nearest;
-        # keep only the ones that carry a followed tag, nearest first.
-        ranked = _rpc_recommend(uc, team_id, query, limit * 3, follows)
-        rows = (
-            uc.table("paper_posts").select("id, tags, papers(tags)")
-            .in_("id", [pid for pid, _ in ranked]).execute().data or []
-            if ranked
-            else []
-        )
-        tagged = {r["id"] for r in rows if _followed_hits(r, follows)}
-        sources["tags"] = [(pid, sim) for pid, sim in ranked if pid in tagged]
+    if follows:
+        # Nearest to the profile if there is one, else to engagement.
+        query = profile_q if profile_q is not None else engagement_q
+        sources["tags"] = _rpc_tagged(uc, team_id, follows, query, limit)
     return sources
 
 
