@@ -1455,14 +1455,25 @@ def _recency_decay(ts: datetime | None, now: datetime) -> float:
     return 0.5 ** (age_days / _HALFLIFE_DAYS)
 
 
-def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
+def _engagement_weights(
+    uc, user_id: str, team_id: str, anchors: dict[str, str] | None = None
+) -> dict[str, float]:
     """Per-paper positive-interest weight for the user in this lab, blending signal
-    strength (save > reaction > comment > read) with recency decay."""
+    strength (save > reaction > comment > read) with recency decay.
+
+    Pass ``anchors`` to also collect, from the same rows, each paper's strongest
+    kind of engagement for the recommendation reasons (see _ANCHOR_RANK)."""
     now = datetime.now(UTC)
     weights: dict[str, float] = {}
 
     def add(paper_id: str, w: float) -> None:
         weights[paper_id] = weights.get(paper_id, 0.0) + w
+
+    def anchor(paper_id: str, kind: str) -> None:
+        if anchors is None:
+            return
+        if paper_id not in anchors or _ANCHOR_RANK[kind] < _ANCHOR_RANK[anchors[paper_id]]:
+            anchors[paper_id] = kind
 
     for r in (
         uc.table("reactions")
@@ -1475,6 +1486,10 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
     ):
         base = _W_SKEPTIC if r.get("emoji") == "🤔" else _W_REACTION
         add(r["paper_id"], base * _recency_decay(_parse_ts(r.get("created_at")), now))
+        # 🤔 is skeptical: it nudges taste, but "which you reacted to" would read
+        # as an endorsement.
+        if r.get("emoji") != "🤔":
+            anchor(r["paper_id"], "similar_reacted")
     for c in (
         uc.table("comments")
         .select("paper_id, created_at")
@@ -1485,6 +1500,7 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
         or []
     ):
         add(c["paper_id"], _W_COMMENT * _recency_decay(_parse_ts(c.get("created_at")), now))
+        anchor(c["paper_id"], "similar_discussed")
     for s in (
         uc.table("paper_status")
         .select("paper_id, saved, status, updated_at")
@@ -1508,10 +1524,18 @@ def _engagement_weights(uc, user_id: str, team_id: str) -> dict[str, float]:
         # paper would quietly collapse to the much weaker _W_READ.
         base = _W_BOOKMARK if s.get("saved") else _W_READ
         add(s["paper_id"], base * _recency_decay(_parse_ts(s.get("updated_at")), now))
+        if s.get("saved"):
+            anchor(s["paper_id"], "similar_saved")
+        elif s.get("status") == "read":
+            anchor(s["paper_id"], "similar_read")
+        elif s.get("status") == "reading":
+            anchor(s["paper_id"], "similar_reading")
     return weights
 
 
-def _taste_vector(uc, user_id: str, weights: dict[str, float]) -> list[float] | None:
+def _taste_vector(
+    uc, user_id: str, weights: dict[str, float], loaded: dict | None = None
+) -> list[float] | None:
     """Per-user taste vector: a confidence-weighted blend of the profile embedding
     and a recency-/strength-weighted engagement centroid over ``weights``
     (the caller's `_engagement_weights`, computed once per request).
@@ -1519,11 +1543,21 @@ def _taste_vector(uc, user_id: str, weights: dict[str, float]) -> list[float] | 
     The engagement side's weight grows with how many papers the user has actually
     engaged with, so a single incidental interaction can't hijack the feed while
     the profile carries a sparse user. Missing either side falls back to the other;
-    missing both returns None (cold start → recency fallback)."""
+    missing both returns None (cold start → recency fallback).
+
+    Pass ``loaded`` (a dict) to keep what was fetched for the recommendation
+    reasons, instead of fetching it again: "vecs" (paper id → unit vector),
+    "titles", "profile_md" and "has_profile"."""
     prof = (
-        uc.table("profiles").select("profile_vec").eq("id", user_id).limit(1).execute().data or []
+        uc.table("profiles").select("profile_vec, profile_md").eq("id", user_id).limit(1)
+        .execute().data or []
     )
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
+    if loaded is not None:
+        loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
+        loaded["has_profile"] = profile_vec is not None
+        loaded.setdefault("vecs", {})
+        loaded.setdefault("titles", {})
     profile_np = (
         _l2norm(np.asarray(profile_vec, dtype=np.float32)) if profile_vec is not None else None
     )
@@ -1532,7 +1566,8 @@ def _taste_vector(uc, user_id: str, weights: dict[str, float]) -> list[float] | 
     n_engaged = 0
     if weights:
         rows = (
-            uc.table("papers").select("id, embedding").in_("id", list(weights)).execute().data or []
+            uc.table("papers").select("id, title, embedding").in_("id", list(weights))
+            .execute().data or []
         )
         acc: np.ndarray | None = None
         wsum = 0.0
@@ -1541,6 +1576,9 @@ def _taste_vector(uc, user_id: str, weights: dict[str, float]) -> list[float] | 
             if w <= 0 or not r.get("embedding"):
                 continue
             v = _l2norm(np.asarray(_parse_vec(r["embedding"]), dtype=np.float32))
+            if loaded is not None:
+                loaded["vecs"][r["id"]] = v
+                loaded["titles"][r["id"]] = r.get("title")
             acc = w * v if acc is None else acc + w * v
             wsum += w
             n_engaged += 1
@@ -1705,7 +1743,8 @@ def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> Recommend
 # Every recommendation says why it is there (docs/dashboard.md §3.4), using the
 # most specific reason that is true of how it was ranked:
 #
-#   1. engagement  "Similar to X, which you saved / reacted to / discussed / read" —
+#   1. engagement  "Similar to X, which you saved / reacted to / discussed / read /
+#      are reading" —
 #      the engaged paper nearest to it, if that paper is genuinely close (below
 #      _REASON_MIN_SIMILARITY, naming one paper would be a claim the embeddings
 #      don't support). Today most engagement happens in Teams, so this is rare
@@ -1718,13 +1757,16 @@ def _recency_fallback(uc, team_id: str, seen: set[str], limit: int) -> Recommend
 #      which is newest-first.
 #
 # A taste built from engagement alone with no close paper gets "engagement"
-# (generic copy) rather than a stretched "Similar to".
+# ("In line with your activity in Atlas") rather than a stretched "Similar to".
 _REASON_MIN_SIMILARITY = 0.5
-# Anchors are the caller's most recent engaged papers; older ones say less about
-# what they want now, and the cap bounds the embedding fetch.
-_REASON_MAX_ANCHORS = 200
 # When one paper carries several kinds of engagement, the strongest names it.
-_ANCHOR_RANK = {"similar_saved": 0, "similar_reacted": 1, "similar_discussed": 2, "similar_read": 3}
+_ANCHOR_RANK = {
+    "similar_saved": 0,
+    "similar_reacted": 1,
+    "similar_discussed": 2,
+    "similar_read": 3,
+    "similar_reading": 4,
+}
 
 
 def _pick_reason(
@@ -1744,95 +1786,60 @@ def _pick_reason(
 
 
 def _profile_tags(profile_md: str, tags: list[str]) -> list[str]:
-    """The tags whose every word the profile text mentions ("spatial-transcriptomics"
-    → "spatial" and "transcriptomic…"). Words under 3 letters are ignored, and a
-    trailing "s" is dropped so "transcriptomics" also matches "transcriptomic"."""
+    """The tags the profile text names as a phrase: "spatial-transcriptomics"
+    matches "spatial transcriptomic(s)", "t-cell-exhaustion" matches "T cell
+    exhaustion" but not "B cell … exhaustion", and "cell" doesn't match
+    "cellular". Each word may take a plural "s" either way round."""
     text = profile_md.lower()
     out: list[str] = []
     for tag in tags:
-        words = [w for w in re.split(r"[-_\s/]+", tag.lower()) if len(w) >= 3]
+        words = [w for w in re.split(r"[-_\s/]+", tag.lower()) if w]
         if not words:
             continue
-        if all(re.search(r"\b" + re.escape(w.removesuffix("s")), text) for w in words):
+        phrase = r"[\s\-/]+".join(re.escape(w.removesuffix("s")) + "s?" for w in words)
+        if re.search(r"(?<![a-z0-9])" + phrase + r"(?![a-z0-9])", text):
             out.append(tag)
     return out
 
 
-def _engagement_anchors(uc, user_id: str, team_id: str) -> dict[str, str]:
-    """paper_id → anchor kind for the caller's engaged papers, strongest kind
-    winning. A 🤔 reaction is skeptical, not an endorsement, so it isn't one; a
-    paper_status row that is neither saved nor started says nothing."""
-    kinds: dict[str, str] = {}
-
-    def add(pid: str, kind: str) -> None:
-        if pid not in kinds or _ANCHOR_RANK[kind] < _ANCHOR_RANK[kinds[pid]]:
-            kinds[pid] = kind
-
-    for r in (
-        uc.table("paper_status").select("paper_id, saved, status, updated_at")
-        .eq("team_id", team_id).eq("user_id", user_id)
-        .order("updated_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
-    ):
-        if r.get("saved"):
-            add(r["paper_id"], "similar_saved")
-        elif r.get("status") in ("read", "reading"):
-            add(r["paper_id"], "similar_read")
-    for r in (
-        uc.table("reactions").select("paper_id, emoji, created_at")
-        .eq("team_id", team_id).eq("user_id", user_id)
-        .order("created_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
-    ):
-        if r.get("emoji") != "🤔":
-            add(r["paper_id"], "similar_reacted")
-    for r in (
-        uc.table("comments").select("paper_id, created_at")
-        .eq("team_id", team_id).eq("author_id", user_id)
-        .order("created_at", desc=True).limit(_REASON_MAX_ANCHORS).execute().data or []
-    ):
-        add(r["paper_id"], "similar_discussed")
-    return kinds
-
-
 def _recommendation_reasons(
-    uc, user_id: str, team_id: str, posts: list[dict]
+    uc, posts: list[dict], anchors: dict[str, str], loaded: dict
 ) -> dict[str, dict]:
     """paper_id → reason for each recommended post (rules 1–2 above; rule 3 is
     _new_reasons). Every post gets one: engagement if a paper is close enough,
-    else profile, else the generic engagement line."""
+    else profile, else the generic engagement line.
+
+    ``anchors`` and ``loaded`` come from _engagement_weights / _taste_vector, so
+    the engaged papers' embeddings aren't fetched twice; only the (≤ 50)
+    recommended papers' embeddings are read here."""
     paper_ids = [p["papers"]["id"] for p in posts]
     if not paper_ids:
         return {}
-    kinds = _engagement_anchors(uc, user_id, team_id)
-
-    prof = (
-        uc.table("profiles").select("profile_md, profile_vec").eq("id", user_id)
-        .limit(1).execute().data or []
-    )
-    profile_md = (prof[0].get("profile_md") or "") if prof else ""
-    has_profile = bool(prof and prof[0].get("profile_vec"))
-
-    papers = (
-        uc.table("papers").select("id, title, embedding")
-        .in_("id", list(set(kinds) | set(paper_ids))).execute().data or []
-    )
-    vecs = {
+    vecs: dict[str, np.ndarray] = loaded.get("vecs", {})
+    titles: dict[str, str | None] = loaded.get("titles", {})
+    rec_vecs = {
         p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
-        for p in papers
+        for p in (
+            uc.table("papers").select("id, embedding").in_("id", paper_ids).execute().data or []
+        )
         if p.get("embedding")
     }
-    titles = {p["id"]: p.get("title") for p in papers}
-    anchors = [
+    candidates = [
         (kind, pid, titles[pid], vecs[pid])
-        for pid, kind in kinds.items()
+        for pid, kind in anchors.items()
         # An untitled anchor can't be named on the card.
         if pid in vecs and titles.get(pid)
     ]
+    # The profile only explains a card if it took part in the ranking (a vector)
+    # and there is still text behind it.
+    profile_md = loaded.get("profile_md") or ""
+    use_profile = bool(loaded.get("has_profile") and profile_md.strip())
 
     reasons: dict[str, dict] = {}
     for post in posts:
         pid = post["papers"]["id"]
-        reason = _pick_reason(vecs[pid], anchors) if pid in vecs else None
-        if reason is None and has_profile:
+        reason = _pick_reason(rec_vecs[pid], candidates) if pid in rec_vecs else None
+        if reason is None and use_profile:
             tags = post.get("tags") or post["papers"].get("tags") or []
             hits = _profile_tags(profile_md, tags)
             reason = {
@@ -1897,8 +1904,10 @@ def recommendations(
     limit = max(1, min(limit, 50))
 
     uc = user_client(token)
-    weights = _engagement_weights(uc, user_id, team_id)
-    taste = _taste_vector(uc, user_id, weights)
+    anchors: dict[str, str] = {}
+    loaded: dict = {}
+    weights = _engagement_weights(uc, user_id, team_id, anchors)
+    taste = _taste_vector(uc, user_id, weights, loaded)
 
     if scope == "reading_list":
         return _reading_list_ranked(uc, user_id, team_id, taste, limit)
@@ -1923,7 +1932,7 @@ def recommendations(
     try:
         _attach_reasons(
             result,
-            _recommendation_reasons(uc, user_id, team_id, [r.post for r in result.results]),
+            _recommendation_reasons(uc, [r.post for r in result.results], anchors, loaded),
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("recommendation reasons failed for %s: %s", user_id, exc)

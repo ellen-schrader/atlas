@@ -763,20 +763,31 @@ def _post(pid: str, tags: list[str] | None = None, **kw) -> dict:
     return {"papers": {"id": pid, "tags": tags or []}, "tags": [], **kw}
 
 
+def _reasons_for(uc, posts):
+    """Run the reasons the way /recommendations does: anchors and embeddings come
+    from the same pass that builds the taste vector."""
+    from api.app import _engagement_weights, _recommendation_reasons, _taste_vector
+
+    anchors: dict = {}
+    loaded: dict = {}
+    weights = _engagement_weights(uc, "user-1", "team-1", anchors)
+    _taste_vector(uc, "user-1", weights, loaded)
+    return _recommendation_reasons(uc, posts, anchors, loaded)
+
+
 def test_recommendation_reasons_engagement_profile_and_fallback():
     """Rule 1 names the nearest engaged paper (strongest engagement kind wins,
-    a 🤔 isn't an endorsement); rule 2 falls back to the profile with the tags it
-    mentions; with no close paper and no profile the line is generic."""
-    from api.app import _recommendation_reasons
-
+    a 🤔 isn't an endorsement, 'reading' isn't 'read'); rule 2 falls back to the
+    profile with the tags it names; with neither, the line is generic."""
     profile = {
         "profile_md": "We study spatial transcriptomics of breast tumours.",
-        "profile_vec": [0.1],
+        "profile_vec": _unit(1, 1, 1, 1, 1, 1, 1),
     }
     uc = _FakeClient(
         paper_status=[
             {"paper_id": "saved", "saved": True, "status": "read", "updated_at": None},
-            {"paper_id": "read", "saved": False, "status": "reading", "updated_at": None},
+            {"paper_id": "read", "saved": False, "status": "read", "updated_at": None},
+            {"paper_id": "started", "saved": False, "status": "reading", "updated_at": None},
             {"paper_id": "nothing", "saved": False, "status": "unread", "updated_at": None},
         ],
         reactions=[
@@ -788,17 +799,19 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
         comments=[{"paper_id": "talked", "created_at": None}],
         profiles=[profile],
         papers=[
-            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0, 0, 0)},
-            {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0, 0, 0)},
-            {"id": "liked", "title": "Liked paper", "embedding": _unit(0, 0, 1, 0, 0, 0)},
-            {"id": "talked", "title": "Talked paper", "embedding": _unit(0, 0, 0, 1, 0, 0)},
-            {"id": "doubted", "title": "Doubted paper", "embedding": _unit(0, 0, 0, 0, 1, 0)},
-            {"id": "nothing", "title": "Ignored", "embedding": _unit(0, 0, 0, 0, 0, 1)},
-            {"id": "rec-saved", "title": "A", "embedding": _unit(1, 0.1, 0, 0, 0, 0)},
-            {"id": "rec-read", "title": "B", "embedding": _unit(0.1, 1, 0, 0, 0, 0)},
-            {"id": "rec-liked", "title": "C", "embedding": _unit(0, 0, 1, 0.1, 0, 0)},
-            {"id": "rec-talked", "title": "D", "embedding": _unit(0, 0, 0, 1, 0, 0)},
-            {"id": "rec-doubted", "title": "E", "embedding": _unit(0, 0, 0, 0, 1, 0)},
+            {"id": "saved", "title": "Saved paper", "embedding": _unit(1, 0, 0, 0, 0, 0, 0)},
+            {"id": "read", "title": "Read paper", "embedding": _unit(0, 1, 0, 0, 0, 0, 0)},
+            {"id": "liked", "title": "Liked paper", "embedding": _unit(0, 0, 1, 0, 0, 0, 0)},
+            {"id": "talked", "title": "Talked paper", "embedding": _unit(0, 0, 0, 1, 0, 0, 0)},
+            {"id": "doubted", "title": "Doubted paper", "embedding": _unit(0, 0, 0, 0, 1, 0, 0)},
+            {"id": "nothing", "title": "Ignored", "embedding": _unit(0, 0, 0, 0, 0, 1, 0)},
+            {"id": "started", "title": "Started paper", "embedding": _unit(0, 0, 0, 0, 0, 0, 1)},
+            {"id": "rec-saved", "title": "A", "embedding": _unit(1, 0.1, 0, 0, 0, 0, 0)},
+            {"id": "rec-read", "title": "B", "embedding": _unit(0.1, 1, 0, 0, 0, 0, 0)},
+            {"id": "rec-liked", "title": "C", "embedding": _unit(0, 0, 1, 0.1, 0, 0, 0)},
+            {"id": "rec-talked", "title": "D", "embedding": _unit(0, 0, 0, 1, 0, 0, 0)},
+            {"id": "rec-doubted", "title": "E", "embedding": _unit(0, 0, 0, 0, 1, 0, 0)},
+            {"id": "rec-started", "title": "G", "embedding": _unit(0, 0, 0, 0, 0, 0, 1)},
             {"id": "rec-none", "title": "F", "embedding": None},
         ],
     )
@@ -808,9 +821,10 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
         _post("rec-liked"),
         _post("rec-talked"),
         _post("rec-doubted", ["spatial-transcriptomics", "lung-cancer", "breast-cancer"]),
+        _post("rec-started"),
         _post("rec-none"),
     ]
-    reasons = _recommendation_reasons(uc, "user-1", "team-1", posts)
+    reasons = _reasons_for(uc, posts)
 
     assert reasons["rec-saved"] == {
         "kind": "similar_saved",
@@ -820,6 +834,7 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
     assert reasons["rec-read"]["kind"] == "similar_read"
     assert reasons["rec-liked"]["kind"] == "similar_reacted"
     assert reasons["rec-talked"]["kind"] == "similar_discussed"
+    assert reasons["rec-started"]["kind"] == "similar_reading"
     # Only near the 🤔 paper → not an anchor → the profile explains it, naming
     # the tags the profile text mentions ("tumours" doesn't make "cancer").
     assert reasons["rec-doubted"] == {
@@ -831,14 +846,18 @@ def test_recommendation_reasons_engagement_profile_and_fallback():
     assert reasons["rec-none"]["kind"] == "profile"
     assert reasons["rec-none"]["ref_label"] == ""
 
-    # Same picture without a profile vector: no profile claim, generic line.
+    # No profile vector: no profile claim, generic line; engagement unchanged.
     uc._tables["profiles"] = [{"profile_md": profile["profile_md"], "profile_vec": None}]
-    reasons = _recommendation_reasons(uc, "user-1", "team-1", posts)
+    reasons = _reasons_for(uc, posts)
     assert reasons["rec-doubted"]["kind"] == "engagement"
     assert reasons["rec-saved"]["kind"] == "similar_saved"
 
+    # A vector left behind after the text was cleared doesn't count as a profile.
+    uc._tables["profiles"] = [{"profile_md": "  ", "profile_vec": profile["profile_vec"]}]
+    assert _reasons_for(uc, posts)["rec-doubted"]["kind"] == "engagement"
 
-def test_profile_tags_matches_whole_tags_loosely():
+
+def test_profile_tags_matches_whole_tags_as_phrases():
     from api.app import _profile_tags
 
     text = "Spatial transcriptomic atlases and graph neural networks in histopathology."
@@ -849,6 +868,12 @@ def test_profile_tags_matches_whole_tags_loosely():
         "histopathology",
     ]
     assert _profile_tags("", tags) == []
+    # Whole words, in order: no credit for scattered or partial words.
+    tce = ["t-cell-exhaustion"]
+    assert _profile_tags("T cell exhaustion in tumours", tce) == tce
+    assert _profile_tags("B cell function and exhaustion", tce) == []
+    assert _profile_tags("cellular signalling", ["cell"]) == []
+    assert _profile_tags("Massachusetts General", ["mass-spectrometry"]) == []
 
 
 def test_new_reasons_say_who_shared_it():
