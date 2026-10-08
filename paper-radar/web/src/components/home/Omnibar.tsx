@@ -10,7 +10,7 @@ import { useDismissable } from "@/hooks/useDismissable";
 import { usePaperLookup } from "@/hooks/usePaperLookup";
 import { NO_FILTERS, usePaperCount, usePaperSearch } from "@/hooks/usePaperSearch";
 import { postPaper } from "@/lib/api";
-import { bareDoi, looksAddable, SOURCE_LABEL } from "@/lib/paperLookup";
+import { bareDoi, invalidateAfterPost, looksAddable, SOURCE_LABEL } from "@/lib/paperLookup";
 import { cn, formatAuthors, formatRelative } from "@/lib/utils";
 
 const MAX_RESULTS = 5;
@@ -56,7 +56,11 @@ export function Omnibar({
 
   // Esc never reaches the input's onKeyDown while the dropdown is open: the
   // dismiss hook takes it in the capture phase. So "Esc clears" lives here too.
-  useDismissable(wrapRef, open, (reason) => (reason === "escape" ? clear() : setOpen(false)));
+  // Off while our own AddPaperDialog is up: its Escape and backdrop clicks are
+  // the dialog's, and this capture-phase listener would otherwise swallow them.
+  useDismissable(wrapRef, open && dialog === null, (reason) =>
+    reason === "escape" ? clear() : setOpen(false),
+  );
 
   // ⌘K / Ctrl+K focuses the bar from anywhere on Home.
   useEffect(() => {
@@ -103,18 +107,13 @@ export function Omnibar({
         authors: r.authors ?? [],
         venue: r.venue,
         year: r.year,
-        doi: r.doi,
+        // The bare DOI, as AddPaperDialog sends it: papers.doi dedupes on it.
+        doi: r.doi ? (bareDoi(r.doi) ?? r.doi.trim()) : null,
         abstract: r.abstract,
         keywords: r.keywords ?? [],
         source: r.source,
       });
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["paper-search", teamId] }),
-        qc.invalidateQueries({ queryKey: ["paper-count", teamId] }),
-        qc.invalidateQueries({ queryKey: ["team-tags", teamId] }),
-        qc.invalidateQueries({ queryKey: ["team-venues", teamId] }),
-        qc.invalidateQueries({ queryKey: ["paper-lookup", teamId] }),
-      ]);
+      await invalidateAfterPost(qc, teamId);
       setAdded(res.paper_id);
     } catch (err) {
       setAddError(err instanceof Error ? err.message : String(err));
@@ -171,6 +170,7 @@ export function Omnibar({
       if (target !== trimmed) setTarget(trimmed);
       else void add();
     } else {
+      setOpen(false);
       setDialog({});
     }
   }
@@ -256,7 +256,10 @@ export function Omnibar({
               teamName={teamName}
               onAdd={() => void add()}
               onOpen={openResult}
-              onManual={() => setDialog({ initialUrl: trimmed })}
+              onManual={() => {
+                setOpen(false);
+                setDialog({ initialUrl: trimmed });
+              }}
               onLookUp={() => setTarget(trimmed)}
             />
           ) : (

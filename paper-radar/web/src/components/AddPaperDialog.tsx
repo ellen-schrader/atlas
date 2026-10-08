@@ -16,6 +16,7 @@ import {
   type Duplicate,
   fetchableUrl,
   findInLab,
+  invalidateAfterPost,
   pubmedUrl,
   SOURCE_LABEL,
 } from "@/lib/paperLookup";
@@ -267,12 +268,7 @@ export function AddPaperDialog({
       // The review step lets the link be typed by hand, so it can still be a bare
       // DOI or scheme-less — normalise it the same way the lookup path does.
       const r = await postPaper(fetchableUrl(url), teamId, payload, note);
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["paper-search", teamId] }),
-        qc.invalidateQueries({ queryKey: ["paper-count", teamId] }),
-        qc.invalidateQueries({ queryKey: ["team-tags", teamId] }),
-        qc.invalidateQueries({ queryKey: ["team-venues", teamId] }),
-      ]);
+      await invalidateAfterPost(qc, teamId);
       // Hand-entered links skip the pre-check above, so the server is the only one
       // that knows this was already here. Don't claim we added it if we didn't.
       setAdded({

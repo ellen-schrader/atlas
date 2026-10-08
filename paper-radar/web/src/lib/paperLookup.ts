@@ -1,3 +1,5 @@
+import type { QueryClient } from "@tanstack/react-query";
+
 import { supabase } from "@/lib/supabase";
 
 /* Turning what people paste into something the resolver can fetch, and checking
@@ -48,6 +50,8 @@ export function fetchableUrl(input: string): string {
   const viaDoi = doiUrl(input);
   if (viaDoi) return viaDoi;
   const trimmed = input.trim();
+  const viaPubmed = pubmedUrl(trimmed);
+  if (viaPubmed) return viaPubmed;
   // "arXiv:2401.12345" — the form papers cite themselves by.
   const arxiv = trimmed.match(/^arxiv:\s*(\S+)$/i);
   if (arxiv) return `https://arxiv.org/abs/${arxiv[1]}`;
@@ -57,9 +61,32 @@ export function fetchableUrl(input: string): string {
 }
 
 /** Does the input look like something to ADD rather than to search for: a DOI
- *  (bare, `doi:` or doi.org), a link, or an arXiv id (docs/dashboard.md §3.2). */
+ *  (bare, `doi:` or doi.org), a link, an arXiv or PubMed id. Tighter than the
+ *  spec's `^(10\.\d|https?:|doi:|arxiv)`, which sent searches like "arxiv
+ *  preprints on CRISPR" or a half-typed "https" to Add mode, and missed the
+ *  `pmid:` and scheme-less links AddPaperDialog accepts. */
 export function looksAddable(input: string): boolean {
-  return /^(10\.\d|https?:|doi:|arxiv)/i.test(input.trim());
+  const s = input.trim();
+  if (/\s/.test(s)) return false; // nothing addable contains a space
+  return /^(10\.\d{4,9}\/|https?:\/\/\S|doi:|arxiv:|pmid:|www\.|arxiv\.org\/|(dx\.)?doi\.org\/|pubmed\.ncbi)/i.test(s);
+}
+
+/** Refresh everything that reads a lab's posts after one is added. One list for
+ *  both ways in (AddPaperDialog and Home's omnibar), so a new view can't be
+ *  remembered in one and forgotten in the other. */
+export function invalidateAfterPost(qc: QueryClient, teamId: string): Promise<unknown> {
+  return Promise.all(
+    [
+      "paper-search",
+      "paper-count",
+      "team-tags",
+      "team-venues",
+      "paper-lookup",
+      "trending-tags",
+      "trending-authors",
+      "tag-volume",
+    ].map((key) => qc.invalidateQueries({ queryKey: [key, teamId] })),
+  );
 }
 
 export interface Duplicate {
