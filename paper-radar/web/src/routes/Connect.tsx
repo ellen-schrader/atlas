@@ -1,10 +1,10 @@
 import { type ReactNode, useState } from "react";
-import { PenLine, ShieldAlert } from "lucide-react";
+import { CircleCheck, PenLine, ShieldAlert } from "lucide-react";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
-import { useMcpAccess } from "@/hooks/useMcpAccess";
-import { cn } from "@/lib/utils";
+import { useClaudeConnection, useMcpAccess } from "@/hooks/useMcpAccess";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 /**
@@ -77,6 +77,8 @@ ${webLine}`;
           Setup is a config file and a login; it runs locally against your own database.
         </p>
       </header>
+
+      <ConnectionStatus />
 
       {/* Prerequisite, first — nothing below works until an owner turns access on, so
           it leads rather than trailing the setup steps a user would test at step 4. */}
@@ -272,6 +274,35 @@ ${webLine}`;
         </dl>
       </details>
     </div>
+  );
+}
+
+/** Where the sidebar's "Claude · Connected" entry lands: tell the member it's
+ *  working before showing them a setup guide they've already followed. There's
+ *  no server-side session to revoke — the credentials live in their own .env —
+ *  so disconnecting is something they do in their Claude config, and we say so. */
+function ConnectionStatus() {
+  const { team, userId } = useAppContext();
+  const { data: enabled } = useMcpAccess(team.id);
+  const { data: connection } = useClaudeConnection(team.id, userId, !!enabled);
+  if (!enabled || !connection) return null;
+
+  return (
+    <section className="flex gap-3 rounded-card border border-border bg-surface p-5">
+      <CircleCheck size={18} className="mt-0.5 shrink-0 text-success" aria-hidden />
+      <div className="min-w-0">
+        <h2 className="text-heading font-semibold text-fg">Your Claude is connected</h2>
+        <p className="mt-1 text-sm text-muted">
+          Connected since {formatDate(connection.connectedAt)}, last used{" "}
+          {formatRelative(connection.lastUsedAt)}. The setup steps are below if you need them on
+          another machine.
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          To disconnect, remove the <code className="font-mono">atlas</code> server from your
+          Claude config and delete the credentials from its <code className="font-mono">.env</code>.
+        </p>
+      </div>
+    </section>
   );
 }
 

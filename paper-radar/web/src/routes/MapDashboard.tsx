@@ -146,7 +146,7 @@ export default function MapDashboard() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-8">
       <Link to="/maps" className="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
-        <ArrowLeft size={14} /> Maps
+        <ArrowLeft size={14} /> Topic map
       </Link>
 
       {overview.isLoading && (

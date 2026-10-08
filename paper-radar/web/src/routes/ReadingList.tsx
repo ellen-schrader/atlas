@@ -226,7 +226,7 @@ export default function ReadingList() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-serif font-semibold tracking-tight">Reading list</h1>
+          <h1 className="text-display font-serif font-semibold tracking-tight">My reading list</h1>
           {total > 0 ? (
             <p className="mt-1.5 text-sm text-muted">
               {queueCount > 0 ? (
@@ -395,7 +395,7 @@ export default function ReadingList() {
           <BookMarked size={22} className="text-muted" />
           <p className="text-sm font-medium">Your reading list is empty</p>
           <p className="max-w-sm text-xs text-muted">
-            Bookmark papers from the Papers page or a paper’s detail view and they’ll collect here.
+            Bookmark papers from the Library or a paper’s detail view and they’ll collect here.
           </p>
         </div>
       )}

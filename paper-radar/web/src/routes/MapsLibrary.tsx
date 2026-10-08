@@ -44,7 +44,7 @@ export default function MapsLibrary() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <header>
-        <h1 className="font-serif text-display font-semibold tracking-tight text-fg">Maps</h1>
+        <h1 className="font-serif text-display font-semibold tracking-tight text-fg">Topic map</h1>
         <p className="mt-1.5 max-w-[64ch] text-sm text-muted">
           A topic map tracks a subject your lab cares about — a live t-SNE of its papers, the labs
           and sub-themes driving it, and an AI digest of what’s new. Start from the whole-lab

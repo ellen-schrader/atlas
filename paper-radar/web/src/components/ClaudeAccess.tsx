@@ -111,7 +111,7 @@ export function ClaudeScope({ teamName }: { teamName: string }) {
         papers
       </Line>
       <Line kind="allow">
-        Read the mood board, derive your palette + a matplotlib style sheet, and check it for
+        Read the figure gallery, derive your palette + a matplotlib style sheet, and check it for
         colourblind-safety
       </Line>
       <Line kind="write">

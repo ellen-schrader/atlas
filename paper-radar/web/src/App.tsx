@@ -73,6 +73,31 @@ export default function App() {
   return <AuthedApp session={session} />;
 }
 
+const ACTIVE_LAB_KEY = "atlas.activeLab";
+
+function readActiveLab(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_LAB_KEY);
+  } catch {
+    return null; // private mode / blocked storage: fall back to the first lab
+  }
+}
+
+/** Every query in the app is scoped to the lab it was fetched for, but not every
+ *  cache key says so, and an open paper modal or a half-written draft belongs to
+ *  the old lab too. A reload onto Home is the one switch that can't leak any of it.
+ *  False when the choice can't be stored: a reload would land back in this lab,
+ *  so the menu says so instead. */
+function switchLab(teamId: string): boolean {
+  try {
+    localStorage.setItem(ACTIVE_LAB_KEY, teamId);
+  } catch {
+    return false;
+  }
+  window.location.assign("/");
+  return true;
+}
+
 /** Send a signed-out visitor to the login screen without losing where they were. */
 function LoginWithReturn() {
   const { pathname, search } = useLocation();
@@ -90,11 +115,17 @@ function ReturnToNext() {
 
 function AuthedApp({ session }: { session: Session }) {
   const memberships = useMemberships(true, session.user.id);
+  // Read once per page load, not per render: another tab switching labs writes
+  // the same key, and picking that up mid-session (say on a token refresh)
+  // would swap labs without the reload switchLab depends on.
+  const [stored] = useState(readActiveLab);
 
   if (memberships.isLoading) return <Center>Loading…</Center>;
 
   const teams = memberships.data ?? [];
-  const team = teams[0]?.teams;
+  // The lab picked from the profile menu, if it's still one of theirs; otherwise
+  // the oldest membership (useMemberships orders by joined_at, so it's stable).
+  const team = (teams.find((m) => m.teams?.id === stored) ?? teams[0])?.teams;
 
   if (!team) {
     return (
@@ -108,15 +139,22 @@ function AuthedApp({ session }: { session: Session }) {
   return (
     <Routes>
       <Route path="/onboarding" element={<Navigate to="/" replace />} />
-      <Route element={<Layout session={session} team={team} />}>
+      <Route
+        element={
+          <Layout session={session} team={team} labs={teams.flatMap((m) => (m.teams ? [m.teams] : []))} onSwitchLab={switchLab} />
+        }
+      >
         <Route path="/" element={<Dashboard />} />
         <Route path="/papers" element={<Papers />} />
         <Route path="/papers/:paperId" element={<PaperPage />} />
         {/* Retired: importing a .bib is a mode of the Add-paper dialog now.
             Kept as a redirect so an old bookmark lands somewhere sensible. */}
         <Route path="/import" element={<Navigate to="/papers" replace />} />
-        <Route path="/reading" element={<ReadingList />} />
-        <Route path="/board" element={<MoodBoard />} />
+        <Route path="/reading-list" element={<ReadingList />} />
+        <Route path="/gallery" element={<MoodBoard />} />
+        {/* Old names for the two pages above, kept so bookmarks still land. */}
+        <Route path="/reading" element={<Navigate to="/reading-list" replace />} />
+        <Route path="/board" element={<Navigate to="/gallery" replace />} />
         <Route path="/map" element={<MapView />} />
         <Route path="/maps" element={<MapsLibrary />} />
         <Route path="/maps/overview" element={<MapView />} />

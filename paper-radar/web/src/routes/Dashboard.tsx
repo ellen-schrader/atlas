@@ -130,7 +130,7 @@ export default function Dashboard() {
   const continueHeading = (
     <ContinueReadingHeading
       count={queue.length}
-      onOpenList={() => navigate("/reading")}
+      onOpenList={() => navigate("/reading-list")}
       className={wide ? "mb-0" : undefined}
     />
   );
