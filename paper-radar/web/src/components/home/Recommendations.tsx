@@ -23,6 +23,8 @@ export function RecommendationsRow({
   tier,
   perPage,
   teamId,
+  teamName,
+  hasProfile,
   userId,
   bookmarkedIds,
   onOpen,
@@ -32,6 +34,10 @@ export function RecommendationsRow({
   tier: HomeTier;
   perPage: number;
   teamId: string;
+  teamName: string;
+  /** Without a research profile (and, today, little Atlas engagement) the row
+   *  is just the newest papers; the header link says what would fix that. */
+  hasProfile: boolean;
   userId: string;
   bookmarkedIds: Set<string>;
   onOpen: (paperId: string) => void;
@@ -82,7 +88,9 @@ export function RecommendationsRow({
     <section className="min-w-0">
       <SectionHeading
         title="Recommended for you"
-        controls={<HeadingLink onClick={onTune}>Tune</HeadingLink>}
+        controls={
+          <HeadingLink onClick={onTune}>{hasProfile ? "Tune" : "Describe your research"}</HeadingLink>
+        }
         right={right}
       />
 
@@ -110,6 +118,7 @@ export function RecommendationsRow({
               <RecCard
                 rec={r}
                 teamId={teamId}
+                teamName={teamName}
                 userId={userId}
                 bookmarked={bookmarkedIds.has(r.post.papers.id)}
                 onOpen={() => onOpen(r.post.papers.id)}
@@ -176,12 +185,14 @@ function ArrowButton({
 export function RecCard({
   rec,
   teamId,
+  teamName,
   userId,
   bookmarked,
   onOpen,
 }: {
   rec: Recommendation;
   teamId: string;
+  teamName: string;
   userId: string;
   bookmarked: boolean;
   onOpen: () => void;
@@ -235,7 +246,7 @@ export function RecCard({
             <>
               <Sparkle size={12} aria-hidden className="mt-[3px] shrink-0 fill-accent text-accent" />
               <p className="line-clamp-2 h-[34px] flex-1 text-meta leading-[17px] text-muted">
-                <ReasonText reason={rec.reason} />
+                <ReasonText reason={rec.reason} teamName={teamName} />
               </p>
             </>
           ) : (
@@ -257,13 +268,47 @@ export function RecCard({
 }
 
 /** The three reason patterns of docs/dashboard.md §3.4, referenced item in --fg. */
-function ReasonText({ reason }: { reason: RecommendationReason }) {
+function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamName: string }) {
   const ref = <span className="text-fg">{reason.ref_label}</span>;
   switch (reason.kind) {
     case "similar_saved":
       return <>Similar to {ref}, which you saved</>;
     case "similar_read":
       return <>Similar to {ref}, which you read</>;
+    case "similar_reacted":
+      return <>Similar to {ref}, which you reacted to</>;
+    case "similar_discussed":
+      return <>Similar to {ref}, which you discussed</>;
+    case "similar_reading":
+      return <>Similar to {ref}, which you’re reading</>;
+    case "profile": {
+      if (!reason.ref_label) return <>Matches your research profile</>;
+      // Tags are slugs ("spatial-transcriptomics"); the sentence wants words.
+      const words = (t: string) => t.replace(/[-_]+/g, " ");
+      const extra = reason.extra_labels?.[0];
+      return (
+        <>
+          Matches <span className="text-fg">{words(reason.ref_label)}</span>
+          {extra && (
+            <>
+              {" "}
+              and <span className="text-fg">{words(extra)}</span>
+            </>
+          )}{" "}
+          in your research profile
+        </>
+      );
+    }
+    case "engagement":
+      // The taste can come from reactions or comments too, not only saves.
+      return <>In line with your activity in Atlas</>;
+    case "new":
+      return (
+        <>
+          New in <span className="text-fg">{teamName}</span>
+          {reason.ref_label && <> · shared by {reason.ref_label}</>}
+        </>
+      );
     case "tag": {
       const extra = reason.extra_labels?.[0];
       return extra ? (

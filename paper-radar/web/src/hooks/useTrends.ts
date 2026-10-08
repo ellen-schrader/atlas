@@ -13,10 +13,11 @@ export interface TrendingTag {
   prev: number;
 }
 
-export interface TrendingAuthor {
-  author: string;
+/** A lab, as its last author (usually the PI) — see 20261008150000. */
+export interface TrendingLab {
+  lab: string;
   n: number;
-  /** Distinct people in the lab who shared their papers. */
+  /** Distinct people in your lab who shared its papers. */
   sharers: number;
 }
 
@@ -42,18 +43,18 @@ export function useTrendingTags(teamId: string, days = 30, limit = 6) {
   });
 }
 
-export function useTrendingAuthors(teamId: string, days = 30, limit = 5) {
+export function useTrendingLabs(teamId: string, days = 30, limit = 5) {
   return useQuery({
-    queryKey: ["trending-authors", teamId, days, limit],
+    queryKey: ["trending-labs", teamId, days, limit],
     staleTime: STALE,
-    queryFn: async (): Promise<TrendingAuthor[]> => {
-      const { data, error } = await supabase.rpc("trending_authors", {
+    queryFn: async (): Promise<TrendingLab[]> => {
+      const { data, error } = await supabase.rpc("trending_labs", {
         p_team: teamId,
         p_days: days,
         p_limit: limit,
       });
       if (error) throw error;
-      return (data ?? []) as TrendingAuthor[];
+      return (data ?? []) as TrendingLab[];
     },
   });
 }

@@ -193,7 +193,12 @@ function FeedRow({
                 {p.venue}
               </span>
             )}
-            {p.year != null && <span className="shrink-0">· {p.year}</span>}
+            {p.year != null && (
+              <span className="shrink-0">
+                {p.venue ? "· " : ""}
+                {p.year}
+              </span>
+            )}
             {mobile ? (
               <>
                 {poster && <span className="truncate">· {poster.split(/[\s@]/)[0]}</span>}

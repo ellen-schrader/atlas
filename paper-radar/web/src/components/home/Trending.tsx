@@ -2,10 +2,10 @@ import { useState } from "react";
 
 import { Avatar } from "@/components/Avatar";
 import { SectionHeading, Segmented } from "@/components/home/HomeSection";
-import type { TrendingAuthor, TrendingTag } from "@/hooks/useTrends";
+import type { TrendingLab, TrendingTag } from "@/hooks/useTrends";
 import { cn } from "@/lib/utils";
 
-type Tab = "tags" | "authors";
+type Tab = "tags" | "labs";
 type PanelState = "loading" | "error" | "ready";
 
 /** A change of at least this many papers counts as a big rise (accent). */
@@ -17,31 +17,31 @@ export function formatChange(n: number, prev: number): string {
 }
 
 /** "Trending · 30 days": top tags (with the previous 30 days as a track behind
- *  each bar) or top authors. Hovering a tag row highlights the same band in Tag
+ *  each bar) or the labs (last authors) whose papers were shared most. Hovering a tag row highlights the same band in Tag
  *  volume via `hoveredTag`; this list is also the chart's accessible equivalent. */
 export function Trending({
   tags,
-  authors,
+  labs,
   tagsState,
-  authorsState,
+  labsState,
   hoveredTag,
   onHoverTag,
   onTag,
-  onAuthor,
+  onLab,
   className,
 }: {
   tags: TrendingTag[];
-  authors: TrendingAuthor[];
+  labs: TrendingLab[];
   tagsState: PanelState;
-  authorsState: PanelState;
+  labsState: PanelState;
   hoveredTag: string | null;
   onHoverTag: (tag: string | null) => void;
   onTag: (tag: string) => void;
-  onAuthor: (author: string) => void;
+  onLab: (lab: string) => void;
   className?: string;
 }) {
   const [tab, setTab] = useState<Tab>("tags");
-  const state = tab === "tags" ? tagsState : authorsState;
+  const state = tab === "tags" ? tagsState : labsState;
   const max = Math.max(1, ...tags.flatMap((t) => [t.n, t.prev]));
 
   return (
@@ -55,7 +55,7 @@ export function Trending({
             label="Trending by"
             options={[
               { value: "tags", label: "Tags" },
-              { value: "authors", label: "Authors" },
+              { value: "labs", label: "Labs" },
             ]}
           />
         }
@@ -134,20 +134,21 @@ export function Trending({
               </div>
             </>
           )
-        ) : authors.length === 0 ? (
+        ) : labs.length === 0 ? (
           <Empty>No papers in the last 30 days.</Empty>
         ) : (
           <ul>
-            {authors.map((a) => (
-              <li key={a.author}>
+            {labs.map((a) => (
+              <li key={a.lab}>
                 <button
                   type="button"
-                  onClick={() => onAuthor(a.author)}
+                  onClick={() => onLab(a.lab)}
+                  title={`${a.lab} is the last author on these papers`}
                   className="flex min-h-11 w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
-                  <Avatar name={a.author} size={26} />
+                  <Avatar name={a.lab} size={26} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{a.author}</span>
+                    <span className="block truncate text-sm font-medium">{a.lab} lab</span>
                     <span className="block truncate text-meta text-muted">
                       shared by {a.sharers} {a.sharers === 1 ? "person" : "people"}
                     </span>

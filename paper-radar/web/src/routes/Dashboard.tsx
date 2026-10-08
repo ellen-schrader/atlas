@@ -10,12 +10,15 @@ import { RecommendationsRow } from "@/components/home/Recommendations";
 import { TagVolume } from "@/components/home/TagVolume";
 import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
+import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
+import { useProfile } from "@/hooks/useProfile";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
-import { useTagVolume, useTrendingAuthors, useTrendingTags } from "@/hooks/useTrends";
+import { useTagVolume, useTrendingLabs, useTrendingTags } from "@/hooks/useTrends";
 import { supabase } from "@/lib/supabase";
 import { useAppContext } from "@/routes/Layout";
 
@@ -38,6 +41,7 @@ export default function Dashboard() {
   const { openPaper } = usePaperModal();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const frame = homeFrame(shellWidth);
   const { cols, tier } = frame;
   const mobile = tier === "mobile";
@@ -53,8 +57,10 @@ export default function Dashboard() {
   const { data: readIds } = useReadPapers(userId, team.id);
   // 12, so the widest layouts can fill 4–5 cards and still have a page to scroll to.
   const recs = useRecommendations(team.id, "discover", 12);
+  const { data: newCount } = useNewSinceLastVisit(team.id);
+  const { data: profile } = useProfile(userId);
   const trendingTags = useTrendingTags(team.id);
-  const trendingAuthors = useTrendingAuthors(team.id);
+  const trendingLabs = useTrendingLabs(team.id);
   const tagRows = trendingTags.data ?? [];
   const volume = useTagVolume(
     team.id,
@@ -65,24 +71,31 @@ export default function Dashboard() {
   const [touch] = useState(() => window.matchMedia?.("(hover: none)").matches ?? false);
 
   async function markPaperRead(paperId: string) {
-    await supabase
+    const { error } = await supabase
       .from("paper_status")
       .update({ status: "read", updated_at: new Date().toISOString() })
       .eq("user_id", userId)
       .eq("team_id", team.id)
       .eq("paper_id", paperId);
-    void qc.invalidateQueries({ queryKey: ["reading-list"] });
-    void qc.invalidateQueries({ queryKey: ["read-papers"] });
+    if (error) {
+      toast({ message: "Couldn’t mark that as read. Try again." });
+      return;
+    }
+    // The same set ReadingList's markRead refreshes.
+    for (const key of ["reading-list", "read-this-week", "recommendations", "read-papers"]) {
+      void qc.invalidateQueries({ queryKey: [key] });
+    }
   }
 
   const firstName = displayName.split(/[\s@]/)[0];
   const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
 
-  // The single next paper to read: the oldest still-unread saved one (the list is
-  // newest-first, so that's the tail). useReadingList returns read papers too —
-  // saving is independent of progress — so filter them out here.
+  // The single next paper to read: one you've started (the most recently
+  // touched), else the oldest still-unread saved one (the list is newest-first,
+  // so that's the tail). useReadingList returns read papers too — saving is
+  // independent of progress — so filter them out here.
   const queue = (toRead ?? []).filter((r) => r.status !== "read");
-  const nextUp = queue[queue.length - 1];
+  const nextUp = queue.find((r) => r.status === "reading") ?? queue[queue.length - 1];
 
   const greetingBlock = (
     <div className="min-w-0">
@@ -95,7 +108,20 @@ export default function Dashboard() {
       >
         {greeting()}, {firstName}
       </h1>
-      <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
+      <p className="mt-1.5 text-sm text-muted">
+        {newCount == null ? (
+          <>What’s moving in {team.name}.</>
+        ) : newCount === 0 ? (
+          <>Nothing new in {team.name} since your last visit.</>
+        ) : (
+          <>
+            <span className="text-fg">
+              {newCount} new {newCount === 1 ? "paper" : "papers"}
+            </span>{" "}
+            in {team.name} since your last visit.
+          </>
+        )}
+      </p>
     </div>
   );
   const omnibar = <Omnibar teamId={team.id} teamName={team.name} mobile={mobile} />;
@@ -126,6 +152,9 @@ export default function Dashboard() {
       tier={tier}
       perPage={frame.recsPerPage}
       teamId={team.id}
+      teamName={team.name}
+      // Unknown until the profile loads: say "Tune" rather than flash the nudge.
+      hasProfile={profile ? Boolean(profile.profile_md?.trim()) : true}
       userId={userId}
       bookmarkedIds={bookmarkedIds}
       onOpen={openPaper}
@@ -154,14 +183,15 @@ export default function Dashboard() {
     <Trending
       key="trending"
       tags={tagRows}
-      authors={trendingAuthors.data ?? []}
+      labs={trendingLabs.data ?? []}
       tagsState={queryState(trendingTags)}
-      authorsState={queryState(trendingAuthors)}
+      labsState={queryState(trendingLabs)}
       hoveredTag={hoveredTag}
       onHoverTag={setHoveredTag}
       onTag={(tag) => navigate(`/papers?tag=${encodeURIComponent(tag)}`)}
-      // No author filter in Papers; its full-text search covers author names.
-      onAuthor={(author) => navigate(`/papers?q=${encodeURIComponent(author)}`)}
+      // No author filter in Papers; its full-text search covers author names
+      // (in any position, so this can also find the PI's non-senior papers).
+      onLab={(lab) => navigate(`/papers?q=${encodeURIComponent(lab)}`)}
     />,
     <TagVolume
       key="volume"
