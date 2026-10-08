@@ -97,6 +97,17 @@ export interface SemanticHit {
 export interface Recommendation {
   similarity: number;
   post: PaperPost;
+  /** Why this paper was picked; absent for the cold-start recency fallback. */
+  reason?: RecommendationReason | null;
+}
+
+/** The signal behind a recommendation (docs/dashboard.md §3.4). `ref_label` is the
+ *  title, tag or author name the reason refers to. */
+export interface RecommendationReason {
+  kind: "similar_saved" | "similar_read" | "tag" | "author";
+  ref_id: string | null;
+  ref_label: string;
+  extra_labels?: string[];
 }
 
 /** One row from the `similar_papers` RPC ("find similar" in the paper modal). */

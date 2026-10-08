@@ -1,22 +1,28 @@
-import { type ReactNode, type RefObject, useRef } from "react";
+import { type CSSProperties, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AtSign, BookMarked, Check, ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 
-import { InviteCode } from "@/components/InviteCode";
-import { PaperCard } from "@/components/PaperCard";
-import { PaperListRow } from "@/components/PaperListRow";
+import { ContinueReadingCard, ContinueReadingHeading } from "@/components/home/ContinueReading";
+import { LabFeed } from "@/components/home/LabFeed";
+import { gridColumns, homeFrame } from "@/components/home/layout";
+import { Omnibar } from "@/components/home/Omnibar";
+import { RecommendationsRow } from "@/components/home/Recommendations";
+import { TagVolume } from "@/components/home/TagVolume";
+import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
-import { useMentionActions } from "@/hooks/useMentionActions";
-import { useMentions } from "@/hooks/useMentions";
 import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
+import { useTagVolume, useTrendingAuthors, useTrendingTags } from "@/hooks/useTrends";
 import { supabase } from "@/lib/supabase";
-import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
+
+/** Collapses a query into what a panel shows: skeleton, error line, or data. */
+function queryState(q: { isLoading: boolean; isError: boolean }): "loading" | "error" | "ready" {
+  return q.isLoading ? "loading" : q.isError ? "error" : "ready";
+}
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -25,11 +31,17 @@ function greeting(): string {
   return "Good evening";
 }
 
+/** Home (docs/dashboard.md). Every block sits on one N-column track set so edges
+ *  line up row to row; N comes from the shell's width (components/home/layout). */
 export default function Dashboard() {
-  const { team, userId, displayName } = useAppContext();
+  const { team, userId, displayName, shellWidth } = useAppContext();
   const { openPaper } = usePaperModal();
   const navigate = useNavigate();
-  const recRowRef = useRef<HTMLDivElement>(null);
+  const qc = useQueryClient();
+  const frame = homeFrame(shellWidth);
+  const { cols, tier } = frame;
+  const mobile = tier === "mobile";
+  const wide = cols >= 3;
 
   const search = usePaperSearch(team.id, "");
   const posts = (search.data?.pages ?? []).flat();
@@ -37,23 +49,25 @@ export default function Dashboard() {
     team.id,
     posts.map((p) => p.papers.id),
   );
-  const { data: mentions } = useMentions(userId);
   const { data: toRead } = useReadingList(userId, team.id);
   const { data: readIds } = useReadPapers(userId, team.id);
-  const recs = useRecommendations(team.id, "discover", 6);
-  const recsWaking = isWakingRecommendations(recs);
-  const recResults = recs.data?.results ?? [];
-  const { data: recCounts } = useEngagementCounts(
+  // 12, so the widest layouts can fill 4–5 cards and still have a page to scroll to.
+  const recs = useRecommendations(team.id, "discover", 12);
+  const trendingTags = useTrendingTags(team.id);
+  const trendingAuthors = useTrendingAuthors(team.id);
+  const tagRows = trendingTags.data ?? [];
+  const volume = useTagVolume(
     team.id,
-    recResults.map((r) => r.post.papers.id),
+    tagRows.map((t) => t.tag),
   );
-  const qc = useQueryClient();
-  const { markSeen, markAllSeen } = useMentionActions(userId);
+  // Shared between Trending and Tag volume: hovering either highlights both.
+  const [hoveredTag, setHoveredTag] = useState<string | null>(null);
+  const [touch] = useState(() => window.matchMedia?.("(hover: none)").matches ?? false);
 
   async function markPaperRead(paperId: string) {
     await supabase
       .from("paper_status")
-      .update({ status: "read" })
+      .update({ status: "read", updated_at: new Date().toISOString() })
       .eq("user_id", userId)
       .eq("team_id", team.id)
       .eq("paper_id", paperId);
@@ -62,410 +76,170 @@ export default function Dashboard() {
   }
 
   const firstName = displayName.split(/[\s@]/)[0];
-  const unseenMentions = (mentions ?? []).filter((m) => !m.seen_at);
   const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
-  const active = posts.filter((p) => (counts?.[p.papers.id]?.comments ?? 0) > 0).slice(0, 2);
-  const recent = posts.slice(0, 6);
 
-  // "Needs your attention" is interpersonal and time-sensitive only: unseen
-  // @mentions (a teammate is waiting on you). The reading-list backlog has its
-  // own page and the compact "Continue reading" nudge below, so it no longer
-  // floods this section — which had let a large reading list bury the mentions.
-  const seen = new Set<string>();
-  const attention: AttentionItem[] = [];
-  for (const m of unseenMentions) {
-    if (seen.has(m.paper_id)) continue;
-    seen.add(m.paper_id);
-    attention.push({
-      key: `m-${m.id}`,
-      accent: true,
-      icon: <AtSign size={15} />,
-      lead: "Mentioned you",
-      title: m.papers?.title ?? "A paper",
-      sub: formatRelative(m.created_at),
-      onOpen: () => {
-        void markSeen(m.paper_id);
-        openPaper(m.paper_id);
-      },
-      onClear: () => void markSeen(m.paper_id),
-    });
-  }
-  const attentionItems = attention.slice(0, 6);
+  // The single next paper to read: the oldest still-unread saved one (the list is
+  // newest-first, so that's the tail). useReadingList returns read papers too —
+  // saving is independent of progress — so filter them out here.
+  const queue = (toRead ?? []).filter((r) => r.status !== "read");
+  const nextUp = queue[queue.length - 1];
 
-  // The single next paper to read: the oldest still-saved one (most at risk of
-  // going stale — the list is newest-first, so that's the tail), skipping any
-  // already surfaced above as a mention. The full backlog lives on /reading.
-  // `status !== "read"` as well as the mention filter: since the two-axis split
-  // useReadingList returns everything saved, read included, so without this the
-  // "Next up" card pins to a finished paper forever and the badge counts papers
-  // already read. ReadingList's queue view draws the same line.
-  const readingQueue = (toRead ?? []).filter(
-    (r) => r.status !== "read" && !seen.has(r.paper_id),
-  );
-  const nextUp = readingQueue[readingQueue.length - 1];
-  const readingCount = (toRead ?? []).filter((r) => r.status !== "read").length;
-
-  const empty = !search.isLoading && posts.length === 0;
-
-  return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-10 p-8">
-      <header>
-        <h1 className="text-display font-serif font-semibold tracking-tight">
-          {greeting()}, {firstName}
-        </h1>
-        <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
-      </header>
-
-      {empty && (
-        <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
-          <div className="font-semibold">No papers in {team.name} yet</div>
-          <p className="text-sm text-muted">Post the first one from the Papers page.</p>
-          <button
-            onClick={() => navigate("/papers")}
-            className="rounded-control bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition hover:brightness-110"
-          >
-            Go to Papers
-          </button>
-          <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
-            <span className="text-xs text-muted">Or invite your lab with this join code</span>
-            <InviteCode code={team.join_code} />
-          </div>
-        </div>
-      )}
-
-      {attentionItems.length > 0 && (
-        <Section
-          title="Needs your attention"
-          count={attentionItems.length}
-          action={
-            unseenMentions.length > 0
-              ? { label: "Mark all read", onClick: () => void markAllSeen() }
-              : undefined
-          }
-        >
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
-            {attentionItems.map((a) => (
-              <AttentionCard key={a.key} item={a} />
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {nextUp && (
-        <Section
-          title="Continue reading"
-          action={{ label: "Reading list", onClick: () => navigate("/reading") }}
-        >
-          <ContinueReading
-            title={nextUp.papers?.title ?? "A paper"}
-            meta={[nextUp.papers?.venue, nextUp.papers?.year].filter(Boolean).join(" · ")}
-            total={readingCount}
-            onOpen={() => openPaper(nextUp.paper_id)}
-            onMarkRead={() => void markPaperRead(nextUp.paper_id)}
-          />
-        </Section>
-      )}
-
-      {!empty && (
-        <Section
-          title="Recommended for you"
-          action={{ label: "Reading list", onClick: () => navigate("/reading") }}
-        >
-          {/* The cold-start notice sits OUTSIDE the has-results branch on purpose: a
-              brand-new lab is exactly the case it explains, and that lab often has no
-              recommendations to show yet. Nesting it under `recResults.length > 0` hid
-              it from the only people who needed it. */}
-          {recs.data?.cold_start && !recs.isError && (
-            <p className="mb-3 text-xs text-muted">
-              Newest first — Atlas doesn’t know your lab’s taste yet. Save and react to a few papers
-              and this becomes yours, or{" "}
-              <button
-                onClick={() => navigate("/settings")}
-                className="font-medium text-accent hover:underline"
-              >
-                describe your research
-              </button>{" "}
-              to give it a head start.
-            </p>
-          )}
-          {recs.isLoading ? (
-            <CardSkeleton />
-          ) : recResults.length > 0 ? (
-            <>
-              <div className="group/rec relative">
-                <ScrollArrow side="left" rowRef={recRowRef} />
-                <div
-                  ref={recRowRef}
-                  className="flex snap-x gap-4 overflow-x-auto scroll-smooth pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                >
-                  {recResults.map((r) => (
-                    <div key={r.post.id} className="w-[300px] shrink-0 snap-start">
-                      <PaperCard
-                        post={r.post}
-                        reactions={recCounts?.[r.post.papers.id]?.reactions ?? 0}
-                        comments={recCounts?.[r.post.papers.id]?.comments ?? 0}
-                        onOpen={() => openPaper(r.post.papers.id)}
-                        teamId={team.id}
-                        userId={userId}
-                        bookmarked={bookmarkedIds.has(r.post.papers.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
-                <ScrollArrow side="right" rowRef={recRowRef} />
-              </div>
-            </>
-          ) : (
-            <div className="flex flex-col items-start gap-2 rounded-card border border-dashed border-border bg-surface-2 p-5">
-              <span className="inline-flex items-center gap-2 text-sm font-medium">
-                <Sparkles size={15} className="text-accent" />
-                {recsWaking
-                  ? "Waking the paper service…"
-                  : recs.isError
-                    ? "Recommendations are unavailable right now."
-                    : "No new papers to recommend yet."}
-              </span>
-              <p className="text-xs text-muted">
-                {recsWaking
-                  ? "It sleeps when nobody’s around — recommendations will appear here shortly."
-                  : recs.isError
-                    ? "The recommendation service isn’t reachable — try again shortly."
-                    : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
-              </p>
-              {!recs.isError && (
-                <button
-                  onClick={() => navigate("/settings")}
-                  className="mt-1 rounded-control bg-accent px-3 py-1.5 text-xs font-semibold text-accent-fg transition hover:brightness-110"
-                >
-                  Set up your profile
-                </button>
-              )}
-            </div>
-          )}
-        </Section>
-      )}
-
-      {active.length > 0 && (
-        <Section title="Active discussions" action={{ label: "All papers", onClick: () => navigate("/papers") }}>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
-            {active.map((post) => (
-              <PaperCard
-                key={post.id}
-                post={post}
-                reactions={counts?.[post.papers.id]?.reactions ?? 0}
-                comments={counts?.[post.papers.id]?.comments ?? 0}
-                onOpen={() => openPaper(post.papers.id)}
-                teamId={team.id}
-                userId={userId}
-                bookmarked={bookmarkedIds.has(post.papers.id)}
-              />
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {!empty && (
-        <Section
-          title="Recently posted"
-          action={{ label: "Browse all", onClick: () => navigate("/papers") }}
-        >
-          {search.isLoading ? (
-            <ListSkeleton />
-          ) : (
-            <div className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
-              {recent.map((post) => (
-                <PaperListRow
-                  key={post.id}
-                  post={post}
-                  reactions={counts?.[post.papers.id]?.reactions ?? 0}
-                  comments={counts?.[post.papers.id]?.comments ?? 0}
-                  read={readIds?.has(post.papers.id)}
-                  teamId={team.id}
-                  userId={userId}
-                  bookmarked={bookmarkedIds.has(post.papers.id)}
-                  onOpen={() => openPaper(post.papers.id)}
-                />
-              ))}
-            </div>
-          )}
-        </Section>
-      )}
-    </div>
-  );
-}
-
-interface AttentionItem {
-  key: string;
-  accent: boolean;
-  icon: ReactNode;
-  lead: string;
-  title: string;
-  sub: string;
-  onOpen: () => void;
-  onClear: () => void;
-}
-
-function AttentionCard({ item }: { item: AttentionItem }) {
-  return (
-    <div className="flex items-start gap-3 rounded-card border border-border bg-surface p-3.5 shadow-sm transition hover:border-border-strong">
-      <button onClick={item.onOpen} className="flex min-w-0 flex-1 items-start gap-3 text-left">
-        <span
-          className={cn(
-            "grid h-8 w-8 shrink-0 place-items-center rounded-lg border",
-            item.accent
-              ? "border-accent/30 bg-accent-weak text-accent"
-              : "border-border bg-surface-2 text-muted",
-          )}
-        >
-          {item.icon}
-        </span>
-        <span className="min-w-0">
-          <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
-            {item.lead}
-          </span>
-          <span className="mt-1 block text-sm font-semibold leading-snug">{item.title}</span>
-          {item.sub && <span className="mt-1 block text-xs text-muted">{item.sub}</span>}
-        </span>
-      </button>
-      <button
-        onClick={item.onClear}
-        title="Mark as read"
-        aria-label="Mark as read"
-        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-fg"
+  const greetingBlock = (
+    <div className="min-w-0">
+      <h1
+        className={
+          mobile
+            ? "font-serif text-2xl font-semibold leading-tight tracking-tight"
+            : "text-display font-serif font-semibold tracking-tight"
+        }
       >
-        <Check size={14} />
-      </button>
+        {greeting()}, {firstName}
+      </h1>
+      <p className="mt-1.5 text-sm text-muted">What’s moving in {team.name}.</p>
     </div>
   );
-}
+  const omnibar = <Omnibar teamId={team.id} teamName={team.name} mobile={mobile} />;
+  const continueHeading = (
+    <ContinueReadingHeading
+      count={queue.length}
+      onOpenList={() => navigate("/reading")}
+      className={wide ? "mb-0" : undefined}
+    />
+  );
+  const continueCard = (
+    <ContinueReadingCard
+      next={nextUp}
+      compact={!mobile}
+      onOpen={() => nextUp && openPaper(nextUp.paper_id)}
+      onMarkRead={() => nextUp && void markPaperRead(nextUp.paper_id)}
+    />
+  );
 
-/** A single, bounded nudge for the reading-list backlog: the next paper to read
- *  plus how many are queued, deferring to the dedicated reading-list page rather
- *  than dumping the whole list onto the dashboard. */
-function ContinueReading({
-  title,
-  meta,
-  total,
-  onOpen,
-  onMarkRead,
-}: {
-  title: string;
-  meta: string;
-  total: number;
-  onOpen: () => void;
-  onMarkRead: () => void;
-}) {
+  const recommendations = (
+    <RecommendationsRow
+      recs={{
+        results: recs.data?.results ?? [],
+        isLoading: recs.isLoading,
+        isError: recs.isError,
+        waking: isWakingRecommendations(recs),
+      }}
+      tier={tier}
+      perPage={frame.recsPerPage}
+      teamId={team.id}
+      userId={userId}
+      bookmarkedIds={bookmarkedIds}
+      onOpen={openPaper}
+      onTune={() => navigate("/settings")}
+    />
+  );
+
+  const feed = (
+    <LabFeed
+      posts={posts}
+      loading={search.isLoading}
+      counts={counts}
+      readIds={readIds}
+      bookmarkedIds={bookmarkedIds}
+      teamId={team.id}
+      teamName={team.name}
+      joinCode={team.join_code}
+      userId={userId}
+      mobile={mobile}
+      onOpen={openPaper}
+      onBrowseAll={() => navigate("/papers")}
+    />
+  );
+
+  const rail = [
+    <Trending
+      key="trending"
+      tags={tagRows}
+      authors={trendingAuthors.data ?? []}
+      tagsState={queryState(trendingTags)}
+      authorsState={queryState(trendingAuthors)}
+      hoveredTag={hoveredTag}
+      onHoverTag={setHoveredTag}
+      onTag={(tag) => navigate(`/papers?tag=${encodeURIComponent(tag)}`)}
+      // No author filter in Papers; its full-text search covers author names.
+      onAuthor={(author) => navigate(`/papers?q=${encodeURIComponent(author)}`)}
+    />,
+    <TagVolume
+      key="volume"
+      className="flex-1"
+      tags={tagRows}
+      series={volume.data ?? []}
+      loading={trendingTags.isLoading || volume.isLoading}
+      hoveredTag={hoveredTag}
+      onHoverTag={setHoveredTag}
+      touch={touch}
+    />,
+  ];
+
+  const grid: CSSProperties = { gridTemplateColumns: gridColumns(cols), columnGap: 24 };
+  const lead: CSSProperties = { gridColumn: `1 / span ${cols - 1}` };
+
   return (
-    <div className="flex items-center gap-3.5 rounded-card border border-border bg-surface p-4 shadow-sm transition hover:border-border-strong">
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border bg-surface-2 text-muted">
-        <BookMarked size={17} />
-      </span>
-      <button onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <span className="block text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
-          Next up{total > 1 ? ` · ${total} on your list` : ""}
-        </span>
-        <span className="mt-1 block truncate text-sm font-semibold leading-snug">{title}</span>
-        {meta && <span className="mt-0.5 block truncate text-xs text-muted">{meta}</span>}
-      </button>
-      <button
-        onClick={onMarkRead}
-        title="Mark as read"
-        aria-label="Mark as read"
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-accent"
+    <div style={{ padding: frame.padding }}>
+      <div
+        className="mx-auto flex w-full max-w-[1680px] flex-col"
+        style={{ gap: frame.blockGap }}
       >
-        <Check size={15} />
-      </button>
-    </div>
-  );
-}
+        {wide ? (
+          // Two rows: greeting | "Continue reading" label, then search | card.
+          <div className="grid items-end" style={{ ...grid, rowGap: 18 }}>
+            <div className="min-w-0" style={{ ...lead, gridRow: 1 }}>
+              {greetingBlock}
+            </div>
+            <div className="min-w-0" style={{ gridColumn: cols, gridRow: 1 }}>
+              {continueHeading}
+            </div>
+            <div className="min-w-0 self-center" style={{ ...lead, gridRow: 2 }}>
+              {omnibar}
+            </div>
+            <div className="min-w-0 self-center" style={{ gridColumn: cols, gridRow: 2 }}>
+              {continueCard}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-[18px]">
+              {greetingBlock}
+              {omnibar}
+            </div>
+            <section className="min-w-0">
+              {continueHeading}
+              {continueCard}
+            </section>
+          </>
+        )}
 
-/** Netflix-style scroll control overlaid on a horizontal row's edge. Appears on
- *  hover (pointer devices); touch users just swipe. */
-function ScrollArrow({
-  side,
-  rowRef,
-}: {
-  side: "left" | "right";
-  rowRef: RefObject<HTMLDivElement>;
-}) {
-  const Icon = side === "left" ? ChevronLeft : ChevronRight;
-  return (
-    <button
-      type="button"
-      aria-label={side === "left" ? "Scroll left" : "Scroll right"}
-      onClick={() =>
-        rowRef.current?.scrollBy({ left: side === "left" ? -648 : 648, behavior: "smooth" })
-      }
-      className={cn(
-        "absolute inset-y-0 z-10 hidden w-14 items-center opacity-0 transition group-hover/rec:opacity-100 md:flex",
-        side === "left"
-          ? "left-0 justify-start bg-gradient-to-r from-bg to-transparent"
-          : "right-0 justify-end bg-gradient-to-l from-bg to-transparent",
-      )}
-    >
-      <span className="grid h-8 w-8 place-items-center rounded-full border border-border bg-surface text-fg shadow-md transition hover:border-border-strong">
-        <Icon size={16} />
-      </span>
-    </button>
-  );
-}
+        {recommendations}
 
-function Section({
-  title,
-  count,
-  action,
-  children,
-}: {
-  title: string;
-  count?: number;
-  action?: { label: string; onClick: () => void };
-  children: ReactNode;
-}) {
-  return (
-    <section>
-      <div className="mb-4 flex items-center gap-2.5">
-        <h2 className="text-eyebrow font-bold uppercase tracking-eyebrow text-muted">{title}</h2>
-        {count != null && <span className="text-xs tabular-nums text-muted">{count}</span>}
-        {action && (
-          <button
-            onClick={action.onClick}
-            className="ml-auto text-xs font-medium text-muted transition hover:text-accent"
-          >
-            {action.label} →
-          </button>
+        {wide ? (
+          <div className="grid items-stretch" style={grid}>
+            <div className="flex min-w-0 flex-col" style={lead}>
+              {feed}
+            </div>
+            <div className="flex min-w-0 flex-col" style={{ gap: frame.blockGap }}>
+              {rail}
+            </div>
+          </div>
+        ) : (
+          <>
+            {feed}
+            {/* Tablet: Trending and Tag volume side by side under the feed. */}
+            <div
+              className="grid items-stretch"
+              style={{
+                gridTemplateColumns: tier === "tablet" ? gridColumns(2) : gridColumns(1),
+                gap: `${frame.blockGap}px 24px`,
+              }}
+            >
+              {rail}
+            </div>
+          </>
         )}
       </div>
-      {children}
-    </section>
-  );
-}
-
-function ListSkeleton() {
-  return (
-    <div className="divide-y divide-border overflow-hidden rounded-card border border-border">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3.5 px-4 py-3">
-          <div className="h-9 w-14 shrink-0 animate-pulse rounded-md bg-surface-2" />
-          <div className="flex-1">
-            <div className="h-3.5 w-2/3 animate-pulse rounded bg-surface-2" />
-            <div className="mt-1.5 h-2.5 w-1/3 animate-pulse rounded bg-surface-2" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CardSkeleton() {
-  return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="rounded-card border border-border bg-surface p-4 shadow-sm">
-          <div className="h-24 w-full animate-pulse rounded-md bg-surface-2" />
-          <div className="mt-3 h-3.5 w-3/4 animate-pulse rounded bg-surface-2" />
-          <div className="mt-2 h-2.5 w-1/2 animate-pulse rounded bg-surface-2" />
-        </div>
-      ))}
     </div>
   );
 }

@@ -37,8 +37,10 @@ export function usePaperSearch(
   q: string,
   filters: PaperFilters = NO_FILTERS,
   sort: PaperSort = "shared",
+  enabled = true,
 ) {
   return useInfiniteQuery({
+    enabled,
     queryKey: ["paper-search", teamId, q, filters, sort],
     initialPageParam: 0,
     queryFn: async ({ pageParam }): Promise<PaperPost[]> => {
@@ -65,8 +67,14 @@ export function usePaperSearch(
 }
 
 /** Total matches for the same filters, for the "N results" label. */
-export function usePaperCount(teamId: string, q: string, filters: PaperFilters = NO_FILTERS) {
+export function usePaperCount(
+  teamId: string,
+  q: string,
+  filters: PaperFilters = NO_FILTERS,
+  enabled = true,
+) {
   return useQuery({
+    enabled,
     // The count must use the SAME filters as the list, or the "N results" label
     // contradicts what's on screen.
     queryKey: ["paper-count", teamId, q, filters],

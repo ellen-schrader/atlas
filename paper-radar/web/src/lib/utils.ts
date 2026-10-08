@@ -1,5 +1,16 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// The semantic type scale in index.css (`text-meta`, `text-eyebrow`, …) has to be
+// declared here: tailwind-merge doesn't read the theme, so it takes `text-meta`
+// for a colour and drops it whenever a real colour (`text-muted`) follows.
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [{ text: ["eyebrow", "meta", "card", "heading", "display"] }],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -72,4 +83,19 @@ export function formatRelative(iso: string | null): string {
   if (day < 7) return `${day}d ago`;
   if (day < 30) return `${Math.round(day / 7)}w ago`;
   return formatDate(iso);
+}
+
+/** Terse age for dense rows: "5m", "3h", "2d", "3w", then a date ("12 Sep"). */
+export function formatAgo(iso: string | null): string {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  const min = Math.max(0, Math.round((Date.now() - ms) / 60_000));
+  if (min < 60) return `${Math.max(1, min)}m`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d`;
+  if (day < 35) return `${Math.round(day / 7)}w`;
+  return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
