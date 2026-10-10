@@ -20,6 +20,9 @@ class _Svc:
             def select(self, column):
                 return self
 
+            def order(self, column):
+                return self
+
             def range(self, a, b):
                 return self
 
@@ -42,7 +45,11 @@ def test_collect_tags_normalises_and_counts_rows_once():
 def test_validate_drops_unsafe_merges():
     counts = Counter({"tumor-microenvironment": 9, "tme": 3, "tumour-microenvironment": 2, "a": 1})
     merges = [
-        _Merge(canonical="Tumor Microenvironment", aliases=["TME", "tumour-microenvironment", "made-up"], reason="r"),
+        _Merge(
+            canonical="Tumor Microenvironment",
+            aliases=["TME", "tumour-microenvironment", "made-up"],
+            reason="r",
+        ),
         # "tme" is already claimed; "a" -> chain into a kept tag is refused below.
         _Merge(canonical="other", aliases=["tme"], reason="r"),
         _Merge(canonical="a", aliases=["tumor-microenvironment"], reason="chain"),
@@ -53,9 +60,36 @@ def test_validate_drops_unsafe_merges():
     ]
 
 
+def test_validate_respects_merges_already_in_the_table():
+    counts = Counter(
+        {"tme": 3, "tumour-microenvironment": 2, "tumor-microenvironment": 9, "tils": 4}
+    )
+    existing = {"tme": "tumor-microenvironment"}
+    merges = [
+        # "tme" is already merged: proposing it again is dropped.
+        _Merge(
+            canonical="tumor-microenvironment",
+            aliases=["tme", "tumour-microenvironment"],
+            reason="r",
+        ),
+        # A kept tag that's already an alias is followed to its canonical.
+        _Merge(canonical="tme", aliases=["tils"], reason="odd"),
+        # An existing kept tag can't be merged away.
+        _Merge(canonical="other", aliases=["tumor-microenvironment"], reason="r"),
+    ]
+    out = validate(merges, counts, existing)
+    assert [(m.canonical, m.aliases) for m in out] == [
+        ("tumor-microenvironment", ["tumour-microenvironment"]),
+        ("tumor-microenvironment", ["tils"]),
+    ]
+
+
 def test_render_escapes_quotes_in_sql():
     counts = Counter({"crohns-disease": 4, "crohn's-disease": 1})
-    md, sql = render([_Merge(canonical="crohns-disease", aliases=["crohn's-disease"], reason="r")], counts)
+    md, sql = render(
+        [_Merge(canonical="crohns-disease", aliases=["crohn's-disease"], reason="r")], counts
+    )
     assert "('crohn''s-disease', 'crohns-disease')" in sql
     assert "select * from public.apply_tag_cleanup();" in sql
+    assert "on conflict" not in sql  # a clash should fail, not overwrite
     assert "| crohns-disease (4) | crohn's-disease (1) | r |" in md

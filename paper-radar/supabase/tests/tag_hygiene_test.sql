@@ -4,7 +4,7 @@
 -- writer (RLS hides tag_aliases), and the service-only functions locked down.
 
 begin;
-select plan(12);
+select plan(18);
 
 select is(public.normalise_tag('  Spatial  Transcriptomics '), 'spatial-transcriptomics',
     'normalise_tag: lowercase, trimmed, spaces to one hyphen');
@@ -79,6 +79,40 @@ select results_eq(
 
 select is((select count(*)::int from public.tag_vocabulary(1)), 1,
     'tag_vocabulary: p_limit caps the list');
+
+-- tag_aliases stays flat: no chains in either direction, so no cycles.
+select throws_ok(
+    $$ insert into public.tag_aliases (alias, canonical) values ('microenvironment', 'tme') $$,
+    '23514', null,
+    'tag_aliases: a canonical that is itself an alias is refused (no chain)'
+);
+select throws_ok(
+    $$ insert into public.tag_aliases (alias, canonical) values ('tumor-microenvironment', 'tme-full') $$,
+    '23514', null,
+    'tag_aliases: merging away a kept tag is refused (no chain, no cycle)'
+);
+select lives_ok(
+    $$ update public.tag_aliases set canonical = 'tumour-microenvironment' where alias = 'tme' $$,
+    'tag_aliases: re-pointing an alias at a plain tag is fine'
+);
+
+select results_eq(
+    $$ select * from public.existing_tags(array['deep-learning', 'never-used-tag']) $$,
+    $$ values ('deep-learning'::text) $$,
+    'existing_tags: returns only the tags some paper already carries'
+);
+
+set local role authenticated;
+select throws_ok($$ select * from public.existing_tags(array['x']) $$, '42501', null,
+    'existing_tags: not callable by a signed-in user');
+reset role;
+
+set local role service_role;
+select lives_ok(
+    $$ select alias, canonical from public.tag_aliases $$,
+    'tag_aliases: the tagger (service role) can read the merges'
+);
+reset role;
 
 select * from finish();
 rollback;

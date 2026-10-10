@@ -46,7 +46,16 @@ def _rows(svc, table: str, column: str) -> list[list]:
     out: list[list] = []
     start = 0
     while True:
-        page = svc.table(table).select(column).range(start, start + _PAGE - 1).execute().data or []
+        # Ordered: without it, separate LIMIT/OFFSET pages can overlap or skip rows.
+        page = (
+            svc.table(table)
+            .select(column)
+            .order("id")
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
         out.extend(r.get(column) or [] for r in page)
         if len(page) < _PAGE:
             return out
@@ -90,18 +99,39 @@ def propose(counts: Counter, settings) -> list[_Merge]:
     return resp.parsed_output.merges
 
 
-def validate(merges: list[_Merge], counts: Counter) -> list[_Merge]:
+def existing_aliases(svc) -> dict[str, str]:
+    """The merges already in tag_aliases (alias → canonical)."""
+    rows = svc.table("tag_aliases").select("alias, canonical").execute().data or []
+    return {r["alias"]: r["canonical"] for r in rows}
+
+
+def validate(
+    merges: list[_Merge], counts: Counter, existing: dict[str, str] | None = None
+) -> list[_Merge]:
     """Keep only merges that are safe to apply as written: aliases that exist,
-    no alias claimed twice, and no chains (an alias that is also a kept tag)."""
+    none already merged, none claimed twice, and no chains — tag_aliases must
+    stay flat (its trigger refuses chains), across this batch and the merges
+    already in the table."""
+    existing = existing or {}
     kept: list[_Merge] = []
     claimed: set[str] = set()
-    canonicals = {normalise_tag(m.canonical) for m in merges}
-    for m in merges:
-        canonical = normalise_tag(m.canonical)
+    # A kept tag that's already merged away is followed to where it went.
+    resolved = [
+        (existing.get(normalise_tag(m.canonical), normalise_tag(m.canonical)), m) for m in merges
+    ]
+    canonicals = {c for c, _ in resolved} | set(existing.values())
+    for canonical, m in resolved:
         aliases = []
         for a in m.aliases:
             a = normalise_tag(a)
-            if a and a != canonical and a in counts and a not in claimed and a not in canonicals:
+            if (
+                a
+                and a != canonical
+                and a in counts
+                and a not in claimed
+                and a not in canonicals
+                and a not in existing
+            ):
                 aliases.append(a)
                 claimed.add(a)
         if canonical and aliases:
@@ -130,7 +160,9 @@ def render(merges: list[_Merge], counts: Counter) -> tuple[str, str]:
         merged = ", ".join(f"{a} ({counts[a]})" for a in m.aliases)
         md.append(f"| {m.canonical} ({counts.get(m.canonical, 0)}) | {merged} | {m.reason} |")
         values += [f"    ({_sql(a)}, {_sql(m.canonical)})" for a in m.aliases]
-    sql.append(",\n".join(values) + "\non conflict (alias) do update set canonical = excluded.canonical;")
+    # No "on conflict": validate() leaves out aliases already in the table, so a
+    # conflict means the table changed since — fail loudly rather than overwrite.
+    sql.append(",\n".join(values) + ";")
     sql += ["", "select * from public.apply_tag_cleanup();", ""]
     return "\n".join(md) + "\n", "\n".join(sql)
 
@@ -143,9 +175,10 @@ def main(argv: list[str] | None = None) -> None:
     settings = get_settings()
     if not settings.anthropic_api_key:
         raise SystemExit("ANTHROPIC_API_KEY is not set")
-    counts = collect_tags(service_client())
+    svc = service_client()
+    counts = collect_tags(svc)
     print(f"{len(counts)} distinct tags")
-    merges = validate(propose(counts, settings), counts)
+    merges = validate(propose(counts, settings), counts, existing_aliases(svc))
     if not merges:
         print("No merges proposed.")
         return

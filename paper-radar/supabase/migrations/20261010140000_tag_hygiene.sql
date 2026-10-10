@@ -8,6 +8,9 @@
 --      or edge hyphens. The tagger (api/enrichment.py) applies the same rule.
 --   2. tag_aliases: alias -> canonical. Filled by a reviewed follow-up migration
 --      (proposals come from api/propose_tag_merges.py), never automatically.
+--      Flat by construction: a canonical can't itself be an alias, and an alias
+--      can't be anyone's canonical. clean_tags applies one hop, so a chain
+--      (a -> b, b -> c) would store b, and a cycle would flip tags on each write.
 --   3. clean_tags: normalise, map aliases, drop blanks and repeats (first
 --      occurrence wins, order kept).
 --   4. Triggers run clean_tags on every write to the four tag-holding columns:
@@ -44,6 +47,31 @@ comment on table public.tag_aliases is
 
 -- Service role only: the tagger and migrations read it; no client needs it.
 alter table public.tag_aliases enable row level security;
+-- Tables here get no default grants (see 20260713200000_maps_service_role_grant.sql),
+-- so the tagger's service-role read needs one spelled out.
+grant select, insert, update, delete on public.tag_aliases to service_role;
+
+create or replace function public.tag_aliases_flat()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+    if exists (select 1 from public.tag_aliases where alias = new.canonical) then
+        raise exception 'tag_aliases: "%" is itself merged into another tag; point "%" at that tag instead',
+            new.canonical, new.alias using errcode = 'check_violation';
+    end if;
+    if exists (select 1 from public.tag_aliases where canonical = new.alias and alias <> new.alias) then
+        raise exception 'tag_aliases: "%" is the kept tag of other merges and can''t be merged away',
+            new.alias using errcode = 'check_violation';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists tag_aliases_flat on public.tag_aliases;
+create trigger tag_aliases_flat before insert or update on public.tag_aliases
+    for each row execute function public.tag_aliases_flat();
 
 -- Security definer so the alias lookup works when the trigger fires for a
 -- signed-in user (the web app writing paper_posts.tags): tag_aliases has RLS on
@@ -147,9 +175,30 @@ as $$
     limit greatest(coalesce(p_limit, 300), 0);
 $$;
 
-revoke execute on function public.apply_tag_cleanup()   from public, anon, authenticated;
-revoke execute on function public.tag_vocabulary(int)   from public, anon, authenticated;
-grant  execute on function public.apply_tag_cleanup()   to service_role;
-grant  execute on function public.tag_vocabulary(int)   to service_role;
+-- Which of p_tags are already AI tags on some paper. The tagger shows Claude
+-- only the top of the vocabulary, so it asks this about the rest of a reply
+-- before treating a tag as new. Service role only, like tag_vocabulary.
+create or replace function public.existing_tags(p_tags text[])
+returns setof text
+language sql
+stable
+set search_path = public
+as $$
+    select distinct t.tag
+    from public.papers p
+    cross join lateral jsonb_array_elements_text(p.tags) as t(tag)
+    where p.tags ?| p_tags
+      and t.tag = any(p_tags);
+$$;
+
+-- Lets existing_tags' ?| find the papers by index rather than reading them all.
+create index if not exists papers_tags_idx on public.papers using gin (tags);
+
+revoke execute on function public.apply_tag_cleanup()      from public, anon, authenticated;
+revoke execute on function public.tag_vocabulary(int)      from public, anon, authenticated;
+revoke execute on function public.existing_tags(text[])    from public, anon, authenticated;
+grant  execute on function public.apply_tag_cleanup()      to service_role;
+grant  execute on function public.tag_vocabulary(int)      to service_role;
+grant  execute on function public.existing_tags(text[])    to service_role;
 
 select * from public.apply_tag_cleanup();

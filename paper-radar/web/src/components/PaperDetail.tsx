@@ -1178,7 +1178,15 @@ function PaperTags({
 
   async function persist(next: string[]) {
     setTags(next);
-    await supabase.from("paper_posts").update({ tags: next }).eq("id", postId);
+    // The database's clean_tags trigger may re-spell what we sent (a merged tag
+    // becomes the one kept), so show what it actually stored.
+    const { data } = await supabase
+      .from("paper_posts")
+      .update({ tags: next })
+      .eq("id", postId)
+      .select("tags")
+      .maybeSingle();
+    if (data) setTags(data.tags as string[]);
     void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
     void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
     void qc.invalidateQueries({ queryKey: ["paper-post"] });

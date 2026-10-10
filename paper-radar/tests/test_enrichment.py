@@ -46,8 +46,10 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def no_tag_context(monkeypatch):
     """No database in these tests: tag with an empty vocabulary unless a test
-    passes ``context=`` itself."""
+    passes ``context=`` itself, and no tag exists beyond the vocabulary shown."""
     monkeypatch.setattr(enrichment, "load_tag_context", lambda: ([], {}))
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: set())
+    monkeypatch.setattr(enrichment, "_context_cache", None)
 
 
 @pytest.fixture
@@ -206,15 +208,15 @@ def test_at_most_one_new_tag_per_paper(fake_anthropic):
     fake_anthropic.holder["responder"] = lambda ids: _ok(
         ids, tags=("imaging", "brand-new", "another-new", "deep-learning", "third-new")
     )
-    out = enrich_batch(
-        _papers(1), settings=_settings(), context=(["imaging", "deep-learning"], {})
-    )
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging", "deep-learning"], {}))
     # Existing tags kept; only the first new one survives.
     assert out["p0"] == ["imaging", "brand-new", "deep-learning"]
 
 
 def test_merged_tags_are_mapped_to_their_canonical_name(fake_anthropic):
-    fake_anthropic.holder["responder"] = lambda ids: _ok(ids, tags=("TME", "tumor-microenvironment"))
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("TME", "tumor-microenvironment")
+    )
     out = enrich_batch(
         _papers(1),
         settings=_settings(),
@@ -222,6 +224,58 @@ def test_merged_tags_are_mapped_to_their_canonical_name(fake_anthropic):
     )
     # The alias counts as the existing tag (not a new one) and collapses into it.
     assert out["p0"] == ["tumor-microenvironment"]
+
+
+def test_existing_tags_beyond_the_vocabulary_shown_are_not_new(fake_anthropic, monkeypatch):
+    # Claude only sees the top VOCABULARY_SIZE tags. A tag ranked beyond them is
+    # still an existing tag, so it mustn't use up the one-new-tag allowance.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("imaging", "organoids", "crispr-screen", "brand-new", "another-new")
+    )
+    asked = {}
+
+    def existing(tags):
+        asked["tags"] = tags
+        return {"organoids", "crispr-screen"} & tags
+
+    monkeypatch.setattr(enrichment, "existing_tags", existing)
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
+    assert out["p0"] == ["imaging", "organoids", "crispr-screen", "brand-new"]
+    # One question per batch, about the tags outside the vocabulary shown.
+    assert asked["tags"] == {"organoids", "crispr-screen", "brand-new", "another-new"}
+
+
+def test_unknown_existence_drops_no_tags(fake_anthropic, monkeypatch):
+    # If the database can't say which tags exist, keeping a tag beats dropping
+    # a real one.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(ids, tags=("imaging", "a-tag", "b-tag"))
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: None)
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
+    assert out["p0"] == ["imaging", "a-tag", "b-tag"]
+
+
+def test_tag_context_is_cached(monkeypatch):
+    monkeypatch.undo()  # the real loader, with a counting fake database
+    calls = []
+
+    class _Svc:
+        def rpc(self, name, args):
+            calls.append(name)
+            return types.SimpleNamespace(execute=lambda: types.SimpleNamespace(data=[{"tag": "x"}]))
+
+        def table(self, name):
+            calls.append(name)
+            q = types.SimpleNamespace()
+            q.select = lambda cols: types.SimpleNamespace(
+                execute=lambda: types.SimpleNamespace(data=[{"alias": "a", "canonical": "b"}])
+            )
+            return q
+
+    monkeypatch.setattr(enrichment, "_context_cache", None)
+    monkeypatch.setattr("api.supa.service_client", lambda: _Svc())
+    assert enrichment.load_tag_context() == (["x"], {"a": "b"})
+    assert enrichment.load_tag_context() == (["x"], {"a": "b"})
+    assert calls == ["tag_vocabulary", "tag_aliases"]  # read once, not twice
 
 
 def test_vocabulary_is_loaded_when_not_given(fake_anthropic, monkeypatch):
@@ -234,6 +288,7 @@ def test_vocabulary_is_loaded_when_not_given(fake_anthropic, monkeypatch):
 def test_unreadable_vocabulary_falls_back_to_none(monkeypatch):
     # Restore the real loader, with a database that can't be reached.
     monkeypatch.undo()
+    monkeypatch.setattr(enrichment, "_context_cache", None)
 
     def boom():
         raise RuntimeError("no database")
