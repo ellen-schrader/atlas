@@ -7,7 +7,7 @@
 The papers you save, the figures you admire, the ones you argue about in group meeting —
 Atlas learns your lab's judgment from how you already work, then hands it to Claude.
 
-[**Live app**](https://atlas-papers.vercel.app) · [API](https://paper-radar-api.fly.dev/docs) · [MIT licensed](LICENSE)
+[**Live app**](https://labatlas.app) · [API](https://paper-radar-api.fly.dev/docs) · [MIT licensed](LICENSE)
 
 </div>
 
@@ -130,7 +130,7 @@ you never paste a secret into a Claude config file.
 ATLAS_EMAIL=you@your-lab.org
 ATLAS_PASSWORD=your-atlas-password
 ATLAS_TEAM_ID=<your team's uuid>          # from the /connect page
-ATLAS_WEB_URL=https://atlas-papers.vercel.app   # so cited links open your Atlas
+ATLAS_WEB_URL=https://labatlas.app   # so cited links open your Atlas
 ```
 
 On a shared or managed machine, use a Supabase access token instead of a password —

@@ -74,19 +74,30 @@ wire the three tiers together with env vars. No data migration is needed.
    1 GB machine, auto-stop when idle (`fly.toml` in this directory). Live at
    **https://paper-radar-api.fly.dev**. Secrets set via `fly secrets import`:
    `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY`, `CORS_ORIGINS` (both web domains +
-   localhost dev ports).
+   `VOYAGE_API_KEY`, `ANTHROPIC_API_KEY`, `CORS_ORIGINS` (the web domains +
+   localhost dev ports), `ATLAS_WEB_URL=https://labatlas.app` (Teams deep
+   links). `fly secrets set` replaces the whole value, so read the current
+   `CORS_ORIGINS` first (`fly ssh console -a paper-radar-api -C 'printenv
+   CORS_ORIGINS'`) and append.
 8. ✓ **Web on Vercel**: project `paper-radar` (linked from `web/`,
    `.vercel/project.json`), Vite preset, SPA fallback via `web/vercel.json`.
-   Production domain **https://atlas-papers.vercel.app** (added as a project
-   domain — `paper-radar.vercel.app` was taken by a stranger's project).
+   Production domain **https://labatlas.app** (bought through Vercel, which
+   also hosts its DNS; `www.labatlas.app` 308-redirects to it). The earlier
+   **https://atlas-papers.vercel.app** still serves the app, to be turned into
+   a redirect once people have moved (`paper-radar.vercel.app` was taken by a
+   stranger's project). `paper-radar-rose.vercel.app` is also attached but not
+   in `CORS_ORIGINS`, so the API refuses it.
    Note: the default `paper-radar-ellen-schrader1.vercel.app` and per-deploy
    URLs sit behind Vercel SSO deployment protection; the added production
    domain is public. Build-time env on Vercel: `VITE_SUPABASE_URL`,
    `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL=https://paper-radar-api.fly.dev`.
-9. ✓ **Supabase auth config**: Site URL → https://atlas-papers.vercel.app;
-   allow-list covers both web domains + localhost (management API,
-   `/config/auth`).
+9. ✓ **Supabase auth config**: Site URL → https://labatlas.app; the
+   redirect allow-list covers the web domains + localhost (management API,
+   `/config/auth`). Auth email goes through custom SMTP (Resend, sender
+   `Atlas <no-reply@mail.labatlas.app>`, EU region, tracking off; DNS records
+   on `mail.labatlas.app` in Vercel). Hosted Supabase only allows template
+   edits with custom SMTP. The dashboard's Reset password template mirrors
+   `supabase/templates/recovery.html` by hand, so keep the two in sync.
 10. ✓ **Smoke test the real flows** (browser, 2026-07-12): sign up, post a
     paper by URL, comment, semantic search, mood board upload, map view all
     work in production. Untested: @mention notify (needs a second lab
@@ -125,8 +136,9 @@ kill and boot-window 502s only go away with a card.
 
 ### Phase 5 — later / as needed
 
-- Custom domain + TLS on both hosts (defaults `*.vercel.app` / `*.fly.dev`
-  work day one).
+- ✓ Custom domain for the web (`labatlas.app`, 2026-10). The API stays on
+  `paper-radar-api.fly.dev`: users never see it, and moving it means a CSP
+  change in `web/vercel.json` and a `VITE_API_URL` rebuild.
 - Uptime check against `/health`; Fly log drain or just `fly logs` initially.
 - Background enrichment worker (summary/tags via Claude) — currently
   in-process `BackgroundTasks`; fine at lab scale, revisit if posts spike.
@@ -150,8 +162,9 @@ web (build-time)                api (runtime secrets)
 1. **Hosts** — decided: Vercel for the web. Fly.io for the API (the API can't
    go on Vercel serverless — `POST /posts` embeds in-process via
    `BackgroundTasks` after the response, which serverless kills).
-2. **Custom domain now or later?** Later is fine; changing it only touches
-   `CORS_ORIGINS`, `VITE_API_URL`, and Supabase auth URLs.
+2. **Custom domain** — done: `labatlas.app`. It touched `CORS_ORIGINS`,
+   `ATLAS_WEB_URL`, the Supabase Site URL and redirect list, and the defaults
+   in the README and `atlas_mcp/config.py`.
 3. **Dep split (phase 1, step 2)** — touching `pyproject.toml` affects the
    Streamlit legacy app's install command. Cheap now, annoying later; I'd do
    it in this branch.
