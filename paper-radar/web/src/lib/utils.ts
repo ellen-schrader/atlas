@@ -99,3 +99,16 @@ export function formatAgo(iso: string | null): string {
   if (day < 35) return `${Math.round(day / 7)}w`;
   return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
+
+/** One spelling per tag: lowercase, trimmed, spaces/underscores to hyphens, no
+ *  repeated or edge hyphens. Mirrors public.normalise_tag, which the database
+ *  applies on every write — normalising here too keeps what the UI shows equal
+ *  to what gets stored. */
+export function normaliseTag(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}

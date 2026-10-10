@@ -14,7 +14,7 @@ import { useTeamTags } from "@/hooks/useTeamTags";
 import { updateProfile } from "@/lib/api";
 import { useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
-import { cn } from "@/lib/utils";
+import { cn, normaliseTag } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 type Note = { ok: boolean; text: string } | null;
@@ -402,17 +402,10 @@ function FollowedTagsPanel({
     if (!(await write)) setError("Couldn’t save. Try again.");
   }
 
-  /** Tags are matched exactly, so reuse the lab's spelling when there is one;
-   *  otherwise write it the way enrichment writes tags (lowercase-hyphenated). */
-  function normalise(raw: string): string {
-    const typed = raw.trim();
-    const known = labTags.find((t) => t.toLowerCase() === typed.toLowerCase());
-    return known ?? typed.toLowerCase().replace(/\s+/g, "-");
-  }
-
   function add(e?: FormEvent) {
     e?.preventDefault();
-    const tag = normalise(draft);
+    // Tags match exactly, so spell it the way the database stores it.
+    const tag = normaliseTag(draft);
     if (!tag || follows.includes(tag)) {
       setDraft("");
       return;
