@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -227,9 +228,7 @@ def save_inbound_secret(
 
 
 @router.delete("/inbound", response_model=TeamsIntegrationOut)
-def clear_inbound_secret(
-    team_id: str, token: str = Depends(require_token)
-) -> TeamsIntegrationOut:
+def clear_inbound_secret(team_id: str, token: str = Depends(require_token)) -> TeamsIntegrationOut:
     """Turn off inbound (@Atlas) ingestion by clearing the token — owners only."""
     _require_user(token)
     updated = (
@@ -247,9 +246,7 @@ def clear_inbound_secret(
 
 
 @router.post("/inbound/{team_id}")
-async def inbound_webhook(
-    team_id: str, request: Request, background: BackgroundTasks
-) -> dict:
+async def inbound_webhook(team_id: str, request: Request, background: BackgroundTasks) -> dict:
     """Receive an "@Atlas <link>" message from a Teams Outgoing Webhook and import it.
 
     PUBLIC — no JWT. The per-team HMAC token (from team_integrations, selected by
@@ -258,24 +255,60 @@ async def inbound_webhook(
     in the lab?) and do the slow resolve + insert + embed in the background, so we
     stay inside Teams' ~5 s synchronous-reply window.
     """
+    started = time.perf_counter()
     raw = await _read_capped(request, _MAX_INBOUND_BODY)
     secret = await run_in_threadpool(teams_integration.inbound_secret_for_team, team_id)
+    # Time to the first DB round trip vs. the whole request tells a slow resume /
+    # reconnect apart from slow planning when Teams reports a timeout (issue #104).
+    lookup_ms = (time.perf_counter() - started) * 1000
     if not secret:
         # Don't distinguish "no such team" from "inbound off" — generic 404.
+        log.warning("inbound: rejected for team %s (not configured)", team_id)
         raise HTTPException(status_code=404, detail="Not configured")
     if not teams_integration.verify_teams_signature(
         secret, raw, request.headers.get("Authorization")
     ):
+        log.warning("inbound: rejected for team %s (bad or missing signature)", team_id)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
+    # Past the HMAC check this is a genuine Teams message, so any failure must
+    # still reply 200 with an explanation: an error status makes Teams post
+    # "please fix the bot source code" into the channel, twice (issues #93, #104).
+    outcome = "error"
+    try:
+        outcome, reply = await _handle_signed_message(team_id, raw, background)
+        return reply
+    except Exception:
+        log.exception("inbound: failed for team %s", team_id)
+        return teams_integration.inbound_reply(
+            "Something went wrong on my end, so I couldn't add that paper. Nothing was "
+            "saved — mention me again in a minute and I'll retry."
+        )
+    finally:
+        log.info(
+            "inbound: team %s %s (secret lookup %.0f ms, total %.0f ms)",
+            team_id,
+            outcome,
+            lookup_ms,
+            (time.perf_counter() - started) * 1000,
+        )
+
+
+async def _handle_signed_message(
+    team_id: str, raw: bytes, background: BackgroundTasks
+) -> tuple[str, dict]:
+    """Plan and acknowledge a signature-verified message → (outcome, Teams reply)."""
     try:
         payload = json.loads(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Malformed payload") from exc
+    except ValueError:
+        payload = None
     if not isinstance(payload, dict):
-        # Valid JSON but not a message object — same caller error as unparseable
-        # JSON (real Teams always sends an object).
-        raise HTTPException(status_code=400, detail="Malformed payload")
+        # Real Teams always sends a JSON object; anything else from a signer
+        # still gets a 200 reply, never an error status.
+        log.warning("inbound: malformed payload for team %s", team_id)
+        return "malformed", teams_integration.inbound_reply(
+            "I couldn't read that message. Mention me again with a DOI or a paper link."
+        )
     # Scan the attachments too, not just `text`: an unfurled link's URL often
     # survives only in the attachment content (the title replaces it in text).
     text = teams_integration.inbound_message_text(payload)
@@ -288,17 +321,7 @@ async def inbound_webhook(
 
     # The plan is cheap DB-only work (link present? already in the lab?) — well
     # inside Teams' ~5 s reply window. Offloaded so it never blocks the event loop.
-    try:
-        plan = await run_in_threadpool(teams_integration.plan_inbound_import, team_id, text)
-    except Exception:
-        # Past the HMAC check this is a genuine Teams message, so any failure
-        # must still reply 200 with an explanation: an error status makes Teams
-        # post "please fix the bot source code" into the channel (issue #93).
-        log.exception("inbound plan failed for team %s", team_id)
-        return teams_integration.inbound_reply(
-            "Something went wrong on my end, so I couldn't add that paper. Nothing was "
-            "saved — mention me again in a minute and I'll retry."
-        )
+    plan = await run_in_threadpool(teams_integration.plan_inbound_import, team_id, text)
 
     if plan.status == "no_url":
         # Signed request, no link found: leave a trace with enough shape to tell
@@ -313,15 +336,17 @@ async def inbound_webhook(
             len(raw_text) if isinstance(raw_text, str) else 0,
             len(attachments) if isinstance(attachments, list) else 0,
         )
-        return teams_integration.inbound_reply(
+        return "no_url", teams_integration.inbound_reply(
             "I don't see a paper link in that message. Mention me with a DOI or a link — "
             "for example `@Atlas 10.1016/j.cell.2024.01.001` or `@Atlas arxiv.org/abs/2401.01234`."
         )
     if plan.status == "already":
-        return teams_integration.inbound_reply(teams_integration.already_reply_text(plan))
+        return "already", teams_integration.inbound_reply(
+            teams_integration.already_reply_text(plan)
+        )
 
     background.add_task(teams_integration.import_paper_background, team_id, plan.url, sender)
-    return teams_integration.inbound_reply(teams_integration.new_reply_text())
+    return "new", teams_integration.inbound_reply(teams_integration.new_reply_text())
 
 
 @router.post("/test")
