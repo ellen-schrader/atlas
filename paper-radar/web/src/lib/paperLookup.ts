@@ -81,6 +81,7 @@ export function invalidateAfterPost(qc: QueryClient, teamId: string): Promise<un
       "paper-count",
       "team-tags",
       "team-venues",
+      "team-authors",
       "paper-lookup",
       "trending-tags",
       "trending-labs",

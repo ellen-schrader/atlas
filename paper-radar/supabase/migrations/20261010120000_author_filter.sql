@@ -1,11 +1,14 @@
 -- Filter a lab's papers by author (issue #119), and give the filter its options.
 --
---   1. team_authors: every author on a lab's papers with a paper count, the
---      author counterpart of team_tags. Uncapped — the menu is searchable.
---   2. team_venues: the 30-row cap is lifted for the same reason. It existed
---      because a long plain <select> was noise; a searchable menu shows the top
---      entries and finds the rest.
---   3. search_papers / search_papers_count gain p_author: an exact match on any
+--   1. team_authors / team_tags / team_venues take p_q and p_limit: the Papers
+--      filter menus search on the server as you type (case-insensitive, anywhere
+--      in the name) and fetch a page, most papers first. Filtering in the browser
+--      can't work: PostgREST returns at most 1000 rows, and a lab's authors
+--      (≈10 per paper) pass that quickly. Both default to null — "all, unfiltered"
+--      — so existing team_tags callers (Settings, the tag box) are unchanged.
+--      team_venues' fixed 30-row cap goes: the menu asks for the page it shows.
+--      team_tags / team_venues are dropped first, for the overload reason below.
+--   2. search_papers / search_papers_count gain p_author: an exact match on any
 --      author of the paper. Reissued from 20261008120000_home_trends.sql
 --      verbatim except for the p_author parameter and predicate. The old
 --      signatures are dropped first: an added defaulted parameter would make a
@@ -13,6 +16,11 @@
 
 drop function if exists public.search_papers(uuid, text, text, int, int, text, text, text);
 drop function if exists public.search_papers_count(uuid, text, text, text, text);
+drop function if exists public.team_tags(uuid);
+drop function if exists public.team_venues(uuid);
+-- Never shipped, but an earlier draft of this migration was applied to local
+-- databases; without this its one-argument version would linger as an overload.
+drop function if exists public.team_authors(uuid);
 
 create or replace function public.search_papers(
     p_team   uuid,
@@ -108,9 +116,16 @@ as $$
       );
 $$;
 
--- Distinct authors on a lab's papers, most papers first. Security invoker:
--- paper_posts / papers RLS already limits a caller to their own labs.
-create or replace function public.team_authors(p_team uuid)
+-- The filter menus' options: one row per author / tag / venue on a lab's
+-- papers with its paper count, most papers first. p_q narrows to names that
+-- contain it (case-insensitive; position(), not LIKE, so % and _ are literal);
+-- p_limit pages. Security invoker: paper_posts / papers RLS already limits a
+-- caller to their own labs.
+create or replace function public.team_authors(
+    p_team  uuid,
+    p_q     text default null,
+    p_limit int  default null
+)
 returns table(author text, n int)
 language sql
 stable
@@ -121,11 +136,39 @@ as $$
     cross join lateral jsonb_array_elements_text(coalesce(p.authors, '[]'::jsonb)) as a(author)
     where pp.team_id = p_team
       and btrim(a.author) <> ''
+      and (coalesce(p_q, '') = '' or position(lower(p_q) in lower(a.author)) > 0)
     group by a.author
-    order by n desc, a.author;
+    order by n desc, a.author
+    limit p_limit;
 $$;
 
-create or replace function public.team_venues(p_team uuid)
+-- Reissued from 20261008120000_home_trends.sql with p_q / p_limit added; the
+-- tag rule (lab tags replace paper tags, via post_tags) is unchanged.
+create or replace function public.team_tags(
+    p_team  uuid,
+    p_q     text default null,
+    p_limit int  default null
+)
+returns table(tag text, n int)
+language sql
+stable
+as $$
+    select t.tag, count(*)::int as n
+    from public.paper_posts pp
+    join public.papers p on p.id = pp.paper_id
+    cross join lateral jsonb_array_elements_text(public.post_tags(pp.tags, p.tags)) as t(tag)
+    where pp.team_id = p_team
+      and (coalesce(p_q, '') = '' or position(lower(p_q) in lower(t.tag)) > 0)
+    group by t.tag
+    order by n desc, t.tag
+    limit p_limit;
+$$;
+
+create or replace function public.team_venues(
+    p_team  uuid,
+    p_q     text default null,
+    p_limit int  default null
+)
 returns table (venue text, count bigint)
 language sql
 stable
@@ -136,10 +179,14 @@ as $$
     where pp.team_id = p_team
       and p.venue is not null
       and p.venue <> ''
+      and (coalesce(p_q, '') = '' or position(lower(p_q) in lower(p.venue)) > 0)
     group by p.venue
-    order by count(*) desc, p.venue;
+    order by count(*) desc, p.venue
+    limit p_limit;
 $$;
 
 grant execute on function public.search_papers(uuid, text, text, int, int, text, text, text, text) to authenticated;
 grant execute on function public.search_papers_count(uuid, text, text, text, text, text)            to authenticated;
-grant execute on function public.team_authors(uuid)                                                 to authenticated;
+grant execute on function public.team_authors(uuid, text, int)                                      to authenticated;
+grant execute on function public.team_tags(uuid, text, int)                                         to authenticated;
+grant execute on function public.team_venues(uuid, text, int)                                       to authenticated;

@@ -5,7 +5,7 @@
 -- Same JWT-claims trick as rls_isolation_test.sql to act as a user.
 
 begin;
-select plan(6);
+select plan(10);
 
 insert into auth.users (id, email, raw_user_meta_data) values
     ('00000000-0000-0000-0000-00000000000a', 'ada@lab.test', '{"display_name":"Ada"}'::jsonb),
@@ -24,12 +24,12 @@ insert into public.team_members (team_id, user_id, role) values
     ('33333333-3333-3333-3333-333333333333', '00000000-0000-0000-0000-00000000000a', 'owner'),
     ('44444444-4444-4444-4444-444444444444', '00000000-0000-0000-0000-00000000000b', 'owner');
 
-insert into public.papers (id, url, url_norm, title, authors) values
-    ('10000000-0000-0000-0000-000000000001', 'http://x/1', 'x/1', 'One',   '["Wu","Ali"]'),
-    ('10000000-0000-0000-0000-000000000002', 'http://x/2', 'x/2', 'Two',   '["Wu"," "]'),
-    ('10000000-0000-0000-0000-000000000003', 'http://x/3', 'x/3', 'Three', '["Ali Khan"]'),
+insert into public.papers (id, url, url_norm, title, authors, venue) values
+    ('10000000-0000-0000-0000-000000000001', 'http://x/1', 'x/1', 'One',   '["Wu","Ali"]', 'Cell'),
+    ('10000000-0000-0000-0000-000000000002', 'http://x/2', 'x/2', 'Two',   '["Wu"," "]', 'Nature'),
+    ('10000000-0000-0000-0000-000000000003', 'http://x/3', 'x/3', 'Three', '["Ali Khan"]', null),
     -- Lab B only
-    ('10000000-0000-0000-0000-000000000004', 'http://x/4', 'x/4', 'Four',  '["Wu","Zed"]');
+    ('10000000-0000-0000-0000-000000000004', 'http://x/4', 'x/4', 'Four',  '["Wu","Zed"]', 'Cell');
 
 insert into public.paper_posts (paper_id, team_id, posted_by, tags, source) values
     ('10000000-0000-0000-0000-000000000001', '33333333-3333-3333-3333-333333333333', '00000000-0000-0000-0000-00000000000a', '[]', 'web'),
@@ -73,6 +73,30 @@ select is(
     public.search_papers_count('33333333-3333-3333-3333-333333333333'),
     3,
     'search_papers_count: no author filter leaves the result unchanged'
+);
+
+select results_eq(
+    $$ select author from public.team_authors('33333333-3333-3333-3333-333333333333', 'ALI') $$,
+    $$ values ('Ali'::text), ('Ali Khan'::text) $$,
+    'team_authors: p_q matches anywhere in the name, case-insensitively'
+);
+
+select is(
+    (select count(*)::int from public.team_authors('33333333-3333-3333-3333-333333333333', p_limit => 1)),
+    1,
+    'team_authors: p_limit pages the list'
+);
+
+select is(
+    (select count(*)::int from public.team_authors('33333333-3333-3333-3333-333333333333', '%')),
+    0,
+    'team_authors: p_q is literal, not a LIKE pattern'
+);
+
+select is(
+    (select count(*)::int from public.team_venues('33333333-3333-3333-3333-333333333333', 'cel')),
+    1,
+    'team_venues: p_q narrows venues too'
 );
 
 select * from finish();

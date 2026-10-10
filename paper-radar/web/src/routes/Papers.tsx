@@ -36,10 +36,8 @@ import {
 } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { type AuthorCount, useTeamAuthors } from "@/hooks/useTeamAuthors";
-import { type TagCount, useTeamTags } from "@/hooks/useTeamTags";
-import { type VenueCount, useTeamVenues } from "@/hooks/useTeamVenues";
 import { semanticSearch } from "@/lib/api";
+import { loadTeamAuthors, loadTeamTags, loadTeamVenues } from "@/lib/filterOptions";
 import type { ExportPaper } from "@/lib/paperExport";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
@@ -86,8 +84,8 @@ export default function Papers() {
   const [mode, setMode] = useState<SearchMode>("keyword");
   // ?q=, ?tag=, ?author= and ?venue= seed the page, so Home's "See all in
   // Papers" and its Trending tags land here already filtered. Read once: after
-  // that the page owns them, and mirrors the filters back (below) so a filtered
-  // view can be shared.
+  // that the page owns them, and mirrors them back (below) so the address is
+  // always the view on screen — a shared or reloaded link shows the same results.
   const [params, setParams] = useSearchParams();
   const [rawQuery, setRawQuery] = useState(() => params.get("q") ?? "");
   const query = useDebouncedValue(rawQuery.trim(), 250);
@@ -102,15 +100,16 @@ export default function Papers() {
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        for (const k of ["tag", "author", "venue"] as const) {
-          if (filters[k]) next.set(k, filters[k]);
+        const current = { q: query, tag: filters.tag, author: filters.author, venue: filters.venue };
+        for (const [k, v] of Object.entries(current)) {
+          if (v) next.set(k, v);
           else next.delete(k);
         }
         return next;
       },
       { replace: true },
     );
-  }, [filters.tag, filters.author, filters.venue, setParams]);
+  }, [query, filters.tag, filters.author, filters.venue, setParams]);
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
   const [adding, setAdding] = useState(false);
@@ -135,9 +134,6 @@ export default function Papers() {
   const activeFilters = mode === "keyword" ? filters : NO_FILTERS;
   const search = usePaperSearch(team.id, mode === "keyword" ? query : "", activeFilters, sort);
   const { data: total } = usePaperCount(team.id, query, activeFilters);
-  const { data: tags } = useTeamTags(team.id);
-  const { data: venues } = useTeamVenues(team.id);
-  const { data: authors } = useTeamAuthors(team.id);
 
   // Semantic: runs on submit (each search embeds the query), so it isn't live.
   const semantic = useQuery({
@@ -305,9 +301,7 @@ export default function Papers() {
         <FilterMenu
           filters={filters}
           setFilters={setFilters}
-          tags={tags ?? []}
-          authors={authors ?? []}
-          venues={venues ?? []}
+          teamId={team.id}
           disabled={mode === "semantic"}
         />
 
@@ -537,16 +531,12 @@ function ResultCount({
 function FilterMenu({
   filters,
   setFilters,
-  tags,
-  authors,
-  venues,
+  teamId,
   disabled,
 }: {
   filters: PaperFilters;
   setFilters: (fn: (f: PaperFilters) => PaperFilters) => void;
-  tags: TagCount[];
-  authors: AuthorCount[];
-  venues: VenueCount[];
+  teamId: string;
   disabled?: boolean;
 }) {
   const n = activeFilterCount(filters);
@@ -587,21 +577,24 @@ function FilterMenu({
             anyLabel="Any tag"
             value={filters.tag}
             onChange={(v) => setFilters((f) => ({ ...f, tag: v }))}
-            options={tags.map((t) => ({ value: t.tag, n: t.n }))}
+            queryKey={["team-tags", teamId]}
+            load={loadTeamTags(teamId)}
           />
           <SearchableSelect
             label="Author"
             anyLabel="Any author"
             value={filters.author}
             onChange={(v) => setFilters((f) => ({ ...f, author: v }))}
-            options={authors.map((a) => ({ value: a.author, n: a.n }))}
+            queryKey={["team-authors", teamId]}
+            load={loadTeamAuthors(teamId)}
           />
           <SearchableSelect
             label="Venue"
             anyLabel="Any venue"
             value={filters.venue}
             onChange={(v) => setFilters((f) => ({ ...f, venue: v }))}
-            options={venues.map((v) => ({ value: v.venue, n: v.count }))}
+            queryKey={["team-venues", teamId]}
+            load={loadTeamVenues(teamId)}
           />
           {n > 0 && (
             <button

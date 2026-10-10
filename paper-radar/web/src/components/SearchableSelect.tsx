@@ -1,6 +1,8 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { type KeyboardEvent, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useId, useRef, useState } from "react";
 
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { cn } from "@/lib/utils";
 
 export interface SearchableOption {
@@ -9,34 +11,43 @@ export interface SearchableOption {
   n?: number;
 }
 
-/** Shown before anything is typed. Options arrive most-used first, so the head
- *  of the list is the useful part; the long tail is a search away. */
+/** Fetch up to `limit` options whose name contains `q` (all when `q` is empty),
+ *  most-used first. */
+export type LoadOptions = (q: string, limit: number) => Promise<SearchableOption[]>;
+
+/** Shown before anything is typed: the most-used options. The long tail is a
+ *  search away. */
 const TOP_N = 20;
-/** Cap on matches rendered while typing, so a one-letter query over thousands
- *  of tags doesn't build thousands of rows. */
+/** Matches shown while typing. */
 const MAX_MATCHES = 50;
 
 /** A single-value picker for long lists (tags, authors, venues): a text box that
- *  filters the options as you type (case-insensitive, anywhere in the name), with
- *  arrow keys, Enter and Escape. The list renders in flow, below the box, so it
- *  works inside a popover that clips overflow.
+ *  searches as you type (case-insensitive, anywhere in the name), with arrow
+ *  keys, Enter and Escape. The search runs on the server — a lab's authors alone
+ *  outgrow the 1000 rows PostgREST will return — and only while the list is
+ *  open, so a page that never opens the menu never fetches its options. The list
+ *  renders in flow, below the box, so it works inside a popover that clips
+ *  overflow.
  *
- *  `value` is kept selectable even when it isn't among `options` (e.g. a tag that
- *  arrived via ?tag= but isn't one of the lab's own), so the box never claims
- *  "Any" while a filter is still on. */
+ *  `value` is kept selectable even when the server doesn't return it (e.g. a tag
+ *  that arrived via ?tag= but isn't one of the lab's own), so the box never
+ *  claims "Any" while a filter is still on. */
 export function SearchableSelect({
   label,
   anyLabel,
   value,
   onChange,
-  options,
+  queryKey,
+  load,
 }: {
   label: string;
   /** Placeholder for "no filter", e.g. "Any tag". */
   anyLabel: string;
   value: string | null;
   onChange: (v: string | null) => void;
-  options: SearchableOption[];
+  /** Cache key prefix, e.g. ["team-authors", teamId]; the query is appended. */
+  queryKey: readonly unknown[];
+  load: LoadOptions;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -45,14 +56,21 @@ export function SearchableSelect({
   const id = useId();
   const listId = `${id}-list`;
 
-  const { shown, more } = useMemo(() => {
-    const all =
-      value && !options.some((o) => o.value === value) ? [{ value }, ...options] : options;
-    const q = query.trim().toLowerCase();
-    if (!q) return { shown: all.slice(0, TOP_N), more: Math.max(all.length - TOP_N, 0) };
-    const matches = all.filter((o) => o.value.toLowerCase().includes(q));
-    return { shown: matches.slice(0, MAX_MATCHES), more: Math.max(matches.length - MAX_MATCHES, 0) };
-  }, [options, value, query]);
+  const q = useDebouncedValue(query.trim(), 200);
+  const limit = q ? MAX_MATCHES : TOP_N;
+  const { data, isPending } = useQuery({
+    queryKey: [...queryKey, "search", q, limit],
+    // One extra row says whether there are more than we show.
+    queryFn: () => load(q, limit + 1),
+    enabled: open,
+    staleTime: 60 * 1000,
+    placeholderData: keepPreviousData,
+  });
+
+  const rows = data ?? [];
+  const more = rows.length > limit;
+  let shown = rows.slice(0, limit);
+  if (value && !q && !shown.some((o) => o.value === value)) shown = [{ value }, ...shown];
 
   function close() {
     setOpen(false);
@@ -138,11 +156,14 @@ export function SearchableSelect({
           id={listId}
           role="listbox"
           aria-label={label}
+          // Anywhere in the list — a row, the footer, the scrollbar — keeps focus
+          // in the box, so its blur doesn't close the list mid-click or mid-scroll.
+          onMouseDown={(e) => e.preventDefault()}
           className="max-h-52 overflow-y-auto rounded-control border border-border"
         >
           {shown.length === 0 && (
             <div className="px-2.5 py-2 text-sm text-muted">
-              {options.length === 0 ? "None yet" : "No matches"}
+              {isPending ? "Loading…" : q ? "No matches" : "None yet"}
             </div>
           )}
           {shown.map((o, i) => (
@@ -151,8 +172,6 @@ export function SearchableSelect({
               id={`${listId}-${i}`}
               role="option"
               aria-selected={o.value === value}
-              // Keep focus in the box, so blur doesn't close the list first.
-              onMouseDown={(e) => e.preventDefault()}
               onClick={() => choose(o.value)}
               onMouseEnter={() => setActive(i)}
               className={cn(
@@ -165,9 +184,9 @@ export function SearchableSelect({
               {o.n != null && <span className="shrink-0 text-xs tabular-nums text-faint">{o.n}</span>}
             </div>
           ))}
-          {more > 0 && (
+          {more && (
             <div className="border-t border-border px-2.5 py-1.5 text-xs text-faint">
-              {query.trim() ? `${more} more — keep typing to narrow` : `${more} more — type to search`}
+              {q ? "More match — keep typing to narrow" : "More — type to search"}
             </div>
           )}
         </div>
