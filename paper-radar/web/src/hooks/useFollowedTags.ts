@@ -32,10 +32,21 @@ export function useFollowedTags(userId: string) {
         const current = qc.getQueryData<Profile | null>(key)?.interests ?? [];
         const next = change(current);
         qc.setQueryData<Profile | null>(key, (p) => (p ? { ...p, interests: next } : p));
-        const { error } = await supabase.from("profiles").update({ interests: next }).eq("id", userId);
+        const { data, error } = await supabase
+          .from("profiles")
+          .update({ interests: next })
+          .eq("id", userId)
+          .select("interests")
+          .maybeSingle();
         if (error) {
           void qc.invalidateQueries({ queryKey: key });
           return false;
+        }
+        // The database's clean_tags trigger may re-spell a tag (a merged tag
+        // becomes the one kept); keep the cache equal to what was stored.
+        if (data) {
+          const stored = data.interests as string[];
+          qc.setQueryData<Profile | null>(key, (p) => (p ? { ...p, interests: stored } : p));
         }
         void qc.invalidateQueries({ queryKey: ["recommendations"] });
         return true;

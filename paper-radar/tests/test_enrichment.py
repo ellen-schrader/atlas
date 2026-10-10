@@ -43,6 +43,15 @@ class _FakeClient:
         self.messages = types.SimpleNamespace(parse=on_call)
 
 
+@pytest.fixture(autouse=True)
+def no_tag_context(monkeypatch):
+    """No database in these tests: tag with an empty vocabulary unless a test
+    passes ``context=`` itself, and no tag exists beyond the vocabulary shown."""
+    monkeypatch.setattr(enrichment, "load_tag_context", lambda: ([], {}))
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: set())
+    monkeypatch.setattr(enrichment, "_context_cache", None)
+
+
 @pytest.fixture
 def fake_anthropic(monkeypatch):
     """Install a fake `anthropic` module; return the list that records calls."""
@@ -55,7 +64,7 @@ def fake_anthropic(monkeypatch):
             for line in messages[0]["content"].splitlines()
             if line.startswith("<paper id=")
         ]
-        calls.append({"ids": ids, "max_tokens": max_tokens})
+        calls.append({"ids": ids, "max_tokens": max_tokens, "prompt": messages[0]["content"]})
         return holder["responder"](ids)
 
     monkeypatch.setitem(
@@ -152,6 +161,140 @@ def test_tags_are_normalized_and_capped(fake_anthropic):
     assert out["p0"][0] == "spatial-omics"  # trimmed and lowercased
     assert "" not in out["p0"]  # blanks dropped
     assert len(out["p0"]) == MAX_TAGS  # 7 non-blank tags trimmed to 6
+
+
+def test_tags_get_one_spelling(fake_anthropic):
+    # Same rule as public.normalise_tag: spaces/underscores to hyphens, no
+    # repeated or edge hyphens; a repeat after normalising is dropped.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("Spatial Transcriptomics", "single_cell--RNA-seq-", "spatial-transcriptomics")
+    )
+    out = enrich_batch(_papers(1), settings=_settings())
+    assert out["p0"] == ["spatial-transcriptomics", "single-cell-rna-seq"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("  Spatial  Transcriptomics ", "spatial-transcriptomics"),
+        ("single_cell--RNA-seq-", "single-cell-rna-seq"),
+        ("-", ""),
+    ],
+)
+def test_normalise_tag_matches_the_database_rule(raw, expected):
+    # Mirrors supabase/tests/tag_hygiene_test.sql's normalise_tag cases.
+    assert enrichment.normalise_tag(raw) == expected
+
+
+# --- the shared vocabulary ---------------------------------------------------
+
+
+def test_prompt_is_not_tied_to_one_research_area(fake_anthropic):
+    fake_anthropic.holder["responder"] = _ok
+    enrich_batch(_papers(1), settings=_settings())
+    prompt = fake_anthropic.calls[0]["prompt"].lower()
+    assert "breast" not in prompt and "spatial" not in prompt
+    assert "<existing_tags>" not in prompt  # no vocabulary yet, no section
+
+
+def test_existing_tags_are_shown_to_claude(fake_anthropic):
+    fake_anthropic.holder["responder"] = _ok
+    enrich_batch(_papers(1), settings=_settings(), context=(["imaging", "deep-learning"], {}))
+    prompt = fake_anthropic.calls[0]["prompt"]
+    assert "<existing_tags>\nimaging, deep-learning\n</existing_tags>" in prompt
+
+
+def test_at_most_one_new_tag_per_paper(fake_anthropic):
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("imaging", "brand-new", "another-new", "deep-learning", "third-new")
+    )
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging", "deep-learning"], {}))
+    # Existing tags kept; only the first new one survives.
+    assert out["p0"] == ["imaging", "brand-new", "deep-learning"]
+
+
+def test_merged_tags_are_mapped_to_their_canonical_name(fake_anthropic):
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("TME", "tumor-microenvironment")
+    )
+    out = enrich_batch(
+        _papers(1),
+        settings=_settings(),
+        context=(["tumor-microenvironment"], {"tme": "tumor-microenvironment"}),
+    )
+    # The alias counts as the existing tag (not a new one) and collapses into it.
+    assert out["p0"] == ["tumor-microenvironment"]
+
+
+def test_existing_tags_beyond_the_vocabulary_shown_are_not_new(fake_anthropic, monkeypatch):
+    # Claude only sees the top VOCABULARY_SIZE tags. A tag ranked beyond them is
+    # still an existing tag, so it mustn't use up the one-new-tag allowance.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids, tags=("imaging", "organoids", "crispr-screen", "brand-new", "another-new")
+    )
+    asked = {}
+
+    def existing(tags):
+        asked["tags"] = tags
+        return {"organoids", "crispr-screen"} & tags
+
+    monkeypatch.setattr(enrichment, "existing_tags", existing)
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
+    assert out["p0"] == ["imaging", "organoids", "crispr-screen", "brand-new"]
+    # One question per batch, about the tags outside the vocabulary shown.
+    assert asked["tags"] == {"organoids", "crispr-screen", "brand-new", "another-new"}
+
+
+def test_unknown_existence_drops_no_tags(fake_anthropic, monkeypatch):
+    # If the database can't say which tags exist, keeping a tag beats dropping
+    # a real one.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(ids, tags=("imaging", "a-tag", "b-tag"))
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: None)
+    out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
+    assert out["p0"] == ["imaging", "a-tag", "b-tag"]
+
+
+def test_tag_context_is_cached(monkeypatch):
+    monkeypatch.undo()  # the real loader, with a counting fake database
+    calls = []
+
+    class _Svc:
+        def rpc(self, name, args):
+            calls.append(name)
+            return types.SimpleNamespace(execute=lambda: types.SimpleNamespace(data=[{"tag": "x"}]))
+
+        def table(self, name):
+            calls.append(name)
+            q = types.SimpleNamespace()
+            q.select = lambda cols: types.SimpleNamespace(
+                execute=lambda: types.SimpleNamespace(data=[{"alias": "a", "canonical": "b"}])
+            )
+            return q
+
+    monkeypatch.setattr(enrichment, "_context_cache", None)
+    monkeypatch.setattr("api.supa.service_client", lambda: _Svc())
+    assert enrichment.load_tag_context() == (["x"], {"a": "b"})
+    assert enrichment.load_tag_context() == (["x"], {"a": "b"})
+    assert calls == ["tag_vocabulary", "tag_aliases"]  # read once, not twice
+
+
+def test_vocabulary_is_loaded_when_not_given(fake_anthropic, monkeypatch):
+    fake_anthropic.holder["responder"] = _ok
+    monkeypatch.setattr(enrichment, "load_tag_context", lambda: (["from-db"], {}))
+    enrich_batch(_papers(1), settings=_settings())
+    assert "from-db" in fake_anthropic.calls[0]["prompt"]
+
+
+def test_unreadable_vocabulary_falls_back_to_none(monkeypatch):
+    # Restore the real loader, with a database that can't be reached.
+    monkeypatch.undo()
+    monkeypatch.setattr(enrichment, "_context_cache", None)
+
+    def boom():
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr("api.supa.service_client", boom)
+    assert enrichment.load_tag_context() == ([], {})
 
 
 # --- the early exits ---------------------------------------------------------

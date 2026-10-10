@@ -10,6 +10,7 @@ import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useReadPapers } from "@/hooks/useReadPapers";
+import { useTeamTags } from "@/hooks/useTeamTags";
 import {
   type ExportFormat,
   type ExportPaper,
@@ -29,7 +30,7 @@ import { ApiError, type PaperCorrection, fixPaperMetadata } from "@/lib/api";
 import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
-import { cn, formatDate, formatRelative, safeHref } from "@/lib/utils";
+import { cn, formatDate, formatRelative, normaliseTag, safeHref } from "@/lib/utils";
 
 /** Every control in the paper's action row shares these metrics, so labels sit
  *  on one baseline and the row has an even rhythm. Only the colour treatment
@@ -1163,10 +1164,29 @@ function PaperTags({
   const qc = useQueryClient();
   const [tags, setTags] = useState<string[]>(initial);
   const [input, setInput] = useState("");
+  const { data: labTags } = useTeamTags(teamId);
+  // As you type, offer the lab's existing tags first, so a variant of a tag the
+  // lab already uses ("tumour-…" next to "tumor-…") is one click away from not
+  // being created.
+  const typed = normaliseTag(input);
+  const suggestions = typed
+    ? (labTags ?? [])
+        .map((t) => t.tag)
+        .filter((t) => t.includes(typed) && t !== typed && !tags.includes(t))
+        .slice(0, 6)
+    : [];
 
   async function persist(next: string[]) {
     setTags(next);
-    await supabase.from("paper_posts").update({ tags: next }).eq("id", postId);
+    // The database's clean_tags trigger may re-spell what we sent (a merged tag
+    // becomes the one kept), so show what it actually stored.
+    const { data } = await supabase
+      .from("paper_posts")
+      .update({ tags: next })
+      .eq("id", postId)
+      .select("tags")
+      .maybeSingle();
+    if (data) setTags(data.tags as string[]);
     void qc.invalidateQueries({ queryKey: ["paper-search", teamId] });
     void qc.invalidateQueries({ queryKey: ["team-tags", teamId] });
     void qc.invalidateQueries({ queryKey: ["paper-post"] });
@@ -1174,9 +1194,8 @@ function PaperTags({
 
   function add(e: FormEvent) {
     e.preventDefault();
-    const t = input.trim().toLowerCase();
     setInput("");
-    if (t && !tags.includes(t)) void persist([...tags, t]);
+    if (typed && !tags.includes(typed)) void persist([...tags, typed]);
   }
 
   return (
@@ -1215,9 +1234,28 @@ function PaperTags({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="+ tag"
-          className="w-20 rounded-chip border border-border bg-surface px-2 py-0.5 font-mono text-xs placeholder:text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+          aria-label="Add a tag"
+          className="w-20 rounded-chip border border-border bg-surface px-2 py-0.5 font-mono text-xs placeholder:text-faint focus:w-40 focus:outline-none focus:ring-1 focus:ring-accent"
         />
       </form>
+      {suggestions.length > 0 && (
+        <div className="flex w-full flex-wrap items-center gap-1.5" aria-label="Existing tags">
+          <span className="text-xs text-faint">In use:</span>
+          {suggestions.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => {
+                setInput("");
+                void persist([...tags, t]);
+              }}
+              className="rounded-chip border border-dashed border-border px-2 py-0.5 font-mono text-xs text-muted transition hover:border-accent hover:text-accent"
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
