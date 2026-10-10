@@ -151,7 +151,8 @@ def _prompt(blocks: list[str], vocabulary: list[str]) -> str:
         "would help a lab member filter and group papers: the research area, the "
         "methods, and the main subjects (a disease, organism, technique or data type, "
         "for example). Prefer specific, reusable tags over generic ones such as "
-        "'biology' or 'research'.\n\n"
+        "'biology' or 'research'. Use American spelling (tumor, hematology, "
+        "signaling, characterization), even when the paper uses British spelling.\n\n"
     )
     if vocabulary:
         prompt += (
