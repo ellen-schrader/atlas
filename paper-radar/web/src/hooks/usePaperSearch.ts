@@ -20,14 +20,15 @@ export type PaperStatus = "unread" | "reading" | "read" | "saved";
 
 export interface PaperFilters {
   tag: string | null;
+  author: string | null;
   venue: string | null;
   status: PaperStatus | null;
 }
 
-export const NO_FILTERS: PaperFilters = { tag: null, venue: null, status: null };
+export const NO_FILTERS: PaperFilters = { tag: null, author: null, venue: null, status: null };
 
 export function activeFilterCount(f: PaperFilters): number {
-  return [f.tag, f.venue, f.status].filter(Boolean).length;
+  return [f.tag, f.author, f.venue, f.status].filter(Boolean).length;
 }
 
 /** Server-side, paginated full-text search over a lab's papers (search_papers
@@ -49,6 +50,7 @@ export function usePaperSearch(
           p_team: teamId,
           p_q: q,
           p_tag: filters.tag,
+          p_author: filters.author,
           p_venue: filters.venue,
           p_status: filters.status,
           p_limit: PAGE_SIZE,
@@ -83,6 +85,7 @@ export function usePaperCount(
         p_team: teamId,
         p_q: q,
         p_tag: filters.tag,
+        p_author: filters.author,
         p_venue: filters.venue,
         p_status: filters.status,
       });

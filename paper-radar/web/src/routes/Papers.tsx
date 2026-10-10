@@ -17,6 +17,7 @@ import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
 import { PaperCard } from "@/components/PaperCard";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import { SourceLabel } from "@/components/SourceLabel";
 import { usePaperModal } from "@/components/PaperModal";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import {
 } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
+import { type AuthorCount, useTeamAuthors } from "@/hooks/useTeamAuthors";
 import { type TagCount, useTeamTags } from "@/hooks/useTeamTags";
 import { type VenueCount, useTeamVenues } from "@/hooks/useTeamVenues";
 import { semanticSearch } from "@/lib/api";
@@ -82,16 +84,33 @@ const SORT_LABEL: Record<PaperSort, string> = {
 export default function Papers() {
   const { team, userId } = useAppContext();
   const [mode, setMode] = useState<SearchMode>("keyword");
-  // ?q= and ?tag= seed the page, so Home's "See all in Papers" and its Trending
-  // tags land here already filtered. Read once: after that the page owns them.
-  const [params] = useSearchParams();
+  // ?q=, ?tag=, ?author= and ?venue= seed the page, so Home's "See all in
+  // Papers" and its Trending tags land here already filtered. Read once: after
+  // that the page owns them, and mirrors the filters back (below) so a filtered
+  // view can be shared.
+  const [params, setParams] = useSearchParams();
   const [rawQuery, setRawQuery] = useState(() => params.get("q") ?? "");
   const query = useDebouncedValue(rawQuery.trim(), 250);
   const [semanticQuery, setSemanticQuery] = useState("");
   const [filters, setFilters] = useState<PaperFilters>(() => ({
     ...NO_FILTERS,
     tag: params.get("tag"),
+    author: params.get("author"),
+    venue: params.get("venue"),
   }));
+  useEffect(() => {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const k of ["tag", "author", "venue"] as const) {
+          if (filters[k]) next.set(k, filters[k]);
+          else next.delete(k);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  }, [filters.tag, filters.author, filters.venue, setParams]);
   const [view, setView] = useState<"cards" | "table">("cards");
   const [sort, setSort] = useState<PaperSort>("shared");
   const [adding, setAdding] = useState(false);
@@ -118,6 +137,7 @@ export default function Papers() {
   const { data: total } = usePaperCount(team.id, query, activeFilters);
   const { data: tags } = useTeamTags(team.id);
   const { data: venues } = useTeamVenues(team.id);
+  const { data: authors } = useTeamAuthors(team.id);
 
   // Semantic: runs on submit (each search embeds the query), so it isn't live.
   const semantic = useQuery({
@@ -286,6 +306,7 @@ export default function Papers() {
           filters={filters}
           setFilters={setFilters}
           tags={tags ?? []}
+          authors={authors ?? []}
           venues={venues ?? []}
           disabled={mode === "semantic"}
         />
@@ -509,19 +530,22 @@ function ResultCount({
   );
 }
 
-/** Status + venue + tag, behind one button with a count. Three always-visible
- *  controls (two of which could list 30 venues and every tag in the lab) is the
- *  single biggest source of noise on this page. */
+/** Status + venue + tag + author, behind one button with a count. Always-visible
+ *  controls listing every venue, tag and author in the lab would be the single
+ *  biggest source of noise on this page. The long lists are searchable (#119):
+ *  AI tagging alone gives a lab hundreds of tags. */
 function FilterMenu({
   filters,
   setFilters,
   tags,
+  authors,
   venues,
   disabled,
 }: {
   filters: PaperFilters;
   setFilters: (fn: (f: PaperFilters) => PaperFilters) => void;
   tags: TagCount[];
+  authors: AuthorCount[];
   venues: VenueCount[];
   disabled?: boolean;
 }) {
@@ -558,34 +582,26 @@ function FilterMenu({
               })),
             ]}
           />
-          <FilterSelect
-            label="Venue"
-            value={filters.venue ?? ""}
-            onChange={(v) => setFilters((f) => ({ ...f, venue: v || null }))}
-            options={[
-              { value: "", label: "Any venue" },
-              ...venues.map((v) => ({ value: v.venue, label: `${v.venue} (${v.count})` })),
-              // team_venues caps at 30. Say so, rather than let the menu imply these
-              // are all the venues the lab has.
-              ...(venues.length >= 30
-                ? [{ value: "", label: "— top 30 venues shown —", disabled: true }]
-                : []),
-            ]}
-          />
-          <FilterSelect
+          <SearchableSelect
             label="Tag"
-            value={filters.tag ?? ""}
-            onChange={(v) => setFilters((f) => ({ ...f, tag: v || null }))}
-            options={[
-              { value: "", label: "Any tag" },
-              // A tag from a link (Home's Trending counts paper tags too) may not
-              // be among the lab's own tags; keep it selectable rather than have
-              // the menu fall back to "Any tag" while the filter is still on.
-              ...(filters.tag && !tags.some((t) => t.tag === filters.tag)
-                ? [{ value: filters.tag, label: filters.tag }]
-                : []),
-              ...tags.map((t) => ({ value: t.tag, label: `${t.tag} (${t.n})` })),
-            ]}
+            anyLabel="Any tag"
+            value={filters.tag}
+            onChange={(v) => setFilters((f) => ({ ...f, tag: v }))}
+            options={tags.map((t) => ({ value: t.tag, n: t.n }))}
+          />
+          <SearchableSelect
+            label="Author"
+            anyLabel="Any author"
+            value={filters.author}
+            onChange={(v) => setFilters((f) => ({ ...f, author: v }))}
+            options={authors.map((a) => ({ value: a.author, n: a.n }))}
+          />
+          <SearchableSelect
+            label="Venue"
+            anyLabel="Any venue"
+            value={filters.venue}
+            onChange={(v) => setFilters((f) => ({ ...f, venue: v }))}
+            options={venues.map((v) => ({ value: v.venue, n: v.count }))}
           />
           {n > 0 && (
             <button
