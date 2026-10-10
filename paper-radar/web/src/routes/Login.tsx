@@ -6,6 +6,7 @@ import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RESET_PATH, useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -14,13 +15,19 @@ export default function Login() {
   // would promise sign-up and deliver the log-in form — a password the visitor
   // doesn't have yet.
   const [params] = useSearchParams();
-  const [mode, setMode] = useState<"login" | "signup" | "reset">(
-    params.get("mode") === "signup" ? "signup" : "login",
-  );
+  const [mode, setMode] = useState<"login" | "signup" | "reset">(() => {
+    const m = params.get("mode");
+    return m === "signup" || m === "reset" ? m : "login";
+  });
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // App sends a dead email link (expired, or already opened by a mail scanner)
+  // here rather than letting it fall through to the landing page.
+  const linkError = useLinkError();
+  const [error, setError] = useState<string | null>(() =>
+    linkError ? linkError.message + (linkError.reset ? " Enter your email for a new one." : "") : null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -46,7 +53,7 @@ export default function Login() {
         if (!data.session) setNotice("Check your email to confirm your account, then log in.");
       } else if (mode === "reset") {
         const { error: err } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/reset-password`,
+          redirectTo: `${window.location.origin}${RESET_PATH}`,
         });
         if (err) throw err;
         // Neutral wording: don't reveal whether an account exists for that email.

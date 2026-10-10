@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-rou
 
 import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
+import { type LinkError, RESET_PATH, readLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import ResetPassword from "@/routes/ResetPassword";
 import Dashboard from "@/routes/Dashboard";
@@ -30,25 +31,44 @@ function Center({ children }: { children: ReactNode }) {
 export default function App() {
   const { session, loading } = useSession();
 
-  // A password-reset link signs the user in with a short-lived recovery session,
-  // which would otherwise route them straight into the app. Show the set-a-new-
-  // password screen until they've chosen one. Seed synchronously from the URL
-  // (the recovery link carries `type=recovery` in the hash) so it can't be
-  // missed if supabase-js emits PASSWORD_RECOVERY before this listener attaches;
-  // the listener is the backup for when the hash was already consumed.
-  const [recovering, setRecovering] = useState(
-    () => typeof window !== "undefined" && window.location.hash.includes("type=recovery"),
-  );
+  // A password-reset link lands here in one of two shapes. The email template
+  // links straight to the app with `?token_hash=…&type=recovery`, and nothing is
+  // spent until the user presses Continue on the reset screen: mail scanners
+  // (Safe Links and the like) open every link in an email, and Supabase's own
+  // verify link is single-use, so the scanner used it up and the real click
+  // came back with an error. The older shape, a recovery session already in
+  // the hash, still works for emails sent before the template changed. Seed
+  // both synchronously from the URL so neither can be missed if supabase-js
+  // emits PASSWORD_RECOVERY before this listener attaches; the listener is the
+  // backup for when the hash was already consumed. A bare RESET_PATH is the
+  // reset screen too: after Continue that is the URL, and a reload there must
+  // still land on the password form, not the dashboard.
+  const [recovery, setRecovery] = useState<{ tokenHash: string | null } | null>(() => {
+    const { search, hash, pathname } = window.location;
+    const q = new URLSearchParams(search);
+    const tokenHash = q.get("token_hash");
+    if (tokenHash && q.get("type") === "recovery") return { tokenHash };
+    if (hash.includes("type=recovery")) return { tokenHash: null };
+    if (pathname === RESET_PATH && !readLinkError(hash, pathname)) return { tokenHash: null };
+    return null;
+  });
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") setRecovering(true);
+      if (event === "PASSWORD_RECOVERY") setRecovery((r) => r ?? { tokenHash: null });
     });
     return () => data.subscription.unsubscribe();
   }, []);
 
   if (loading) return <Center>Loading…</Center>;
 
-  if (recovering) return <ResetPassword onDone={() => setRecovering(false)} />;
+  if (recovery)
+    return (
+      <ResetPassword
+        tokenHash={recovery.tokenHash}
+        signedInAs={session?.user.email ?? null}
+        onDone={() => setRecovery(null)}
+      />
+    );
 
   if (!session) {
     // Signed out, "/" is now the public landing page rather than a redirect to the
@@ -57,20 +77,47 @@ export default function App() {
     // split is purely on session state and neither route needs to know about the
     // other.
     return (
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
-        {/* A shared /papers/:id link is the one signed-out URL worth keeping.
-            The catch-all below replaces the URL, so without this the paper id is
-            gone from the address bar and from history before the recipient has
-            even logged in — and sharing is the whole point of the route. */}
-        <Route path="/papers/:paperId" element={<LoginWithReturn />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <LinkErrorRedirect to={(e) => (e.reset ? "/login?mode=reset" : "/login")}>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/login" element={<Login />} />
+          {/* A shared /papers/:id link is the one signed-out URL worth keeping.
+              The catch-all below replaces the URL, so without this the paper id is
+              gone from the address bar and from history before the recipient has
+              even logged in — and sharing is the whole point of the route. */}
+          <Route path="/papers/:paperId" element={<LoginWithReturn />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </LinkErrorRedirect>
     );
   }
 
-  return <AuthedApp session={session} />;
+  // Signed in, Settings is where both a password and an email change live —
+  // /login would only bounce them to the dashboard.
+  return (
+    <LinkErrorRedirect to={() => "/settings"}>
+      <AuthedApp session={session} />
+    </LinkErrorRedirect>
+  );
+}
+
+/** A dead email link comes back from Supabase as `#error=…&error_code=…`.
+ *  Without this the user lands on the landing page or the dashboard with no
+ *  explanation, and is left wondering why the link "goes to the homepage".
+ *  The redirect drops the hash, so it fires once. Its own component so that
+ *  only it, not App, re-renders on every navigation: `children` is the same
+ *  element each time, so React skips it. */
+function LinkErrorRedirect({
+  to,
+  children,
+}: {
+  to: (e: LinkError) => string;
+  children: ReactNode;
+}) {
+  const { hash, pathname } = useLocation();
+  const linkError = readLinkError(hash, pathname);
+  if (linkError) return <Navigate to={to(linkError)} state={{ linkError }} replace />;
+  return children;
 }
 
 const ACTIVE_LAB_KEY = "atlas.activeLab";
