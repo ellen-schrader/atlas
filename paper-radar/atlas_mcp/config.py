@@ -26,7 +26,7 @@ class AtlasSettings(BaseSettings):
     # server: these links get pasted into drafts and shared with collaborators,
     # and a localhost URL is silently useless to everyone but the person who
     # generated it. Point it at your own deployment (or a dev server) to override.
-    atlas_web_url: str = "https://atlas-papers.vercel.app"
+    atlas_web_url: str = "https://labatlas.app"
 
 
 @lru_cache
