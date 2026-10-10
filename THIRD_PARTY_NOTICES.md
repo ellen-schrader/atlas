@@ -11,11 +11,14 @@ below, under their own terms.
 - **Source:** VarCon 2020.12.07 from SCOWL (<http://wordlist.aspell.net/>,
   <https://github.com/en-wl/wordlist>), `varcon/varcon.txt`, sha256
   `75af63da46ec12d7eb14b9f1ba8d3898d484dd6872755b73c921b215875a3629`.
-- **Modified:** this is a filtered and extended version of VarCon. It keeps only
-  one-word British → American pairs (preferred British spellings and common
-  British variants, SCOWL level 80 and below, unambiguous mappings, no
-  possessives), and adds a few biomedical spellings VarCon lacks (listed in
-  `SUPPLEMENT` in the generator script).
+- **Modified:** this is a filtered and extended version of VarCon. It keeps
+  only one-word British → American pairs: preferred British spellings and
+  common British variants, at SCOWL level 80 and below, unambiguous mappings, no
+  possessives. Pairs from clusters VarCon hasn't verified are kept only when the
+  British word has at least 5 letters and follows a standard spelling pattern
+  (ae/oe → e, our → or, -re → -er, -ise → -ize, …). It also adds a few
+  biomedical spellings VarCon lacks (listed in `SUPPLEMENT` in the generator
+  script).
 
 VarCon's copyright and permission notices, reproduced from its README:
 

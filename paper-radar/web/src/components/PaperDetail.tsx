@@ -1171,13 +1171,17 @@ function PaperTags({
   // finds the American-spelled tags the database stores.
   const typed = normaliseTag(input);
   const q = useDebouncedValue(typed, 200);
+  // Room for the post's own tags, which are filtered out below, plus six to show.
+  const limit = tags.length + 7;
   const { data: matches } = useQuery({
-    queryKey: ["team-tags", teamId, "suggest", q],
-    queryFn: () => loadTeamTags(teamId)(q, 10),
+    queryKey: ["team-tags", teamId, "suggest", q, limit],
+    queryFn: () => loadTeamTags(teamId)(q, limit),
     enabled: q !== "",
     staleTime: 60 * 1000,
   });
-  const suggestions = typed
+  // Only results for what's in the box now — not the previous prefix while the
+  // debounce catches up.
+  const suggestions = typed && q === typed
     ? (matches ?? [])
         .map((o) => o.value)
         .filter((t) => t !== typed && !tags.includes(t))

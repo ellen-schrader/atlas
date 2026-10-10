@@ -6,7 +6,7 @@
 -- centerd, metabolism -> metabolizm).
 
 begin;
-select plan(25);
+select plan(30);
 
 -- === the word list ==========================================================
 select is(public.us_spelling('tumour-microenvironment'), 'tumor-microenvironment', 'us: tumour');
@@ -18,6 +18,12 @@ select is(public.us_spelling('signalling characterisation randomised'),
 select is(public.us_spelling('metabolism organism specialist analyses noise colorectal imaging'),
           'metabolism organism specialist analyses noise colorectal imaging',
           'us: words that only look British are left alone');
+select is(public.us_spelling('ret-fusion cre-lox tae sae prev gre'),
+          'ret-fusion cre-lox tae sae prev gre',
+          'us: gene names and abbreviations are not touched (no unverified fragment pairs)');
+select is(public.us_spelling('tumourigenesis hypoglycaemia lymphoedema leucocyte oesophagitis'),
+          'tumorigenesis hypoglycemia lymphedema leukocyte esophagitis',
+          'us: biomedical words VarCon lacks or never verified');
 select results_eq($$ select * from public.spelling_alternatives('tumor') order by 1 $$,
                   $$ values ('tumour'::text) $$, 'alternatives: US -> UK');
 select results_eq($$ select * from public.spelling_alternatives('tumour') order by 1 $$,
@@ -81,6 +87,9 @@ select results_eq(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'environment') $$,
     $$ values ('tumor-microenvironment'::text) $$,
     'menus: the old substring match still works');
+select is_empty(
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', '--') $$,
+    'menus: a query with no letters does not match every tag');
 select results_eq(
     $$ select venue from public.team_venues('e0000000-0000-0000-0000-0000000000e1', 'pediatric') $$,
     $$ values ('Paediatric Research'::text) $$,
@@ -89,6 +98,15 @@ select is(
     (select count(*)::int from public.search_papers('e0000000-0000-0000-0000-0000000000e1', 'tumor immune')),
     1,
     'search_papers: "tumor immune" finds the UK-spelled abstract');
+
+select is(
+    (select count(*)::int from public.search_papers('e0000000-0000-0000-0000-0000000000e1', '', 'tumour-microenvironment')),
+    1,
+    'search_papers: an old UK-spelled ?tag= link still finds the US-tagged paper');
+select is(
+    public.search_papers_count('e0000000-0000-0000-0000-0000000000e1', '', 'tumour-microenvironment'),
+    1,
+    'search_papers_count: agrees with the list for a UK-spelled tag');
 
 update public.paper_posts set tags = '["Tumour Biology"]'
  where paper_id = 'e1000000-0000-0000-0000-000000000001';
@@ -101,9 +119,10 @@ select throws_ok($$ select * from public.clean_tag_map(array['x']) $$, '42501', 
 reset role;
 
 select results_eq(
-    $$ select raw, cleaned from public.clean_tag_map(array['Tumour Biology', 'imaging']) $$,
-    $$ values ('Tumour Biology'::text, 'tumor-biology'::text), ('imaging', 'imaging') $$,
-    'clean_tag_map: what each raw tag becomes when stored');
+    $$ select raw, cleaned, known from public.clean_tag_map(array['Tumour Microenvironment', 'never-seen-tag']) $$,
+    $$ values ('Tumour Microenvironment'::text, 'tumor-microenvironment'::text, true),
+              ('never-seen-tag', 'never-seen-tag', false) $$,
+    'clean_tag_map: the stored form of each raw tag, and whether a paper already carries it');
 
 select throws_ok(
     $$ insert into public.tag_aliases (alias, canonical) values ('anti-tumour-immunity', 'antitumor-immunity') $$,

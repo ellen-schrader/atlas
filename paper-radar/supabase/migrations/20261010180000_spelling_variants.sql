@@ -15,6 +15,9 @@
 --   3. prefix_tsquery — behind every keyword search (Papers, the home search
 --      box, the Atlas MCP) — adds each typed word's other spelling as a whole
 --      word: (tumour:* | tumor). The typed word keeps its prefix match.
+--      search_papers / search_papers_count build it once per search (it now
+--      reads a table, so Postgres no longer folds it to a constant), and fold a
+--      ?tag= value the way stored tags are folded, so old UK-spelled links work.
 --   4. team_tags / team_venues match each typed word as the start of a word
 --      in the name, or its other spelling as a whole word: "tumour" finds
 --      tumor-microenvironment, "colour" doesn't find colorectal-cancer.
@@ -23,9 +26,10 @@
 --      before merges apply; tag_aliases only accepts US-spelled entries; and
 --      clean_tag_map lets the tagger clean a reply with the same rules.
 
--- An earlier draft of this migration (pattern rules) reached local databases.
+-- Earlier drafts of this migration reached local databases.
 drop function if exists public.uk_spelling(text);
 drop function if exists public.spelling_rules();
+drop function if exists public.clean_tag_map(text[]);
 
 create table if not exists public.spelling_variants (
     uk text primary key check (uk ~ '^[a-z]+$'),
@@ -95,28 +99,38 @@ $$;
 
 -- Does p_name match what was typed? The old substring match, or: every typed
 -- word starts a word of the name, or its other spelling is a whole word of it.
+-- A query with no letters or digits ("-", "β") gets only the substring match;
+-- otherwise "every word matches" would be vacuously true for every name.
 create or replace function public.name_matches(p_name text, p_q text)
 returns boolean
 language sql
 stable
 set search_path = public
 as $$
+    with typed as (
+        select w, array(select public.spelling_alternatives(w)) as alts
+        from unnest(regexp_split_to_array(lower(coalesce(p_q, '')), '[^a-z0-9]+')) as w
+        where w <> ''
+    )
     select coalesce(p_q, '') = ''
         or position(lower(p_q) in lower(p_name)) > 0
-        or not exists (
-            select 1
-            from unnest(regexp_split_to_array(lower(p_q), '[^a-z0-9]+')) as w
-            where w <> ''
-              and not exists (
-                  select 1
-                  from unnest(regexp_split_to_array(lower(p_name), '[^a-z0-9]+')) as nw
-                  where nw like w || '%'
-                     or nw in (select public.spelling_alternatives(w))
-              )
+        or (
+            exists (select 1 from typed)
+            and not exists (
+                select 1
+                from typed t
+                where not exists (
+                    select 1
+                    from unnest(regexp_split_to_array(lower(p_name), '[^a-z0-9]+')) as nw
+                    where nw like t.w || '%' or nw = any (t.alts)
+                )
+            )
         );
 $$;
 
 -- Reissued from 20261010120000_author_filter.sql; only the p_q match changes.
+-- Counted first, matched after: name_matches runs once per distinct tag, not
+-- once per post.
 create or replace function public.team_tags(
     p_team  uuid,
     p_q     text default null,
@@ -126,14 +140,17 @@ returns table(tag text, n int)
 language sql
 stable
 as $$
-    select t.tag, count(*)::int as n
-    from public.paper_posts pp
-    join public.papers p on p.id = pp.paper_id
-    cross join lateral jsonb_array_elements_text(public.post_tags(pp.tags, p.tags)) as t(tag)
-    where pp.team_id = p_team
-      and public.name_matches(t.tag, p_q)
-    group by t.tag
-    order by n desc, t.tag
+    select g.tag, g.n
+    from (
+        select t.tag, count(*)::int as n
+        from public.paper_posts pp
+        join public.papers p on p.id = pp.paper_id
+        cross join lateral jsonb_array_elements_text(public.post_tags(pp.tags, p.tags)) as t(tag)
+        where pp.team_id = p_team
+        group by t.tag
+    ) g
+    where public.name_matches(g.tag, p_q)
+    order by g.n desc, g.tag
     limit p_limit;
 $$;
 
@@ -146,15 +163,18 @@ returns table (venue text, count bigint)
 language sql
 stable
 as $$
-    select p.venue, count(*) as count
-    from public.paper_posts pp
-    join public.papers p on p.id = pp.paper_id
-    where pp.team_id = p_team
-      and p.venue is not null
-      and p.venue <> ''
-      and public.name_matches(p.venue, p_q)
-    group by p.venue
-    order by count(*) desc, p.venue
+    select g.venue, g.count
+    from (
+        select p.venue, count(*) as count
+        from public.paper_posts pp
+        join public.papers p on p.id = pp.paper_id
+        where pp.team_id = p_team
+          and p.venue is not null
+          and p.venue <> ''
+        group by p.venue
+    ) g
+    where public.name_matches(g.venue, p_q)
+    order by g.count desc, g.venue
     limit p_limit;
 $$;
 
@@ -180,20 +200,141 @@ as $$
     ) s;
 $$;
 
--- What each raw tag becomes when stored: lets the tagger judge a reply with
--- the database's rules (spelling, merges) instead of a copy of them.
+-- What each raw tag becomes when stored, and whether some paper already
+-- carries that tag: lets the tagger judge a reply with the database's rules
+-- (spelling, merges) in one round trip, instead of a copy of them.
 create or replace function public.clean_tag_map(p_tags text[])
-returns table(raw text, cleaned text)
+returns table(raw text, cleaned text, known boolean)
 language sql
 stable
 set search_path = public
 as $$
-    select r, public.clean_tags(jsonb_build_array(r)) ->> 0
-    from unnest(p_tags) as r;
+    select c.raw, c.cleaned,
+           c.cleaned is not null
+           and exists (select 1 from public.papers p where p.tags ? c.cleaned)
+    from (
+        select r as raw, public.clean_tags(jsonb_build_array(r)) ->> 0 as cleaned
+        from unnest(p_tags) as r
+    ) c;
 $$;
 
 revoke execute on function public.clean_tag_map(text[]) from public, anon, authenticated;
 grant  execute on function public.clean_tag_map(text[]) to service_role;
+
+-- Reissued from 20261010120000_author_filter.sql. The tsquery and the folded
+-- tag are computed once per call (a materialized CTE): prefix_tsquery reads
+-- spelling_variants now, so Postgres would otherwise re-run it per row, up to
+-- four times. p_tag goes through clean_tags, so ?tag=tumour-microenvironment
+-- finds the papers now tagged tumor-microenvironment.
+drop function if exists public.search_papers(uuid, text, text, int, int, text, text, text, text);
+drop function if exists public.search_papers_count(uuid, text, text, text, text, text);
+
+create or replace function public.search_papers(
+    p_team   uuid,
+    p_q      text default '',
+    p_tag    text default null,
+    p_limit  int  default 30,
+    p_offset int  default 0,
+    p_sort   text default 'shared',
+    p_venue  text default null,
+    p_status text default null,  -- 'unread' | 'reading' | 'read' | 'saved'
+    p_author text default null
+)
+returns setof public.paper_posts
+language sql
+stable
+as $$
+    with q as materialized (
+        select public.prefix_tsquery(p_q) as tsq,
+               coalesce(public.clean_tags(jsonb_build_array(p_tag)) ->> 0, p_tag) as tag
+    )
+    select pp.*
+    from q
+    cross join public.paper_posts pp
+    join public.papers p on p.id = pp.paper_id
+    left join public.paper_status ps
+           on ps.paper_id = pp.paper_id
+          and ps.team_id  = pp.team_id
+          and ps.user_id  = auth.uid()
+    where pp.team_id = p_team
+      and (q.tag is null or public.post_tags(pp.tags, p.tags) ? q.tag)
+      and (p_venue is null or p.venue = p_venue)
+      and (p_author is null or p.authors ? p_author)
+      and (
+        p_status is null
+        -- "saved" asks the membership axis, independently of progress: a paper
+        -- central to your project stays saved after you have read it.
+        or (p_status = 'saved' and coalesce(ps.saved, false))
+        -- No row at all is unread: never opened, never saved.
+        or (p_status = 'unread' and (ps.status is null or ps.status = 'unread'))
+        or (p_status in ('reading', 'read') and ps.status = p_status)
+      )
+      and (
+        q.tsq is null
+        or to_tsvector('english',
+             coalesce(p.title, '') || ' ' || coalesce(p.abstract, '') || ' ' || coalesce(p.authors::text, ''))
+           @@ q.tsq
+      )
+    order by
+      (case
+         when q.tsq is null then 0
+         else ts_rank(
+                to_tsvector('english',
+                  coalesce(p.title, '') || ' ' || coalesce(p.abstract, '') || ' ' || coalesce(p.authors::text, '')),
+                q.tsq
+              )
+       end) desc,
+      (case when p_sort = 'published' then p.published_at end) desc nulls last,
+      pp.posted_at desc,
+      pp.id desc
+    limit  greatest(coalesce(p_limit, 30), 0)
+    offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.search_papers_count(
+    p_team   uuid,
+    p_q      text default '',
+    p_tag    text default null,
+    p_venue  text default null,
+    p_status text default null,
+    p_author text default null
+)
+returns integer
+language sql
+stable
+as $$
+    with q as materialized (
+        select public.prefix_tsquery(p_q) as tsq,
+               coalesce(public.clean_tags(jsonb_build_array(p_tag)) ->> 0, p_tag) as tag
+    )
+    select count(*)::int
+    from q
+    cross join public.paper_posts pp
+    join public.papers p on p.id = pp.paper_id
+    left join public.paper_status ps
+           on ps.paper_id = pp.paper_id
+          and ps.team_id  = pp.team_id
+          and ps.user_id  = auth.uid()
+    where pp.team_id = p_team
+      and (q.tag is null or public.post_tags(pp.tags, p.tags) ? q.tag)
+      and (p_venue is null or p.venue = p_venue)
+      and (p_author is null or p.authors ? p_author)
+      and (
+        p_status is null
+        or (p_status = 'saved' and coalesce(ps.saved, false))
+        or (p_status = 'unread' and (ps.status is null or ps.status = 'unread'))
+        or (p_status in ('reading', 'read') and ps.status = p_status)
+      )
+      and (
+        q.tsq is null
+        or to_tsvector('english',
+             coalesce(p.title, '') || ' ' || coalesce(p.abstract, '') || ' ' || coalesce(p.authors::text, ''))
+           @@ q.tsq
+      );
+$$;
+
+grant execute on function public.search_papers(uuid, text, text, int, int, text, text, text, text) to authenticated;
+grant execute on function public.search_papers_count(uuid, text, text, text, text, text)            to authenticated;
 
 -- Reissued from 20261010140000_tag_hygiene.sql: also refuse a merge whose
 -- alias or kept tag isn't in American spelling (a UK alias could never match,

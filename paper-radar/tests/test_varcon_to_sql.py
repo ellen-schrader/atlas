@@ -35,6 +35,21 @@ A Cv: practice / AV B C: practise | <V>
 
 # obscure (level 95)
 A: obscurely / B: obscurelie
+
+# ert (level 70)
+A: ert / B: ret
+
+# esophagitis (level 70)
+A Dv: esophagitis / B D: oesophagitis
+
+# zorpish (level 70)
+A: zorpish / B: blargish
+
+# draft <verified> (level 35)
+A: draft / B: draught
+
+# draught (level 95)
+A: draught
 """
 
 
@@ -66,3 +81,31 @@ def test_render_carries_provenance(tmp_path):
     sql = varcon.render({"tumour": "tumor"}, src, 80)
     assert "sha256" in sql and "Kevin Atkinson" in sql and "THIRD_PARTY_NOTICES.md" in sql
     assert "('tumour', 'tumor')" in sql
+
+
+def test_unverified_clusters_need_a_real_spelling_pattern():
+    pairs = varcon.pairs(SAMPLE, max_level=80)
+    # Fragment from an unverified cluster: would rewrite the RET gene to "ert".
+    assert "ret" not in pairs
+    # Unverified but a plain oe -> e change: kept.
+    assert pairs["oesophagitis"] == "esophagitis"
+    # Unverified and no spelling pattern explains it: dropped.
+    assert "blargish" not in pairs
+
+
+def test_a_british_form_that_is_american_at_any_level_is_left_alone():
+    # "draught" is a preferred American spelling in a level-95 entry, above the
+    # cutoff; it still counts, so draught -> draft is not imported.
+    assert "draught" not in varcon.pairs(SAMPLE, max_level=80)
+
+
+def test_fits_pattern():
+    assert varcon.fits_pattern("haematoma", "hematoma")
+    assert varcon.fits_pattern("centred", "centered")
+    assert varcon.fits_pattern("centring", "centering")
+    assert varcon.fits_pattern("fibres", "fibers")
+    assert varcon.fits_pattern("favoured", "favored")
+    assert varcon.fits_pattern("colouring", "coloring")
+    assert varcon.fits_pattern("sulphate", "sulfate")
+    assert not varcon.fits_pattern("oesophagitis", "esofagitis")
+    assert not varcon.fits_pattern("prev", "perv")
