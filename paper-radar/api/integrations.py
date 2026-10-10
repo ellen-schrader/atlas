@@ -256,42 +256,63 @@ async def inbound_webhook(team_id: str, request: Request, background: Background
     stay inside Teams' ~5 s synchronous-reply window.
     """
     started = time.perf_counter()
-    raw = await _read_capped(request, _MAX_INBOUND_BODY)
-    secret = await run_in_threadpool(teams_integration.inbound_secret_for_team, team_id)
     # Time to the first DB round trip vs. the whole request tells a slow resume /
     # reconnect apart from slow planning when Teams reports a timeout (issue #104).
-    lookup_ms = (time.perf_counter() - started) * 1000
-    if not secret:
-        # Don't distinguish "no such team" from "inbound off" — generic 404.
-        log.warning("inbound: rejected for team %s (not configured)", team_id)
-        raise HTTPException(status_code=404, detail="Not configured")
-    if not teams_integration.verify_teams_signature(
-        secret, raw, request.headers.get("Authorization")
-    ):
-        log.warning("inbound: rejected for team %s (bad or missing signature)", team_id)
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # Past the HMAC check this is a genuine Teams message, so any failure must
-    # still reply 200 with an explanation: an error status makes Teams post
-    # "please fix the bot source code" into the channel, twice (issues #93, #104).
+    # Logged for every request that gets past the body cap, rejections included.
+    lookup_ms: float | None = None
     outcome = "error"
     try:
-        outcome, reply = await _handle_signed_message(team_id, raw, background)
-        return reply
-    except Exception:
-        log.exception("inbound: failed for team %s", team_id)
-        return teams_integration.inbound_reply(
-            "Something went wrong on my end, so I couldn't add that paper. Nothing was "
-            "saved — mention me again in a minute and I'll retry."
-        )
+        raw = await _read_capped(request, _MAX_INBOUND_BODY)
+        try:
+            secret = await run_in_threadpool(teams_integration.inbound_secret_for_team, team_id)
+        except Exception:
+            # The database is unreachable even after the stale-connection retry —
+            # the cold-start case #104 is about. We can't verify the signature
+            # without the secret, but a 500 here is what makes Teams post its
+            # error into the channel twice, so reply 200 with a retry hint. It
+            # says nothing about whether the team exists or inbound is on.
+            outcome = "lookup_failed"
+            log.exception("inbound: secret lookup failed for team %s", team_id)
+            return teams_integration.inbound_reply(
+                "I couldn't reach my database just now, so nothing was saved. Mention me "
+                "again in a minute and I'll retry."
+            )
+        finally:
+            lookup_ms = (time.perf_counter() - started) * 1000
+        if not secret:
+            # Don't distinguish "no such team" from "inbound off" — generic 404.
+            outcome = "not_configured"
+            log.warning("inbound: rejected for team %s (not configured)", team_id)
+            raise HTTPException(status_code=404, detail="Not configured")
+        if not teams_integration.verify_teams_signature(
+            secret, raw, request.headers.get("Authorization")
+        ):
+            outcome = "bad_signature"
+            log.warning("inbound: rejected for team %s (bad or missing signature)", team_id)
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        # Past the HMAC check this is a genuine Teams message, so any failure must
+        # still reply 200 with an explanation: an error status makes Teams post
+        # "please fix the bot source code" into the channel, twice (issues #93, #104).
+        try:
+            outcome, reply = await _handle_signed_message(team_id, raw, background)
+            return reply
+        except Exception:
+            outcome = "error"
+            log.exception("inbound: failed for team %s", team_id)
+            return teams_integration.inbound_reply(
+                "Something went wrong on my end, so I couldn't add that paper. Nothing was "
+                "saved — mention me again in a minute and I'll retry."
+            )
     finally:
-        log.info(
-            "inbound: team %s %s (secret lookup %.0f ms, total %.0f ms)",
-            team_id,
-            outcome,
-            lookup_ms,
-            (time.perf_counter() - started) * 1000,
-        )
+        if lookup_ms is not None:
+            log.info(
+                "inbound: team %s %s (secret lookup %.0f ms, total %.0f ms)",
+                team_id,
+                outcome,
+                lookup_ms,
+                (time.perf_counter() - started) * 1000,
+            )
 
 
 async def _handle_signed_message(

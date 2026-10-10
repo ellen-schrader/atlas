@@ -589,8 +589,9 @@ def test_inbound_webhook_any_failure_after_signature_replies_not_errors(monkeypa
 
 
 def test_inbound_webhook_logs_rejections_and_timing(monkeypatch, caplog):
-    # Rejections used to be silent; every request now leaves a timing line so a
-    # Teams timeout can be traced to a slow wake-up vs. slow planning (issue #104).
+    # Rejections used to be silent; every request past the body cap now leaves a
+    # timing line, so a Teams timeout can be traced to a slow wake-up vs. slow
+    # planning (issue #104).
     monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
     monkeypatch.setattr(
         teams_integration,
@@ -605,7 +606,30 @@ def test_inbound_webhook_logs_rejections_and_timing(monkeypatch, caplog):
         )
     messages = [r.getMessage() for r in caplog.records]
     assert any("rejected for team t1 (bad or missing signature)" in m for m in messages)
+    # Rejections get the timing line too, not only signed messages.
+    assert any("team t1 bad_signature (secret lookup" in m for m in messages)
     assert any("team t1 no_url (secret lookup" in m and "total" in m for m in messages)
+
+
+def test_inbound_webhook_secret_lookup_failure_replies_and_is_timed(monkeypatch, caplog):
+    # The cold-start case of issue #104: the database is still unreachable after
+    # the stale-connection retry. That must not be a 500 (Teams posts its error
+    # into the channel, twice), and it must leave the timing line it exists for.
+    def down(team_id):
+        raise ConnectionError("server closed the connection")
+
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", down)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda *a: pytest.fail("nothing may be planned without the secret"),
+    )
+    with caplog.at_level(logging.INFO, logger=integ.log.name):
+        resp = client.post("/integrations/teams/inbound/t1", content=b'{"text": "hi"}')
+    assert resp.status_code == 200
+    assert "couldn't reach my database" in resp.json()["text"]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("team t1 lookup_failed (secret lookup" in m for m in messages)
 
 
 def test_inbound_webhook_tolerates_junk_field_shapes(monkeypatch):
