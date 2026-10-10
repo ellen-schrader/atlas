@@ -89,28 +89,33 @@ def load_tag_context() -> tuple[list[str], dict[str, str]]:
     return context
 
 
-def existing_tags(tags: set[str]) -> set[str] | None:
-    """Which of ``tags`` some paper already carries. Claude only sees the top
-    ``VOCABULARY_SIZE`` tags, so a tag outside them may still be an existing one,
-    not a new one. None if the database can't be read."""
+def stored_forms(tags: set[str]) -> dict[str, tuple[str, bool]] | None:
+    """For each tag: what the database stores it as — normalised, folded to
+    American spelling, merges applied — and whether some paper already carries
+    that stored tag (public.clean_tag_map: the clean_tags trigger's rules, one
+    round trip). None if the database can't be read."""
     if not tags:
-        return set()
+        return {}
     try:
         from .supa import service_client
 
-        rows = service_client().rpc("existing_tags", {"p_tags": sorted(tags)}).execute().data or []
-        return {r if isinstance(r, str) else r["existing_tags"] for r in rows}
+        rows = service_client().rpc("clean_tag_map", {"p_tags": sorted(tags)}).execute().data
+        return {r["raw"]: (r["cleaned"] or "", bool(r["known"])) for r in rows or []}
     except Exception as exc:
-        log.warning("couldn't check which tags exist: %s", exc)
+        log.warning("couldn't clean tags in the database, keeping the reply as is: %s", exc)
         return None
 
 
-def _normalised(raw: list[str], aliases: dict[str, str]) -> list[str]:
-    """One spelling per tag, merges applied, blanks and repeats dropped."""
+def _normalised(
+    raw: list[str], aliases: dict[str, str], stored: dict[str, tuple[str, bool]] | None = None
+) -> list[str]:
+    """One spelling per tag, merges applied, blanks and repeats dropped. Uses
+    the database's answer (``stored``) when there is one: only it knows the
+    British -> American word list. Otherwise normalises and applies merges here."""
     out: list[str] = []
     for tag in raw:
         tag = normalise_tag(tag)
-        tag = aliases.get(tag, tag)
+        tag = stored.get(tag, (tag, False))[0] if stored is not None else aliases.get(tag, tag)
         if tag and tag not in out:
             out.append(tag)
     return out
@@ -131,15 +136,16 @@ def _cap_new(tags: list[str], known: set[str] | None) -> list[str]:
     return out[:MAX_TAGS]
 
 
-def _known_tags(replies: list[list[str]], vocabulary: list[str]) -> set[str] | None:
-    """Every tag in ``replies`` that already exists: the vocabulary Claude was
-    shown, plus any beyond it that some paper carries (one query per batch)."""
-    if not vocabulary:
+def _known_tags(
+    vocabulary: list[str], stored: dict[str, tuple[str, bool]] | None
+) -> set[str] | None:
+    """Every stored tag the reply could use that already exists: the vocabulary
+    Claude was shown, plus any beyond it that a paper carries. None — keep every
+    tag — with no vocabulary yet, or when the database couldn't say: judged
+    against the vocabulary alone, a British reply would look new and be dropped."""
+    if not vocabulary or stored is None:
         return None
-    shown = set(vocabulary)
-    beyond = {t for reply in replies for t in reply if t not in shown}
-    found = existing_tags(beyond)
-    return None if found is None else shown | found
+    return set(vocabulary) | {cleaned for cleaned, known in stored.values() if known}
 
 
 def _prompt(blocks: list[str], vocabulary: list[str]) -> str:
@@ -151,7 +157,8 @@ def _prompt(blocks: list[str], vocabulary: list[str]) -> str:
         "would help a lab member filter and group papers: the research area, the "
         "methods, and the main subjects (a disease, organism, technique or data type, "
         "for example). Prefer specific, reusable tags over generic ones such as "
-        "'biology' or 'research'.\n\n"
+        "'biology' or 'research'. Use American spelling (tumor, hematology, "
+        "signaling, characterization), even when the paper uses British spelling.\n\n"
     )
     if vocabulary:
         prompt += (
@@ -213,8 +220,13 @@ def _tag(
             messages=[{"role": "user", "content": prompt}],
             output_format=_BatchTags,
         )
-        replies = {p.id: _normalised(p.tags, aliases) for p in resp.parsed_output.papers}
-        known = _known_tags(list(replies.values()), vocabulary)
+        papers = resp.parsed_output.papers
+        # One round trip for the whole batch: a UK-spelled reply ("tumour-…")
+        # must be judged as the US tag it will be stored as, or it would count
+        # as new and could be dropped.
+        stored = stored_forms({normalise_tag(t) for p in papers for t in p.tags} - {""})
+        replies = {p.id: _normalised(p.tags, aliases, stored) for p in papers}
+        known = _known_tags(vocabulary, stored)
         # Trimmed rather than constrained in the schema: a maxItems the model
         # overshot would raise here and send a fine batch down the retry path.
         return {pid: _cap_new(tags, known) for pid, tags in replies.items()}
