@@ -313,6 +313,7 @@ import base64  # noqa: E402
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
 import json  # noqa: E402
+import logging  # noqa: E402
 
 from api import teams_integration  # noqa: E402
 
@@ -545,15 +546,66 @@ def test_inbound_webhook_plan_failure_replies_with_a_message_not_an_error(monkey
     assert "something went wrong" in resp.json()["text"].lower()
 
 
-def test_inbound_webhook_rejects_non_object_json(monkeypatch):
-    # Valid JSON that isn't a message object must be a clean 400, not an
-    # AttributeError-driven 500 (real Teams always sends an object).
+@pytest.mark.parametrize("body", [b"[]", b"not json"])
+def test_inbound_webhook_malformed_signed_payload_replies_not_errors(monkeypatch, body):
+    # A signed body that isn't a message object must not crash, and must not
+    # return an error status either: past the HMAC check, any non-2xx becomes
+    # Teams' "please fix the bot source code" in the channel (issue #104).
     monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
-    body = b"[]"
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda *a: pytest.fail("a malformed payload must not be planned"),
+    )
     resp = client.post(
         "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert "couldn't read" in resp.json()["text"].lower()
+
+
+def test_inbound_webhook_any_failure_after_signature_replies_not_errors(monkeypatch):
+    # Not just planning: a throw anywhere past the HMAC check (here, building the
+    # "already in the lab" reply) must still answer 200 with a message (issue #104).
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda team_id, text: teams_integration.InboundPlan(
+            "already", url="https://arxiv.org/abs/1"
+        ),
+    )
+
+    def boom(plan):
+        raise RuntimeError("bad metadata")
+
+    monkeypatch.setattr(teams_integration, "already_reply_text", boom)
+    body = json.dumps({"text": "@Atlas https://arxiv.org/abs/1"}).encode()
+    resp = client.post(
+        "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+    )
+    assert resp.status_code == 200
+    assert "something went wrong" in resp.json()["text"].lower()
+
+
+def test_inbound_webhook_logs_rejections_and_timing(monkeypatch, caplog):
+    # Rejections used to be silent; every request now leaves a timing line so a
+    # Teams timeout can be traced to a slow wake-up vs. slow planning (issue #104).
+    monkeypatch.setattr(teams_integration, "inbound_secret_for_team", lambda tid: _TOKEN)
+    monkeypatch.setattr(
+        teams_integration,
+        "plan_inbound_import",
+        lambda team_id, text: teams_integration.InboundPlan("no_url"),
+    )
+    with caplog.at_level(logging.INFO, logger=integ.log.name):
+        client.post("/integrations/teams/inbound/t1", content=b"{}")
+        body = b'{"text": "hi"}'
+        client.post(
+            "/integrations/teams/inbound/t1", content=body, headers={"Authorization": _sign(body)}
+        )
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("rejected for team t1 (bad or missing signature)" in m for m in messages)
+    assert any("team t1 no_url (secret lookup" in m and "total" in m for m in messages)
 
 
 def test_inbound_webhook_tolerates_junk_field_shapes(monkeypatch):

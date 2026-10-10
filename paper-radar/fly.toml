@@ -15,11 +15,16 @@ primary_region = "lhr"
   # mention after an idle period made Teams post "please fix the bot source
   # code" into the channel (issue #93). The idle window is a proxy heuristic,
   # not a guarantee — a background embed killed mid-flight is recovered by
-  # api/backfill_embeddings.py. Revisit (min_machines_running = 1) if suspend
-  # ever proves too slow in practice.
+  # api/backfill_embeddings.py.
+  #
+  # TEMPORARY (Oct 2026, issue #104) — revert to 0 by 10 Nov 2026. Suspend still
+  # proved too slow: the first mention after idle times out and Teams posts its
+  # error twice. One always-on machine (~$6/month at 1 GB) buys a month to find
+  # the cheaper fix; the per-request timing in the inbound webhook's logs says
+  # whether the wake-up or the DB reconnect is the slow part.
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [[http_service.checks]]
     interval = "30s"
