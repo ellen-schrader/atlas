@@ -92,7 +92,7 @@ select throws_ok(
     'tag_aliases: merging away a kept tag is refused (no chain, no cycle)'
 );
 select lives_ok(
-    $$ update public.tag_aliases set canonical = 'tumour-microenvironment' where alias = 'tme' $$,
+    $$ update public.tag_aliases set canonical = 'tumor-immune-microenvironment' where alias = 'tme' $$,
     'tag_aliases: re-pointing an alias at a plain tag is fine'
 );
 

@@ -10,7 +10,7 @@ import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { useTeamTags } from "@/hooks/useTeamTags";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   type ExportFormat,
   type ExportPaper,
@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, type PaperCorrection, fixPaperMetadata } from "@/lib/api";
+import { loadTeamTags } from "@/lib/filterOptions";
 import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
@@ -1164,15 +1165,22 @@ function PaperTags({
   const qc = useQueryClient();
   const [tags, setTags] = useState<string[]>(initial);
   const [input, setInput] = useState("");
-  const { data: labTags } = useTeamTags(teamId);
   // As you type, offer the lab's existing tags first, so a variant of a tag the
   // lab already uses ("tumour-…" next to "tumor-…") is one click away from not
-  // being created.
+  // being created. The server does the matching (team_tags), so British typing
+  // finds the American-spelled tags the database stores.
   const typed = normaliseTag(input);
+  const q = useDebouncedValue(typed, 200);
+  const { data: matches } = useQuery({
+    queryKey: ["team-tags", teamId, "suggest", q],
+    queryFn: () => loadTeamTags(teamId)(q, 10),
+    enabled: q !== "",
+    staleTime: 60 * 1000,
+  });
   const suggestions = typed
-    ? (labTags ?? [])
-        .map((t) => t.tag)
-        .filter((t) => t.includes(typed) && t !== typed && !tags.includes(t))
+    ? (matches ?? [])
+        .map((o) => o.value)
+        .filter((t) => t !== typed && !tags.includes(t))
         .slice(0, 6)
     : [];
 

@@ -49,6 +49,7 @@ def no_tag_context(monkeypatch):
     passes ``context=`` itself, and no tag exists beyond the vocabulary shown."""
     monkeypatch.setattr(enrichment, "load_tag_context", lambda: ([], {}))
     monkeypatch.setattr(enrichment, "existing_tags", lambda tags: set())
+    monkeypatch.setattr(enrichment, "stored_forms", lambda tags: None)
     monkeypatch.setattr(enrichment, "_context_cache", None)
 
 
@@ -278,6 +279,39 @@ def test_tag_context_is_cached(monkeypatch):
     assert enrichment.load_tag_context() == (["x"], {"a": "b"})
     assert enrichment.load_tag_context() == (["x"], {"a": "b"})
     assert calls == ["tag_vocabulary", "tag_aliases"]  # read once, not twice
+
+
+def test_uk_spelled_reply_is_judged_as_its_stored_us_tag(fake_anthropic, monkeypatch):
+    # The database folds tags to American spelling. A British reply must count
+    # as the existing US tag it becomes, not as a new tag that could be dropped.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(
+        ids,
+        tags=(
+            "tumour-microenvironment",
+            "anti-tumour-immunity",
+            "tumor-microenvironment",
+            "brand-new",
+        ),
+    )
+    asked = {}
+
+    def stored(tags):
+        asked["tags"] = tags
+        return {t: t.replace("tumour", "tumor") for t in tags}
+
+    monkeypatch.setattr(enrichment, "stored_forms", stored)
+    out = enrich_batch(
+        _papers(1),
+        settings=_settings(),
+        context=(["tumor-microenvironment", "anti-tumor-immunity"], {}),
+    )
+    assert out["p0"] == ["tumor-microenvironment", "anti-tumor-immunity", "brand-new"]
+    assert asked["tags"] == {
+        "tumour-microenvironment",
+        "anti-tumour-immunity",
+        "tumor-microenvironment",
+        "brand-new",
+    }
 
 
 def test_vocabulary_is_loaded_when_not_given(fake_anthropic, monkeypatch):

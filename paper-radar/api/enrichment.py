@@ -105,12 +105,32 @@ def existing_tags(tags: set[str]) -> set[str] | None:
         return None
 
 
-def _normalised(raw: list[str], aliases: dict[str, str]) -> list[str]:
-    """One spelling per tag, merges applied, blanks and repeats dropped."""
+def stored_forms(tags: set[str]) -> dict[str, str] | None:
+    """What each tag becomes when the database stores it — normalised, folded
+    to American spelling, merges applied (public.clean_tag_map, the same rules
+    as the clean_tags trigger). None if the database can't be read."""
+    if not tags:
+        return {}
+    try:
+        from .supa import service_client
+
+        rows = service_client().rpc("clean_tag_map", {"p_tags": sorted(tags)}).execute().data
+        return {r["raw"]: r["cleaned"] or "" for r in rows or []}
+    except Exception as exc:
+        log.warning("couldn't clean tags in the database, cleaning locally: %s", exc)
+        return None
+
+
+def _normalised(
+    raw: list[str], aliases: dict[str, str], stored: dict[str, str] | None = None
+) -> list[str]:
+    """One spelling per tag, merges applied, blanks and repeats dropped. Uses
+    the database's answer (``stored``) when there is one: only it knows the
+    British -> American word list. Otherwise normalises and applies merges here."""
     out: list[str] = []
     for tag in raw:
         tag = normalise_tag(tag)
-        tag = aliases.get(tag, tag)
+        tag = stored.get(tag, tag) if stored is not None else aliases.get(tag, tag)
         if tag and tag not in out:
             out.append(tag)
     return out
@@ -214,7 +234,12 @@ def _tag(
             messages=[{"role": "user", "content": prompt}],
             output_format=_BatchTags,
         )
-        replies = {p.id: _normalised(p.tags, aliases) for p in resp.parsed_output.papers}
+        papers = resp.parsed_output.papers
+        # One round trip for the whole batch: a UK-spelled reply ("tumour-…")
+        # must be judged as the US tag it will be stored as, or it would count
+        # as new and could be dropped.
+        stored = stored_forms({normalise_tag(t) for p in papers for t in p.tags} - {""})
+        replies = {p.id: _normalised(p.tags, aliases, stored) for p in papers}
         known = _known_tags(list(replies.values()), vocabulary)
         # Trimmed rather than constrained in the schema: a maxItems the model
         # overshot would raise here and send a fine batch down the retry path.
