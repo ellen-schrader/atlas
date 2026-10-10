@@ -12,6 +12,7 @@ import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useProfile } from "@/hooks/useProfile";
 import { useTeamTags } from "@/hooks/useTeamTags";
 import { updateProfile } from "@/lib/api";
+import { useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -144,7 +145,20 @@ function AccountPanel({
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
-  const [pwNote, setPwNote] = useState<Note>(null);
+  // A dead email link opened while signed in lands here (see App): a reset
+  // needs no new link, since the password can be set right below. Name the
+  // account, since the link may have been for another one.
+  const linkError = useLinkError();
+  const [pwNote, setPwNote] = useState<Note>(() =>
+    linkError
+      ? {
+          ok: false,
+          text: linkError.reset
+            ? `${linkError.message} You're signed in as ${currentEmail}, so you can set a new password for that account here.`
+            : linkError.message,
+        }
+      : null,
+  );
 
   async function saveName(e: FormEvent) {
     e.preventDefault();

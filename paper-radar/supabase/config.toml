@@ -160,7 +160,8 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# localhost:5173 is the Vite dev server, so local reset emails link to the running app.
+additional_redirect_urls = ["https://127.0.0.1:3000", "http://localhost:5173/**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -247,6 +248,13 @@ otp_expiry = 3600
 # [auth.email.template.invite]
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
+
+# Links to the app with the token rather than to Supabase's verify endpoint, so a
+# mail scanner opening the link doesn't spend it; the app verifies on a click.
+# Mirror any change in the prod dashboard (Auth > Emails > Reset password).
+[auth.email.template.recovery]
+subject = "Reset your Atlas password"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
