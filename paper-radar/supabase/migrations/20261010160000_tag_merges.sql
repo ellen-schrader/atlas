@@ -1,13 +1,34 @@
--- First reviewed batch of tag merges (85 groups, 106 tags), proposed by
+-- First reviewed batch of tag merges (80 groups, 102 tags), proposed by
 -- api/propose_tag_merges.py against the live library (1,471 distinct tags)
 -- and approved by Ellen on 2026-10-10. Mostly plurals, hyphenation variants
--- and abbreviations (scrna-seq, nsclc, cytof, llm); a few synonyms.
+-- and abbreviations (scrna-seq, nsclc, cytof, llm); a few synonyms. After
+-- review: broad-into-narrow merges were left out (ffpe, tgf-beta, brca1-brca2,
+-- cgas-sting-pathway, target-discovery) because an alias blocks the broad tag
+-- for good, and the immune-checkpoint variants share one kept tag.
 --
--- Inserting the aliases makes every future write use the kept tag (the
--- clean_tags trigger, 20261010140000_tag_hygiene.sql); apply_tag_cleanup()
--- then rewrites the tags already stored on papers, lab posts, follows and the
--- undo archive. tag_aliases' flat-table trigger rejects any chain, so a bad
--- row fails the whole migration rather than half-applying.
+-- 1. Insert the aliases: every future write uses the kept tag (the clean_tags
+--    trigger, 20261010140000_tag_hygiene.sql). tag_aliases' flat-table trigger
+--    rejects any chain, so a bad row fails the whole migration.
+-- 2. Copy the current tags of every row the merges will change into
+--    tag_merge_backup, so any merge can be reversed later row by row.
+-- 3. apply_tag_cleanup() rewrites the stored tags on papers, lab posts,
+--    follows and the undo archive.
+
+create table if not exists public.tag_merge_backup (
+    batch      text        not null,
+    tbl        text        not null,
+    row_id     uuid        not null,
+    old_tags   jsonb       not null,
+    created_at timestamptz not null default now(),
+    primary key (batch, tbl, row_id)
+);
+
+comment on table public.tag_merge_backup is
+    'Tags as they were before a tag_aliases batch rewrote them, for reversing a merge.';
+
+-- Service role only, like tag_aliases.
+alter table public.tag_merge_backup enable row level security;
+grant select, insert, delete on public.tag_merge_backup to service_role;
 
 insert into public.tag_aliases (alias, canonical) values
     ('scrna-seq', 'single-cell-rna-seq'),
@@ -16,7 +37,8 @@ insert into public.tag_aliases (alias, canonical) values
     ('foundation-models', 'foundation-model'),
     ('computational-methods', 'computational-method'),
     ('spatial-multiomics', 'spatial-multi-omics'),
-    ('immune-checkpoint-therapy', 'immune-checkpoint-blockade'),
+    ('immune-checkpoint-blockade', 'immune-checkpoint-inhibitors'),
+    ('immune-checkpoint-therapy', 'immune-checkpoint-inhibitors'),
     ('llm', 'large-language-models'),
     ('biomarker', 'biomarkers'),
     ('multiplex-imaging', 'multiplexed-imaging'),
@@ -61,9 +83,7 @@ insert into public.tag_aliases (alias, canonical) values
     ('vision-language-models', 'vision-language-model'),
     ('cdk4-6-inhibitors', 'cdk4-6-inhibitor'),
     ('cdk4/6-inhibitor', 'cdk4-6-inhibitor'),
-    ('ffpe', 'ffpe-tissue'),
     ('lightsheet-microscopy', 'light-sheet-microscopy'),
-    ('tgf-beta', 'tgf-beta-signaling'),
     ('diffusion-model', 'diffusion-models'),
     ('immune-cell-infiltration', 'immune-infiltration'),
     ('cancer-therapy', 'cancer-therapeutics'),
@@ -95,9 +115,6 @@ insert into public.tag_aliases (alias, canonical) values
     ('immunoprofiling', 'immune-profiling'),
     ('cancer-metabolism', 'tumor-metabolism'),
     ('precancerous-lesions', 'premalignant-lesions'),
-    ('cgas-sting-pathway', 'sting-pathway'),
-    ('brca1-brca2', 'brca-mutations'),
-    ('target-discovery', 'drug-target-discovery'),
     ('therapeutic-target-discovery', 'drug-target-discovery'),
     ('spatially-aware-clustering', 'spatial-clustering'),
     ('immunopeptidome', 'immunopeptidomics'),
@@ -116,5 +133,18 @@ insert into public.tag_aliases (alias, canonical) values
     ('protocols', 'protocol'),
     ('parp-inhibition', 'parp-inhibitors'),
     ('graph-attention-network', 'graph-attention-networks');
+
+insert into public.tag_merge_backup (batch, tbl, row_id, old_tags)
+select '2026-10-10', 'papers', id, tags from public.papers
+ where tags is distinct from public.clean_tags(tags)
+union all
+select '2026-10-10', 'paper_posts', id, tags from public.paper_posts
+ where tags is distinct from public.clean_tags(tags)
+union all
+select '2026-10-10', 'removed_posts', id, tags from public.removed_posts
+ where tags is distinct from public.clean_tags(tags)
+union all
+select '2026-10-10', 'profiles', id, interests from public.profiles
+ where interests is distinct from public.clean_tags(interests);
 
 select * from public.apply_tag_cleanup();
