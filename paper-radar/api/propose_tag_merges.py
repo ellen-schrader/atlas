@@ -42,6 +42,29 @@ class _Merges(BaseModel):
     merges: list[_Merge]
 
 
+# _Merges as a strict JSON schema for structured output.
+_MERGES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "merges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "canonical": {"type": "string"},
+                    "aliases": {"type": "array", "items": {"type": "string"}},
+                    "reason": {"type": "string"},
+                },
+                "required": ["canonical", "aliases", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["merges"],
+    "additionalProperties": False,
+}
+
+
 def _rows(svc, table: str, column: str) -> list[list]:
     out: list[list] = []
     start = 0
@@ -90,13 +113,20 @@ def propose(counts: Counter, settings) -> list[_Merge]:
         "listed. Give a short reason per group.\n\n<tags>\n" + listing + "\n</tags>"
     )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    resp = client.messages.parse(
+    # Streamed with a generous output cap: the reply lists every merge group for
+    # well over a thousand tags, and thinking counts against max_tokens too. A
+    # 16k non-streaming call ran out mid-reply and parsed to nothing.
+    with client.messages.stream(
         model=settings.anthropic_model,
-        max_tokens=16000,
+        max_tokens=64000,
         messages=[{"role": "user", "content": prompt}],
-        output_format=_Merges,
-    )
-    return resp.parsed_output.merges
+        output_config={"format": {"type": "json_schema", "schema": _MERGES_SCHEMA}},
+    ) as stream:
+        resp = stream.get_final_message()
+    if resp.stop_reason != "end_turn":
+        raise SystemExit(f"Claude stopped early ({resp.stop_reason}); no proposals written.")
+    text = next(b.text for b in resp.content if b.type == "text")
+    return _Merges.model_validate_json(text).merges
 
 
 def existing_aliases(svc) -> dict[str, str]:
