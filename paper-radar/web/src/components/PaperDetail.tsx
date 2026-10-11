@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Maximize2, MoreHorizontal, Pencil, Quote, Share2, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -10,7 +10,7 @@ import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useReadPapers } from "@/hooks/useReadPapers";
-import { useTeamTags } from "@/hooks/useTeamTags";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   type ExportFormat,
   type ExportPaper,
@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, type PaperCorrection, fixPaperMetadata } from "@/lib/api";
+import { loadTeamTags } from "@/lib/filterOptions";
 import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
@@ -1150,6 +1151,9 @@ function LinkBtn({ href, children }: { href: string; children: ReactNode }) {
 
 /** Lab-scoped, editable tags on the post. Canonical (paper/keyword) tags render
  *  as dashed chips you can click to add. */
+// Tag suggestions fetched per query: six shown, plus room for the post's own.
+const SUGGEST_PAGE = 20;
+
 function PaperTags({
   postId,
   teamId,
@@ -1164,15 +1168,27 @@ function PaperTags({
   const qc = useQueryClient();
   const [tags, setTags] = useState<string[]>(initial);
   const [input, setInput] = useState("");
-  const { data: labTags } = useTeamTags(teamId);
   // As you type, offer the lab's existing tags first, so a variant of a tag the
   // lab already uses ("tumour-…" next to "tumor-…") is one click away from not
-  // being created.
+  // being created. The server does the matching (team_tags), so typing either
+  // spelling finds the tag the lab already has.
   const typed = normaliseTag(input);
+  const q = useDebouncedValue(typed, 200);
+  // A fixed page, with room for the post's own tags (filtered out below), so
+  // adding a tag doesn't change the cache key and refetch the same query.
+  const { data: matches } = useQuery({
+    queryKey: ["team-tags", teamId, "suggest", q],
+    queryFn: () => loadTeamTags(teamId)(q, SUGGEST_PAGE),
+    enabled: q !== "",
+    staleTime: 60 * 1000,
+    // The last results stay up while the debounce and the next request catch
+    // up, instead of the list blanking on every keystroke.
+    placeholderData: keepPreviousData,
+  });
   const suggestions = typed
-    ? (labTags ?? [])
-        .map((t) => t.tag)
-        .filter((t) => t.includes(typed) && t !== typed && !tags.includes(t))
+    ? (matches ?? [])
+        .map((o) => o.value)
+        .filter((t) => t !== typed && !tags.includes(t))
         .slice(0, 6)
     : [];
 

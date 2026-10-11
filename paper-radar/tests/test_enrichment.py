@@ -195,6 +195,10 @@ def test_prompt_is_not_tied_to_one_research_area(fake_anthropic):
     prompt = fake_anthropic.calls[0]["prompt"].lower()
     assert "breast" not in prompt and "spatial" not in prompt
     assert "<existing_tags>" not in prompt  # no vocabulary yet, no section
+    # One spelling per tag: search matches either, but a tag list shouldn't
+    # carry both "tumor-…" and "tumour-…". Only new tags: an existing tag is
+    # reused as listed, whatever its spelling.
+    assert "spell new tags the american way" in prompt
 
 
 def test_existing_tags_are_shown_to_claude(fake_anthropic):

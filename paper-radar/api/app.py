@@ -1547,15 +1547,21 @@ def _taste_vector(
 
     Pass ``loaded`` (a dict) to keep what was fetched for the recommendation
     reasons, instead of fetching it again: "vecs" (paper id → unit vector),
-    "titles", "profile_md", "follows", and the per-signal query vectors
+    "titles", "profile_md", "profile_md_us", "follows", and the per-signal query vectors
     "profile_q" / "engagement_q" that Discover searches with."""
     prof = (
-        uc.table("profiles").select("profile_vec, profile_md, interests").eq("id", user_id).limit(1)
+        uc.table("profiles")
+        .select("profile_vec, profile_md, profile_md_us, interests")
+        .eq("id", user_id)
+        .limit(1)
         .execute().data or []
     )
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
     if loaded is not None:
         loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
+        # The profile in American spelling (a computed column over us_spelling),
+        # so "tumour microenvironment" names tumor-microenvironment too.
+        loaded["profile_md_us"] = (prof[0].get("profile_md_us") or "") if prof else ""
         loaded["follows"] = _follows(prof[0] if prof else None)
         loaded.setdefault("vecs", {})
         loaded.setdefault("titles", {})
@@ -1850,6 +1856,7 @@ def _source_reasons(
     titles: dict[str, str | None] = loaded.get("titles", {})
     follows: list[str] = loaded.get("follows") or []
     profile_md = loaded.get("profile_md") or ""
+    profile_md_us = loaded.get("profile_md_us") or ""
 
     by_engagement = [p["papers"]["id"] for p in posts if source.get(p["id"]) == "engagement"]
     rec_vecs = (
@@ -1873,7 +1880,10 @@ def _source_reasons(
 
     def profile_reason(post: dict) -> dict:
         tags = post.get("tags") or post["papers"].get("tags") or []
-        hits = _profile_tags(profile_md, tags)
+        # Either spelling: stored tags keep theirs, so a UK-spelled profile must
+        # still name a UK-spelled tag, and name a US-spelled one via profile_md_us.
+        found = set(_profile_tags(profile_md, tags)) | set(_profile_tags(profile_md_us, tags))
+        hits = [t for t in tags if t in found]
         return {
             "kind": "profile",
             "ref_id": None,
