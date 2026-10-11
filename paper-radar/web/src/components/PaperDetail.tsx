@@ -1167,8 +1167,8 @@ function PaperTags({
   const [input, setInput] = useState("");
   // As you type, offer the lab's existing tags first, so a variant of a tag the
   // lab already uses ("tumour-…" next to "tumor-…") is one click away from not
-  // being created. The server does the matching (team_tags), so British typing
-  // finds the American-spelled tags the database stores.
+  // being created. The server does the matching (team_tags), so typing either
+  // spelling finds the tag the lab already has.
   const typed = normaliseTag(input);
   const q = useDebouncedValue(typed, 200);
   // Room for the post's own tags, which are filtered out below, plus six to show.

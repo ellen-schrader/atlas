@@ -1828,6 +1828,21 @@ def _profile_tags(profile_md: str, tags: list[str]) -> list[str]:
     return out
 
 
+def _us_spelling(uc, text: str) -> str:
+    """``text`` lowercased, each British word in American spelling
+    (public.us_spelling: the VarCon word list), so a profile that says "tumour
+    microenvironment" names the tag tumor-microenvironment. The text as given if
+    the database can't answer: a missed match only loses a reason's label."""
+    if not text:
+        return text
+    try:
+        data = uc.rpc("us_spelling", {"p_text": text}).execute().data
+    except Exception as exc:
+        log.warning("couldn't fold the profile to American spelling: %s", exc)
+        return text
+    return data if isinstance(data, str) and data else text
+
+
 def _source_reasons(
     uc, posts: list[dict], source: dict[str, str], anchors: dict[str, str], loaded: dict
 ) -> dict[str, dict]:
@@ -1850,6 +1865,9 @@ def _source_reasons(
     titles: dict[str, str | None] = loaded.get("titles", {})
     follows: list[str] = loaded.get("follows") or []
     profile_md = loaded.get("profile_md") or ""
+    if any(source.get(p["id"]) != "engagement" for p in posts):
+        # Tags are American-spelled; a profile may say "tumour microenvironment".
+        profile_md = _us_spelling(uc, profile_md)
 
     by_engagement = [p["papers"]["id"] for p in posts if source.get(p["id"]) == "engagement"]
     rec_vecs = (

@@ -46,10 +46,9 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def no_tag_context(monkeypatch):
     """No database in these tests: tag with an empty vocabulary unless a test
-    passes ``context=`` itself; the database stores every tag as given, and no
-    tag exists beyond the vocabulary shown."""
+    passes ``context=`` itself, and no tag exists beyond the vocabulary shown."""
     monkeypatch.setattr(enrichment, "load_tag_context", lambda: ([], {}))
-    monkeypatch.setattr(enrichment, "stored_forms", lambda tags: {t: (t, False) for t in tags})
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: set())
     monkeypatch.setattr(enrichment, "_context_cache", None)
 
 
@@ -196,7 +195,8 @@ def test_prompt_is_not_tied_to_one_research_area(fake_anthropic):
     prompt = fake_anthropic.calls[0]["prompt"].lower()
     assert "breast" not in prompt and "spatial" not in prompt
     assert "<existing_tags>" not in prompt  # no vocabulary yet, no section
-    # Tags are stored in American spelling (the database folds them too).
+    # One spelling per tag: search matches either, but a tag list shouldn't
+    # carry both "tumor-…" and "tumour-…".
     assert "american spelling" in prompt
 
 
@@ -216,8 +216,7 @@ def test_at_most_one_new_tag_per_paper(fake_anthropic):
     assert out["p0"] == ["imaging", "brand-new", "deep-learning"]
 
 
-def test_merged_tags_are_mapped_locally_when_the_database_cant_answer(fake_anthropic, monkeypatch):
-    monkeypatch.setattr(enrichment, "stored_forms", lambda tags: None)
+def test_merged_tags_are_mapped_to_their_canonical_name(fake_anthropic):
     fake_anthropic.holder["responder"] = lambda ids: _ok(
         ids, tags=("TME", "tumor-microenvironment")
     )
@@ -236,26 +235,26 @@ def test_existing_tags_beyond_the_vocabulary_shown_are_not_new(fake_anthropic, m
     fake_anthropic.holder["responder"] = lambda ids: _ok(
         ids, tags=("imaging", "organoids", "crispr-screen", "brand-new", "another-new")
     )
-    calls = []
+    asked = {}
 
-    def stored(tags):
-        calls.append(tags)
-        return {t: (t, t in {"organoids", "crispr-screen"}) for t in tags}
+    def existing(tags):
+        asked["tags"] = tags
+        return {"organoids", "crispr-screen"} & tags
 
-    monkeypatch.setattr(enrichment, "stored_forms", stored)
+    monkeypatch.setattr(enrichment, "existing_tags", existing)
     out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
     assert out["p0"] == ["imaging", "organoids", "crispr-screen", "brand-new"]
-    assert len(calls) == 1  # one round trip per batch
+    # One question per batch, about the tags outside the vocabulary shown.
+    assert asked["tags"] == {"organoids", "crispr-screen", "brand-new", "another-new"}
 
 
-def test_database_failure_drops_no_tags(fake_anthropic, monkeypatch):
-    # If the database can't say how tags are stored or which exist, keeping a
-    # tag beats dropping a real one — a British reply judged against the US
-    # vocabulary alone would look new.
-    fake_anthropic.holder["responder"] = lambda ids: _ok(ids, tags=("imaging", "a-tag", "tumour-x"))
-    monkeypatch.setattr(enrichment, "stored_forms", lambda tags: None)
+def test_unknown_existence_drops_no_tags(fake_anthropic, monkeypatch):
+    # If the database can't say which tags exist, keeping a tag beats dropping
+    # a real one.
+    fake_anthropic.holder["responder"] = lambda ids: _ok(ids, tags=("imaging", "a-tag", "b-tag"))
+    monkeypatch.setattr(enrichment, "existing_tags", lambda tags: None)
     out = enrich_batch(_papers(1), settings=_settings(), context=(["imaging"], {}))
-    assert out["p0"] == ["imaging", "a-tag", "tumour-x"]
+    assert out["p0"] == ["imaging", "a-tag", "b-tag"]
 
 
 def test_tag_context_is_cached(monkeypatch):
@@ -280,39 +279,6 @@ def test_tag_context_is_cached(monkeypatch):
     assert enrichment.load_tag_context() == (["x"], {"a": "b"})
     assert enrichment.load_tag_context() == (["x"], {"a": "b"})
     assert calls == ["tag_vocabulary", "tag_aliases"]  # read once, not twice
-
-
-def test_uk_spelled_reply_is_judged_as_its_stored_us_tag(fake_anthropic, monkeypatch):
-    # The database folds tags to American spelling. A British reply must count
-    # as the existing US tag it becomes, not as a new tag that could be dropped.
-    fake_anthropic.holder["responder"] = lambda ids: _ok(
-        ids,
-        tags=(
-            "tumour-microenvironment",
-            "anti-tumour-immunity",
-            "tumor-microenvironment",
-            "brand-new",
-        ),
-    )
-    asked = {}
-
-    def stored(tags):
-        asked["tags"] = tags
-        return {t: (t.replace("tumour", "tumor"), "tumour" in t or "tumor" in t) for t in tags}
-
-    monkeypatch.setattr(enrichment, "stored_forms", stored)
-    out = enrich_batch(
-        _papers(1),
-        settings=_settings(),
-        context=(["tumor-microenvironment", "anti-tumor-immunity"], {}),
-    )
-    assert out["p0"] == ["tumor-microenvironment", "anti-tumor-immunity", "brand-new"]
-    assert asked["tags"] == {
-        "tumour-microenvironment",
-        "anti-tumour-immunity",
-        "tumor-microenvironment",
-        "brand-new",
-    }
 
 
 def test_vocabulary_is_loaded_when_not_given(fake_anthropic, monkeypatch):

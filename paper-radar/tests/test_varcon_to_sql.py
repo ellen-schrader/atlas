@@ -45,6 +45,12 @@ A Dv: esophagitis / B D: oesophagitis
 # zorpish (level 70)
 A: zorpish / B: blargish
 
+# formula <verified> (level 35)
+A: formulas / B: formulae
+
+# jour (level 70)
+A: jors / B: jours
+
 # draft <verified> (level 35)
 A: draft / B: draught
 
@@ -97,6 +103,23 @@ def test_a_british_form_that_is_american_at_any_level_is_left_alone():
     # "draught" is a preferred American spelling in a level-95 entry, above the
     # cutoff; it still counts, so draught -> draft is not imported.
     assert "draught" not in varcon.pairs(SAMPLE, max_level=80)
+
+
+def test_drops_latin_plurals_and_short_unverified_pairs():
+    pairs = varcon.pairs(SAMPLE, max_level=80)
+    assert "formulae" not in pairs  # a valid American spelling too
+    assert "jours" not in pairs  # unverified, under 6 letters
+
+
+def test_supplement_gets_the_same_checks(monkeypatch):
+    monkeypatch.setattr(
+        varcon, "SUPPLEMENT", {"tumour": "tumr", "draught": "draft", "Bad-Word": "bad", "ok": "okk"}
+    )
+    pairs = varcon.pairs(SAMPLE, max_level=80)
+    assert "tumour" not in pairs  # conflicts with VarCon's tumor: ambiguous, dropped
+    assert "draught" not in pairs  # American elsewhere
+    assert "Bad-Word" not in pairs
+    assert pairs["ok"] == "okk"
 
 
 def test_fits_pattern():

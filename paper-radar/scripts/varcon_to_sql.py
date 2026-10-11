@@ -7,14 +7,20 @@ keeps only what Atlas needs: one-word pairs where a British spelling ("B" or
 preferred American one ("A"). Rarer variants ("V", "-", "x"), possessives,
 capitalised words and ambiguous mappings are dropped.
 
-VarCon's unverified clusters carry archaic, Scots and fragment entries
-("ret" -> "ert", "sae" -> "se", "cre" -> "cer") that would rewrite gene names
-and abbreviations. So a pair is kept if its cluster is marked <verified>, or if
-the British word has at least 5 letters and turns into the American one by the
-usual spelling patterns (_PATTERNS) — a check that can only reject pairs.
+The pairs only widen searches ("tumour" also finds "tumor"); stored tags are
+never rewritten with them. Still, a wrong pair adds noise, so:
 
-A few biomedical words VarCon lacks are added from SUPPLEMENT. This is a
-modified (filtered and extended) form of VarCon; see THIRD_PARTY_NOTICES.md.
+* VarCon's unverified clusters carry archaic, Scots and fragment entries
+  ("ret" -> "ert", "notre" -> "noter", "jours" -> "jors"). A pair from one is
+  kept only if the British word has at least 6 letters and turns into the
+  American one by the usual spelling patterns (_PATTERNS).
+* Latin plurals in -ae ("formulae", "trabeculae", "mucosae") are valid
+  American spellings too; VarCon maps them to anglicised or singular-looking
+  forms. They are dropped.
+
+A few biomedical words VarCon lacks are added from SUPPLEMENT, under the same
+checks as the rest. This is a modified (filtered and extended) form of VarCon;
+see THIRD_PARTY_NOTICES.md.
 
 Usage (from paper-radar/):
     python scripts/varcon_to_sql.py path/to/varcon.txt --max-level 80 > out.sql
@@ -51,7 +57,7 @@ _PATTERNS = [
     (re.compile(r"sulph"), "sulf"),
     (re.compile(r"mme(s)?$"), r"m\1"),
 ]
-_MIN_UNVERIFIED = 5
+_MIN_UNVERIFIED = 6
 
 # Not VarCon: biomedical British spellings missing from it, added by hand.
 SUPPLEMENT = {
@@ -129,22 +135,21 @@ def pairs(text: str, max_level: int) -> dict[str, str]:
         if level > max_level or len(us) != 1:
             continue
         for w in (w for tags, w in entries if tags & _BRITISH):
-            if w != us[0] and (
-                verified or (len(w) >= _MIN_UNVERIFIED and fits_pattern(w, us[0]))
-            ):
+            if w != us[0] and (verified or (len(w) >= _MIN_UNVERIFIED and fits_pattern(w, us[0]))):
                 candidates[w].add(us[0])
-    found = {
+    for uk, us in SUPPLEMENT.items():
+        candidates[uk].add(us)
+    return {
         uk: next(iter(us))
         for uk, us in candidates.items()
         if len(us) == 1
         and _WORD.match(uk)
         and _WORD.match(next(iter(us)))
         # A British form that is also a preferred American spelling elsewhere
-        # ("practise"? no; "metre"? no; but e.g. "draught" vs "draft") is
-        # ambiguous: leave it alone.
+        # (e.g. "draught" vs "draft") is ambiguous: leave it alone.
         and uk not in american
+        and not uk.endswith("ae")
     }
-    return {**found, **{uk: us for uk, us in SUPPLEMENT.items() if uk not in found}}
 
 
 def render(mapping: dict[str, str], source: Path, max_level: int) -> str:

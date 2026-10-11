@@ -884,6 +884,23 @@ def test_profile_and_tag_sourced_cards_say_so_even_near_a_saved_paper():
     assert reasons["rec-q"]["ref_label"] == ""
 
 
+def test_profile_reason_matches_us_tags_in_a_uk_spelled_profile():
+    # The database folds the profile to American spelling (us_spelling).
+    uc = _FakeClient(
+        profiles=[{**_PROFILE, "profile_md": "Tumour microenvironment of breast cancer."}],
+        **{"rpc:us_spelling": "tumor microenvironment of breast cancer."},
+    )
+    reasons = _reasons_for(uc, [_post("rec", ["tumor-microenvironment"])], "profile")
+    assert reasons["rec"]["ref_label"] == "tumor-microenvironment"
+
+
+def test_profile_reason_survives_the_spelling_lookup_failing():
+    uc = _FakeClient(profiles=[{**_PROFILE, "profile_md": "Tumour microenvironment."}])
+    # No rpc:us_spelling registered: the fake returns [], not text.
+    reasons = _reasons_for(uc, [_post("rec", ["tumour-microenvironment"])], "profile")
+    assert reasons["rec"]["ref_label"] == "tumour-microenvironment"
+
+
 def test_interleave_shares_slots_round_robin_without_duplicates():
     from api.app import _interleave
 

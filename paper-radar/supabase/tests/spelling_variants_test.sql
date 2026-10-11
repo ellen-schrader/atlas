@@ -1,12 +1,12 @@
--- spelling_variants_test.sql — whole-word British/American spelling
+-- spelling_variants_test.sql — British/American spelling in search
 -- (20261010180000_spelling_variants.sql + the VarCon pairs in
 -- 20261010180100_spelling_variants_data.sql): us_spelling, the either-spelling
--- prefix_tsquery, the filter menus' match, tags folded to US spelling, and the
--- false matches pattern rules produced (colour -> colorectal, centred ->
--- centerd, metabolism -> metabolizm).
+-- prefix_tsquery, the filter menus' match, ?tag= in either spelling, stored
+-- tags left as they are, and the false matches pattern rules produced
+-- (colour -> colorectal, centred -> centerd, metabolism -> metabolizm).
 
 begin;
-select plan(30);
+select plan(34);
 
 -- === the word list ==========================================================
 select is(public.us_spelling('tumour-microenvironment'), 'tumor-microenvironment', 'us: tumour');
@@ -24,6 +24,11 @@ select is(public.us_spelling('ret-fusion cre-lox tae sae prev gre'),
 select is(public.us_spelling('tumourigenesis hypoglycaemia lymphoedema leucocyte oesophagitis'),
           'tumorigenesis hypoglycemia lymphedema leukocyte esophagitis',
           'us: biomedical words VarCon lacks or never verified');
+select is(public.us_spelling('formulae trabeculae notre jours archaea'),
+          'formulae trabeculae notre jours archaea',
+          'us: Latin plurals and short unverified fragments are not in the list');
+select is(public.spelling_forms('tumour-microenvironment'),
+          array['tumour-microenvironment', 'tumor-microenvironment'], 'forms: a tag in both spellings');
 select results_eq($$ select * from public.spelling_alternatives('tumor') order by 1 $$,
                   $$ values ('tumour'::text) $$, 'alternatives: US -> UK');
 select results_eq($$ select * from public.spelling_alternatives('tumour') order by 1 $$,
@@ -62,8 +67,8 @@ insert into public.papers (id, url, url_norm, title, abstract, tags, venue) valu
      'Paediatric Research');
 
 select is((select tags from public.papers where id = 'e1000000-0000-0000-0000-000000000001'),
-    '["tumor-microenvironment", "hematopoiesis", "colorectal-cancer", "patient-centered-care"]'::jsonb,
-    'clean_tags: tags are stored in US spelling, word by word');
+    '["tumour-microenvironment", "haematopoiesis", "colorectal-cancer", "patient-centred-care"]'::jsonb,
+    'clean_tags: stored tags keep their spelling (the list only widens searches)');
 
 insert into public.paper_posts (paper_id, team_id, posted_by, tags, source) values
     ('e1000000-0000-0000-0000-000000000001', 'e0000000-0000-0000-0000-0000000000e1',
@@ -74,18 +79,20 @@ set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000e1"}'
 
 select results_eq(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'tumour') $$,
-    $$ values ('tumor-microenvironment'::text) $$,
-    'menus: "tumour" finds tumor-microenvironment');
+    $$ values ('tumour-microenvironment'::text) $$,
+    'menus: "tumour" finds tumour-microenvironment');
 select results_eq(
-    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'tumour micro') $$,
-    $$ values ('tumor-microenvironment'::text) $$,
-    'menus: a half-typed second word still matches');
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'tumor micro') $$,
+    $$ values ('tumour-microenvironment'::text) $$,
+    'menus: "tumor" finds the UK-spelled tag; a half-typed second word still matches');
+-- "colour" may find colorectal-cancer, as "color" does: VarCon lists
+-- "colourectal", and a typed word may be half-typed. A whole other word may not.
 select is_empty(
-    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'colour') $$,
-    'menus: "colour" does not find colorectal-cancer');
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'colours') $$,
+    'menus: "colours" does not find colorectal-cancer');
 select results_eq(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'environment') $$,
-    $$ values ('tumor-microenvironment'::text) $$,
+    $$ values ('tumour-microenvironment'::text) $$,
     'menus: the old substring match still works');
 select is_empty(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', '--') $$,
@@ -102,32 +109,47 @@ select is(
 select is(
     (select count(*)::int from public.search_papers('e0000000-0000-0000-0000-0000000000e1', '', 'tumour-microenvironment')),
     1,
-    'search_papers: an old UK-spelled ?tag= link still finds the US-tagged paper');
+    'search_papers: ?tag= in the stored spelling');
 select is(
-    public.search_papers_count('e0000000-0000-0000-0000-0000000000e1', '', 'tumour-microenvironment'),
+    (select count(*)::int from public.search_papers('e0000000-0000-0000-0000-0000000000e1', '', 'Tumor Microenvironment')),
     1,
-    'search_papers_count: agrees with the list for a UK-spelled tag');
+    'search_papers: ?tag= in the other spelling finds the paper too');
+select is(
+    public.search_papers_count('e0000000-0000-0000-0000-0000000000e1', '', 'tumor-microenvironment'),
+    1,
+    'search_papers_count: agrees with the list for the other spelling');
+select is(
+    (select count(*)::int from public.search_papers('e0000000-0000-0000-0000-0000000000e1', '', 'colorectal')),
+    0,
+    'search_papers: ?tag= is still a whole tag, not a prefix');
 
-update public.paper_posts set tags = '["Tumour Biology"]'
- where paper_id = 'e1000000-0000-0000-0000-000000000001';
-select is((select tags from public.paper_posts where paper_id = 'e1000000-0000-0000-0000-000000000001'),
-    '["tumor-biology"]'::jsonb,
-    'clean_tags: a lab tag typed in UK spelling is stored in US spelling');
-
-select throws_ok($$ select * from public.clean_tag_map(array['x']) $$, '42501', null,
-    'clean_tag_map: service role only');
+-- A US-tagged paper, for the half-typed and short-word menu matches.
 reset role;
+insert into public.papers (id, url, url_norm, title, tags) values
+    ('e1000000-0000-0000-0000-000000000002', 'http://s/2', 's/2', 'Two',
+     '["tumorigenesis", "t-cell-exhaustion", "tissue-imaging"]');
+insert into public.paper_posts (paper_id, team_id, posted_by, tags, source) values
+    ('e1000000-0000-0000-0000-000000000002', 'e0000000-0000-0000-0000-0000000000e1',
+     '00000000-0000-0000-0000-0000000000e1', '[]', 'web');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000e1"}';
 
 select results_eq(
-    $$ select raw, cleaned, known from public.clean_tag_map(array['Tumour Microenvironment', 'never-seen-tag']) $$,
-    $$ values ('Tumour Microenvironment'::text, 'tumor-microenvironment'::text, true),
-              ('never-seen-tag', 'never-seen-tag', false) $$,
-    'clean_tag_map: the stored form of each raw tag, and whether a paper already carries it');
-
-select throws_ok(
-    $$ insert into public.tag_aliases (alias, canonical) values ('anti-tumour-immunity', 'antitumor-immunity') $$,
-    '23514', null,
-    'tag_aliases: a UK-spelled alias is refused (it could never match)');
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'tumou') order by 1 $$,
+    $$ values ('tumorigenesis'::text), ('tumour-microenvironment') $$,
+    'menus: a half-typed British word finds US tags (and still the UK one)');
+select results_eq(
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'haemato') $$,
+    $$ values ('haematopoiesis'::text) $$,
+    'menus: half-typed, as stored');
+select results_eq(
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 't exhaus') $$,
+    $$ values ('t-cell-exhaustion'::text) $$,
+    'menus: a one-letter word matches only the whole word "t" (not tumour-, tissue-)');
+select is_empty(
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 't micro') $$,
+    'menus: "t" no longer matches as the start of tumour-microenvironment');
+reset role;
 
 select * from finish();
 rollback;
