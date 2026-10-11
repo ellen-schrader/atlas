@@ -21,10 +21,11 @@ never rewritten with them. Still, a wrong pair adds noise, so:
   American spellings too; VarCon maps them to anglicised or singular-looking
   forms. They are dropped.
 
-EXCLUDE drops a few pairs by hand. SUPPLEMENT adds biomedical spellings VarCon lacks, and a few short ones the
-pattern check drops (grey, mould). It is checked by hand, so it skips the
-length and pattern checks, but gets the rest: one lowercase word each, and no
-British form that is American elsewhere or that VarCon maps differently. This
+EXCLUDE drops a few pairs by hand. SUPPLEMENT adds biomedical spellings
+VarCon lacks, and a few short ones the pattern check drops (grey, mould). It
+is checked by hand, so it skips the length and pattern checks, but gets the
+rest: one lowercase word each, and no British form that is American elsewhere
+or that VarCon maps differently. This
 is a modified (filtered and extended) form of VarCon; see
 THIRD_PARTY_NOTICES.md.
 
