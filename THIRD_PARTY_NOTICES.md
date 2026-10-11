@@ -14,12 +14,11 @@ below, under their own terms.
 - **Modified:** this is a filtered and extended version of VarCon. It keeps
   only one-word British → American pairs: preferred British spellings and
   common British variants, at SCOWL level 80 and below, unambiguous mappings, no
-  possessives, no Latin plurals in -ae. Pairs from clusters VarCon hasn't
-  verified are kept only when the British word has at least 6 letters and
-  follows a standard spelling pattern (ae/oe → e, our → or, -re → -er,
-  -ise → -ize, …). It also adds a few
-  biomedical spellings VarCon lacks (listed in `SUPPLEMENT` in the generator
-  script).
+  possessives, no Latin plurals in -ae. British words under 6 letters must
+  follow a standard spelling pattern (ae/oe → e, our → or, -re → -er,
+  -ise → -ize, …); pairs from clusters VarCon hasn't verified need both 6+
+  letters and a pattern. It also adds a few biomedical and short spellings by
+  hand (listed in `SUPPLEMENT` in the generator script).
 
 VarCon's copyright and permission notices, reproduced from its README:
 

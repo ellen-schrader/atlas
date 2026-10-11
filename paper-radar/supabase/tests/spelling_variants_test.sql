@@ -6,7 +6,7 @@
 -- (colour -> colorectal, centred -> centerd, metabolism -> metabolizm).
 
 begin;
-select plan(34);
+select plan(37);
 
 -- === the word list ==========================================================
 select is(public.us_spelling('tumour-microenvironment'), 'tumor-microenvironment', 'us: tumour');
@@ -28,7 +28,9 @@ select is(public.us_spelling('formulae trabeculae notre jours archaea'),
           'formulae trabeculae notre jours archaea',
           'us: Latin plurals and short unverified fragments are not in the list');
 select is(public.spelling_forms('tumour-microenvironment'),
-          array['tumour-microenvironment', 'tumor-microenvironment'], 'forms: a tag in both spellings');
+          array['tumour-microenvironment', 'tumor-microenvironment'], 'forms: a tag in both spellings, as given first');
+select is((public.spelling_forms('colour-colour-colour-colour-colour-colour-colour'))[1],
+          'colour-colour-colour-colour-colour-colour-colour', 'forms: past the cap, the tag as given is kept');
 select results_eq($$ select * from public.spelling_alternatives('tumor') order by 1 $$,
                   $$ values ('tumour'::text) $$, 'alternatives: US -> UK');
 select results_eq($$ select * from public.spelling_alternatives('tumour') order by 1 $$,
@@ -47,6 +49,8 @@ select ok(not (to_tsvector('english', 'Colorectal cancer screening') @@ public.p
           'search: "colour" does not match colorectal (the variant is a whole word)');
 select ok(not (to_tsvector('english', 'Laboratory protocols') @@ public.prefix_tsquery('labour')),
           'search: "labour" does not match laboratory');
+select ok(to_tsvector('english', 'Tumorigenesis in mice') @@ public.prefix_tsquery('tumour'),
+          'search: "tumour" finds the American form of a longer word (tumorigenesis)');
 select is(public.prefix_tsquery('fibroblast')::text, to_tsquery('english', 'fibroblast:*')::text,
           'search: a word with no variant gives the same query as before');
 
@@ -65,6 +69,11 @@ insert into public.papers (id, url, url_norm, title, abstract, tags, venue) valu
      'The tumour immune landscape in children.',
      '["Tumour Microenvironment", "haematopoiesis", "colorectal-cancer", "patient-centred-care"]',
      'Paediatric Research');
+
+update public.profiles set profile_md = 'Tumour Microenvironment and signalling'
+ where id = '00000000-0000-0000-0000-0000000000e1';
+select is((select public.profile_md_us(p) from public.profiles p where id = '00000000-0000-0000-0000-0000000000e1'),
+          'tumor microenvironment and signaling', 'profile_md_us: the profile in American spelling');
 
 select is((select tags from public.papers where id = 'e1000000-0000-0000-0000-000000000001'),
     '["tumour-microenvironment", "haematopoiesis", "colorectal-cancer", "patient-centred-care"]'::jsonb,
@@ -85,11 +94,9 @@ select results_eq(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'tumor micro') $$,
     $$ values ('tumour-microenvironment'::text) $$,
     'menus: "tumor" finds the UK-spelled tag; a half-typed second word still matches');
--- "colour" may find colorectal-cancer, as "color" does: VarCon lists
--- "colourectal", and a typed word may be half-typed. A whole other word may not.
 select is_empty(
-    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'colours') $$,
-    'menus: "colours" does not find colorectal-cancer');
+    $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'colour') $$,
+    'menus: "colour" does not find colorectal-cancer');
 select results_eq(
     $$ select tag from public.team_tags('e0000000-0000-0000-0000-0000000000e1', 'environment') $$,
     $$ values ('tumour-microenvironment'::text) $$,

@@ -17,8 +17,9 @@
 --      Authors are names and are left as typed.
 --   4. search_papers / search_papers_count: ?tag= matches the tag in either
 --      spelling.
---   5. us_spelling(text): the API matches a research profile ("tumour
---      microenvironment") against American-spelled tags with it.
+--   5. profiles.profile_md_us (a computed column over us_spelling): the API
+--      matches a research profile ("tumour microenvironment") against tags in
+--      either spelling, without another round trip.
 --
 -- Search only: stored tags are never rewritten with the list. A wrong pair
 -- adds a stray alternative to a search; it would corrupt a stored tag. The
@@ -35,9 +36,10 @@ create table if not exists public.spelling_variants (
     us text not null    check (us ~ '^[a-z]+$' and us <> uk)
 );
 create index if not exists spelling_variants_us_idx on public.spelling_variants (us);
--- Prefix lookups for half-typed words in the filter menus ("tumou%").
-create index if not exists spelling_variants_uk_prefix_idx on public.spelling_variants (uk text_pattern_ops);
-create index if not exists spelling_variants_us_prefix_idx on public.spelling_variants (us text_pattern_ops);
+-- Earlier drafts added prefix indexes; a LIKE whose pattern is built per row
+-- can't use them, and a scan of ~8,500 rows takes about a millisecond.
+drop index if exists public.spelling_variants_uk_prefix_idx;
+drop index if exists public.spelling_variants_us_prefix_idx;
 
 comment on table public.spelling_variants is
     'British -> American word spellings, filtered from VarCon. Search only. See 20261010180000_spelling_variants.sql.';
@@ -75,9 +77,45 @@ as $$
     select uk from public.spelling_variants where us = p_word;
 $$;
 
+-- What a typed word matches in the other spelling: its alternatives (exact),
+-- and — for 3+ letters, which may be half-typed or the stem of a longer word —
+-- the other spelling of each listed word it begins ("tumou" or "tumour" ->
+-- tumor, tumors, tumorigenesis, …). Exact alternatives first, then shortest.
+create or replace function public.spelling_matches(p_word text)
+returns table(alt text, exact boolean)
+language sql
+stable
+set search_path = public
+as $$
+    select m.alt, bool_or(m.exact)
+    from (
+        select a as alt, true as exact from public.spelling_alternatives(p_word) as a
+        union all
+        select v.us, false from public.spelling_variants v
+         where length(p_word) >= 3 and v.uk like p_word || '%'
+        union all
+        select v.uk, false from public.spelling_variants v
+         where length(p_word) >= 3 and v.us like p_word || '%'
+    ) m
+    group by m.alt
+    order by bool_or(m.exact) desc, length(m.alt), m.alt;
+$$;
+
+-- profiles.profile_md_us: the research profile, lowercased, in American
+-- spelling. A PostgREST computed column, so the API reads it with the profile.
+create or replace function public.profile_md_us(p public.profiles)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+    select public.us_spelling(p.profile_md);
+$$;
+
 -- Every spelling of a tag: each word as given or as its other spelling.
 -- "tumour-microenvironment" -> {tumour-microenvironment, tumor-microenvironment}.
--- Capped at 64 forms; real tags have one or two words with a variant.
+-- The tag as given comes first. Capped at 64 forms (real tags have one or two
+-- words with a variant); the cap keeps the forms closest to the tag as given.
 create or replace function public.spelling_forms(p_text text)
 returns text[]
 language plpgsql
@@ -97,20 +135,22 @@ begin
         from regexp_matches(lower(p_text), '[a-z0-9]+|[^a-z0-9]+', 'g') with ordinality as m(tok, ord)
         order by m.ord
     loop
-        opts := array[tok] || array(select public.spelling_alternatives(tok));
-        select array_agg(f || o) into forms
-        from (select f from unnest(forms) as f limit 64) fs
-        cross join unnest(opts) as o;
+        opts := array[tok] || array(select a from public.spelling_alternatives(tok) as a order by a);
+        select array_agg(f.v || o.v order by f.i, o.i) into forms
+        from unnest(forms[1:64]) with ordinality as f(v, i)
+        cross join unnest(opts) with ordinality as o(v, i);
     end loop;
     return forms[1:64];
 end;
 $$;
 
 -- Reissued from 20260712130000_paper_search.sql. Each typed word keeps its
--- prefix match; its other spelling is added as a whole word, so "colour"
--- adds "color" (not color:*, which would match colorectal). Stable now, as it
--- reads spelling_variants; a word with no variant gives the same query as
--- before.
+-- prefix match; its other spellings (spelling_matches: the word's own, then
+-- those of longer words it begins, so "tumour" also finds "tumorigenesis")
+-- are added as whole words, so "colour" adds "color" and not color:*, which
+-- would match colorectal. At most 20 per word, to keep a short word's query
+-- small. Stable now, as it reads spelling_variants; a word with no variant
+-- gives the same query as before.
 create or replace function public.prefix_tsquery(p_q text)
 returns tsquery
 language sql
@@ -121,8 +161,8 @@ as $$
         'english',
         (select string_agg(
                     '(' || tok || ':*'
-                        || coalesce((select string_agg(' | ' || alt, '')
-                                     from public.spelling_alternatives(tok) as alt), '')
+                        || coalesce((select string_agg(' | ' || m.alt, '')
+                                     from (select alt from public.spelling_matches(tok) limit 20) m), '')
                         || ')',
                     ' & ')
          from unnest(regexp_split_to_array(lower(coalesce(p_q, '')), '[^a-z0-9]+')) as tok
@@ -131,9 +171,7 @@ as $$
 $$;
 
 -- The typed words of a filter-menu query, each with the spellings that count
--- as a match for it: its other spelling, and — for a word of 3+ letters, which
--- may be half-typed — the other spelling of every listed word it begins
--- ("tumou" -> tumor, tumors, tumorigenesis, …). Computed once per query.
+-- as a match for it (spelling_matches). Computed once per query.
 create or replace function public.typed_words(p_q text)
 returns jsonb
 language sql
@@ -141,13 +179,7 @@ stable
 set search_path = public
 as $$
     select coalesce(jsonb_agg(jsonb_build_object('w', t.w, 'alts', to_jsonb(array(
-               select public.spelling_alternatives(t.w)
-               union
-               select v.us from public.spelling_variants v
-                where length(t.w) >= 3 and v.uk like t.w || '%'
-               union
-               select v.uk from public.spelling_variants v
-                where length(t.w) >= 3 and v.us like t.w || '%'
+               select m.alt from public.spelling_matches(t.w) m
            ))) order by t.ord), '[]'::jsonb)
     from unnest(regexp_split_to_array(lower(coalesce(p_q, '')), '[^a-z0-9]+'))
          with ordinality as t(w, ord)
@@ -242,9 +274,6 @@ $$;
 -- p_tag matches the tag in either spelling, cleaned the way stored tags are
 -- (merges applied), so ?tag=tumour-microenvironment finds papers tagged
 -- tumor-microenvironment and the other way round.
-drop function if exists public.search_papers(uuid, text, text, int, int, text, text, text, text);
-drop function if exists public.search_papers_count(uuid, text, text, text, text, text);
-
 create or replace function public.search_papers(
     p_team   uuid,
     p_q      text default '',
@@ -352,6 +381,3 @@ as $$
            @@ q.tsq
       );
 $$;
-
-grant execute on function public.search_papers(uuid, text, text, int, int, text, text, text, text) to authenticated;
-grant execute on function public.search_papers_count(uuid, text, text, text, text, text)            to authenticated;

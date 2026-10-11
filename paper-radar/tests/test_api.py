@@ -884,19 +884,25 @@ def test_profile_and_tag_sourced_cards_say_so_even_near_a_saved_paper():
     assert reasons["rec-q"]["ref_label"] == ""
 
 
-def test_profile_reason_matches_us_tags_in_a_uk_spelled_profile():
-    # The database folds the profile to American spelling (us_spelling).
+def test_profile_reason_matches_tags_in_either_spelling():
+    # profile_md_us is the database's American-spelled copy (a computed column).
     uc = _FakeClient(
-        profiles=[{**_PROFILE, "profile_md": "Tumour microenvironment of breast cancer."}],
-        **{"rpc:us_spelling": "tumor microenvironment of breast cancer."},
+        profiles=[
+            {
+                **_PROFILE,
+                "profile_md": "Tumour microenvironment of breast cancer.",
+                "profile_md_us": "tumor microenvironment of breast cancer.",
+            }
+        ]
     )
-    reasons = _reasons_for(uc, [_post("rec", ["tumor-microenvironment"])], "profile")
-    assert reasons["rec"]["ref_label"] == "tumor-microenvironment"
+    posts = [_post("us", ["tumor-microenvironment"]), _post("uk", ["tumour-microenvironment"])]
+    reasons = _reasons_for(uc, posts, "profile")
+    assert reasons["us"]["ref_label"] == "tumor-microenvironment"
+    assert reasons["uk"]["ref_label"] == "tumour-microenvironment"
 
 
-def test_profile_reason_survives_the_spelling_lookup_failing():
+def test_profile_reason_without_the_us_copy_still_matches_as_written():
     uc = _FakeClient(profiles=[{**_PROFILE, "profile_md": "Tumour microenvironment."}])
-    # No rpc:us_spelling registered: the fake returns [], not text.
     reasons = _reasons_for(uc, [_post("rec", ["tumour-microenvironment"])], "profile")
     assert reasons["rec"]["ref_label"] == "tumour-microenvironment"
 

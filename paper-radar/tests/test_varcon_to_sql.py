@@ -111,15 +111,36 @@ def test_drops_latin_plurals_and_short_unverified_pairs():
     assert "jours" not in pairs  # unverified, under 6 letters
 
 
-def test_supplement_gets_the_same_checks(monkeypatch):
+def test_excluded_pairs_are_left_out():
+    sample = "# colorectal <verified> (level 50)\nA: colorectal / B: colourectal\n"
+    assert "colourectal" not in varcon.pairs(sample, max_level=80)
+
+
+def test_short_pairs_need_a_spelling_pattern():
+    sample = """\
+# net <verified> (level 35)
+A: net / B: nett
+
+# fiber <verified> (level 35)
+A: fiber / B: fibre
+"""
+    pairs = varcon.pairs(sample, max_level=80)
+    assert "nett" not in pairs  # verified, but short and no pattern explains it
+    assert pairs["fibre"] == "fiber"  # short, but -re -> -er
+
+
+def test_supplement_gets_the_format_and_ambiguity_checks(monkeypatch):
+    # Hand-checked, so no length or pattern check; the rest still applies.
     monkeypatch.setattr(
-        varcon, "SUPPLEMENT", {"tumour": "tumr", "draught": "draft", "Bad-Word": "bad", "ok": "okk"}
+        varcon,
+        "SUPPLEMENT",
+        {"tumour": "tumr", "draught": "draft", "Bad-Word": "bad", "grey": "gray"},
     )
     pairs = varcon.pairs(SAMPLE, max_level=80)
-    assert "tumour" not in pairs  # conflicts with VarCon's tumor: ambiguous, dropped
+    assert "tumour" not in pairs  # VarCon maps it to tumor: ambiguous, dropped
     assert "draught" not in pairs  # American elsewhere
     assert "Bad-Word" not in pairs
-    assert pairs["ok"] == "okk"
+    assert pairs["grey"] == "gray"
 
 
 def test_fits_pattern():

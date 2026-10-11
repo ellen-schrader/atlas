@@ -10,17 +10,23 @@ capitalised words and ambiguous mappings are dropped.
 The pairs only widen searches ("tumour" also finds "tumor"); stored tags are
 never rewritten with them. Still, a wrong pair adds noise, so:
 
+* A short British word (under 6 letters) is kept only if the usual spelling
+  patterns (_PATTERNS) turn it into the American one ("fibre" -> "fiber"):
+  short pairs that don't follow one ("nett" -> "net", "ikon" -> "icon",
+  "saki" -> "sake") add noise to short searches.
 * VarCon's unverified clusters carry archaic, Scots and fragment entries
   ("ret" -> "ert", "notre" -> "noter", "jours" -> "jors"). A pair from one is
-  kept only if the British word has at least 6 letters and turns into the
-  American one by the usual spelling patterns (_PATTERNS).
+  kept only if the British word has at least 6 letters and follows a pattern.
 * Latin plurals in -ae ("formulae", "trabeculae", "mucosae") are valid
   American spellings too; VarCon maps them to anglicised or singular-looking
   forms. They are dropped.
 
-A few biomedical words VarCon lacks are added from SUPPLEMENT, under the same
-checks as the rest. This is a modified (filtered and extended) form of VarCon;
-see THIRD_PARTY_NOTICES.md.
+EXCLUDE drops a few pairs by hand. SUPPLEMENT adds biomedical spellings VarCon lacks, and a few short ones the
+pattern check drops (grey, mould). It is checked by hand, so it skips the
+length and pattern checks, but gets the rest: one lowercase word each, and no
+British form that is American elsewhere or that VarCon maps differently. This
+is a modified (filtered and extended) form of VarCon; see
+THIRD_PARTY_NOTICES.md.
 
 Usage (from paper-radar/):
     python scripts/varcon_to_sql.py path/to/varcon.txt --max-level 80 > out.sql
@@ -57,7 +63,7 @@ _PATTERNS = [
     (re.compile(r"sulph"), "sulf"),
     (re.compile(r"mme(s)?$"), r"m\1"),
 ]
-_MIN_UNVERIFIED = 6
+_MIN_LENGTH = 6
 
 # Not VarCon: biomedical British spellings missing from it, added by hand.
 SUPPLEMENT = {
@@ -91,7 +97,19 @@ SUPPLEMENT = {
     "intratumoural": "intratumoral",
     "peritumoural": "peritumoral",
     "fibreoptic": "fiberoptic",
+    # Short words the pattern check drops, kept for biology.
+    "grey": "gray",
+    "greys": "grays",
+    "mould": "mold",
+    "moulds": "molds",
+    "mouldy": "moldy",
+    "moult": "molt",
+    "moulting": "molting",
+    "ochre": "ocher",
 }
+# VarCon pairs left out by hand: rare British forms whose American spelling
+# begins with a common word's ("colour" would also search "colorectal").
+EXCLUDE = {"colourectal"}
 _LEVEL = re.compile(r"\(level (\d+)\)")
 
 
@@ -135,7 +153,11 @@ def pairs(text: str, max_level: int) -> dict[str, str]:
         if level > max_level or len(us) != 1:
             continue
         for w in (w for tags, w in entries if tags & _BRITISH):
-            if w != us[0] and (verified or (len(w) >= _MIN_UNVERIFIED and fits_pattern(w, us[0]))):
+            if w == us[0]:
+                continue
+            fits = fits_pattern(w, us[0])
+            long = len(w) >= _MIN_LENGTH
+            if (verified and (long or fits)) or (long and fits):
                 candidates[w].add(us[0])
     for uk, us in SUPPLEMENT.items():
         candidates[uk].add(us)
@@ -149,6 +171,7 @@ def pairs(text: str, max_level: int) -> dict[str, str]:
         # (e.g. "draught" vs "draft") is ambiguous: leave it alone.
         and uk not in american
         and not uk.endswith("ae")
+        and uk not in EXCLUDE
     }
 
 
