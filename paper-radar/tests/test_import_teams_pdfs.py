@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from api.import_teams_pdfs import window_date
+import pytest
+
+# The importer needs PyMuPDF (AGPL, `legacy` extra), which CI doesn't install.
+pytest.importorskip("fitz")
+
+from api.import_teams_pdfs import window_date  # noqa: E402
 
 
 def test_window_date_months_one_to_seven_use_base_year():

@@ -1,0 +1,62 @@
+# Tests on every pull request and on main. Free: the repo is public, so standard
+# GitHub-hosted runners cost nothing.
+#
+# Covers the offline suite only. Not run here:
+#   * tests/test_mcp_isolation_integration.py — needs a local Supabase stack;
+#     run it before merging MCP changes:
+#       ATLAS_INTEGRATION=1 uv run --extra mcp --extra dev pytest tests/test_mcp_isolation_integration.py
+#   * the PyMuPDF tests — AGPL, `legacy` extra, deliberately not installed; they skip.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: these jobs only read the repo and hold no secrets. Third-party
+# actions are pinned to commit SHAs, like deploy.yml.
+permissions:
+  contents: read
+
+# A new push to a PR supersedes its previous run.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: paper-radar
+    env:
+      # Use uv's own current CPython (the version in .python-version), not the
+      # runner's system one: prod's python:3.12-slim tracks the latest 3.12 patch,
+      # and Ubuntu's 3.12.3 predates security fixes our tests rely on (CVE-2024-4032).
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: paper-radar/uv.lock
+      # --frozen: test exactly what uv.lock pins, and fail if it's out of date.
+      - run: uv sync --frozen --extra api --extra mcp --extra dev
+      - run: uv run --frozen pytest
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: paper-radar/web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: paper-radar/web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck

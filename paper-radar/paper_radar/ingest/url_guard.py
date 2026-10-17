@@ -53,7 +53,15 @@ def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     ``is_global`` as *True* for multicast (it's globally-scoped in the registry sense),
     but you must never let the server emit to a multicast group, and ``0.0.0.0`` is a
     connect-to-self footgun.
+
+    An IPv4-mapped IPv6 address (``::ffff:100.100.100.200``) connects to its IPv4
+    address, so that is what gets judged. CPython only started doing this itself in
+    3.12.4 (CVE-2024-4032); before that ``is_global`` answered for the IPv6 form and
+    waved mapped internal addresses through. Unwrapping here keeps the guard correct
+    on any Python.
     """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     return not ip.is_global or ip.is_multicast or ip.is_unspecified
 
 
