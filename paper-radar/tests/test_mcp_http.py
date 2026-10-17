@@ -53,9 +53,7 @@ def _token(**overrides) -> str:
 @pytest.fixture
 def verifier(monkeypatch):
     v = mcp_http.SupabaseTokenVerifier(SUPABASE)
-    monkeypatch.setattr(
-        v._jwks, "get_signing_key_from_jwt", lambda _t: SimpleNamespace(key=KEY.public_key())
-    )
+    monkeypatch.setattr(v, "_signing_key", lambda _t: SimpleNamespace(key=KEY.public_key()))
     return v
 
 
@@ -106,9 +104,7 @@ def test_hs256_tokens_are_refused_even_with_the_right_secret(verifier, monkeypat
         "shared-secret",
         algorithm="HS256",
     )
-    monkeypatch.setattr(
-        verifier._jwks, "get_signing_key_from_jwt", lambda _t: SimpleNamespace(key="shared-secret")
-    )
+    monkeypatch.setattr(verifier, "_signing_key", lambda _t: SimpleNamespace(key="shared-secret"))
     assert _verify(verifier, forged) is None
 
 
@@ -262,3 +258,163 @@ def test_long_texts_are_cut_before_embedding(monkeypatch):
     monkeypatch.setattr(embeddings, "embed_query", lambda text, **_: seen.append(text) or [1.0])
     lab._embed_query("x" * 10_000)  # stdio: no budget, still cut
     assert len(seen[0]) == lab._MAX_EMBED_CHARS
+
+
+def test_clock_skew_within_leeway_is_tolerated(verifier):
+    """A machine just resumed from suspend can run a little behind Supabase."""
+    soon = int(time.time()) + 10
+    assert _verify(verifier, _token(iat=soon)) is not None
+    assert _verify(verifier, _token(iat=int(time.time()) + 600)) is None
+
+
+def test_unknown_key_ids_cannot_drive_a_refetch_loop(monkeypatch):
+    """Junk tokens naming random key ids may refetch the key set at most once per
+    window — otherwise anyone could make us hammer Supabase."""
+    v = mcp_http.SupabaseTokenVerifier(SUPABASE)
+    fetches: list[bool] = []
+
+    class EmptySet:
+        def __getitem__(self, kid):
+            raise KeyError(kid)
+
+    monkeypatch.setattr(
+        v._jwks, "get_jwk_set", lambda refresh=False: fetches.append(refresh) or EmptySet()
+    )
+    for i in range(20):
+        token = jwt.encode({"sub": "x"}, KEY, algorithm="ES256", headers={"kid": f"random-{i}"})
+        assert _verify(v, token) is None
+    assert fetches.count(True) == 1  # one forced refetch for twenty unknown kids
+
+
+# --- the tools' own thread pool -------------------------------------------------------
+
+
+def test_tools_run_in_their_own_thread_pool_not_the_apis():
+    """FastAPI's sync endpoints and the Teams webhook share anyio's default pool; a
+    busy connector must not be able to take it over."""
+    import anyio
+
+    from atlas_mcp.tools import TOOL_THREADS, in_worker_thread
+
+    seen = {}
+    pools = {}
+
+    def tool():
+        seen["tools"] = TOOL_THREADS.borrowed_tokens
+        seen["default"] = pools["default"].borrowed_tokens
+
+    async def main():
+        pools["default"] = anyio.to_thread.current_default_thread_limiter()
+        await in_worker_thread(tool)()
+
+    anyio.run(main)
+    assert seen == {"tools": 1, "default": 0}
+
+
+# --- configuration ---------------------------------------------------------------------
+
+
+def test_missing_supabase_settings_say_so(monkeypatch):
+    """Not "sign-in expired", which would send users round a reconnect loop."""
+    monkeypatch.setattr(
+        mcp_http, "get_api_settings", lambda: SimpleNamespace(supabase_url="", supabase_anon_key="")
+    )
+    with pytest.raises(lab.LabError, match="misconfigured"):
+        mcp_http._pooled_client("tok")
+
+
+# --- the embedding allowance -----------------------------------------------------------
+
+
+def test_failed_embeddings_are_refunded(monkeypatch):
+    """A Voyage outage must not drain the day's allowance for everyone."""
+    monkeypatch.setattr(lab, "_embed_budget", lab._DailyBudget())
+    monkeypatch.setattr(lab, "get_api_settings", lambda: SimpleNamespace(mcp_daily_embeddings=1))
+    monkeypatch.setattr(lab, "_user_client", lambda token: "client")
+
+    def down(text, **_):
+        raise embeddings.EmbeddingError("Voyage is down")
+
+    monkeypatch.setattr(embeddings, "embed_query", down)
+    with lab.act_as("tok", "user-a"):
+        for _ in range(5):
+            with pytest.raises(embeddings.EmbeddingError, match="down"):
+                lab._embed_query("query")
+        monkeypatch.setattr(embeddings, "embed_query", lambda text, **_: [1.0])
+        assert lab._embed_query("query") == [1.0]  # the allowance is still there
+
+
+def test_empty_queries_spend_nothing(monkeypatch):
+    monkeypatch.setattr(lab, "_embed_budget", lab._DailyBudget())
+    monkeypatch.setattr(embeddings, "embed_query", lambda *a, **k: pytest.fail("embedded"))
+    with pytest.raises(lab.LabError, match="Nothing to search"):
+        lab._embed_query("   ")
+    assert lab._embed_budget._spent == 0
+
+
+# --- served by the API process ---------------------------------------------------------
+
+
+@pytest.fixture
+def api_with_connector(monkeypatch):
+    """A FastAPI app wired the way api/app.py wires the connector."""
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    monkeypatch.setattr(mcp_http, "SupabaseTokenVerifier", lambda _url: StubVerifier())
+    connector = mcp_http.Connector(PUBLIC, SUPABASE)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with connector.running():
+            yield
+
+    app = FastAPI(lifespan=lifespan)
+    app.add_middleware(CORSMiddleware, allow_origins=["https://labatlas.test"])
+    app.add_middleware(mcp_http.ConnectorHost, connector=connector)
+
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
+    return app
+
+
+def test_the_api_can_start_more_than_once(api_with_connector):
+    """Each lifespan gets a fresh server: a session manager runs only once."""
+    for _ in range(2):
+        with TestClient(api_with_connector, base_url="https://mcp.atlas.test") as client:
+            assert _rpc(client, "tools/list", token=None).status_code == 401
+
+
+def test_only_the_connector_host_reaches_it(api_with_connector):
+    with TestClient(api_with_connector, base_url="https://api.atlas.test") as api:
+        assert api.get("/health").status_code == 200
+        assert api.post("/mcp").status_code == 404
+    with TestClient(api_with_connector, base_url="https://mcp.atlas.test") as mcp:
+        assert mcp.get("/health").status_code == 404
+
+
+def test_connector_has_its_own_cors_policy(api_with_connector):
+    """The API allows only the web app's origin; the connector allows claude.ai."""
+    preflight = {
+        "origin": "https://claude.ai",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type",
+    }
+    with TestClient(api_with_connector, base_url="https://mcp.atlas.test") as mcp:
+        r = mcp.options("/mcp", headers=preflight)
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == "https://claude.ai"
+        evil = mcp.options("/mcp", headers={**preflight, "origin": "https://evil.example"})
+        assert "access-control-allow-origin" not in evil.headers
+    with TestClient(api_with_connector, base_url="https://api.atlas.test") as api:
+        r = api.options("/health", headers=preflight)
+        assert "access-control-allow-origin" not in r.headers  # the API's policy is unchanged
+
+
+def test_requests_before_startup_get_503(api_with_connector):
+    client = TestClient(api_with_connector, base_url="https://mcp.atlas.test")  # no lifespan
+    assert client.post("/mcp").status_code == 503

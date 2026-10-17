@@ -365,14 +365,28 @@ class _DailyBudget:
                 )
             self._spent += 1
 
+    def refund(self) -> None:
+        """Give back a unit whose call produced nothing (Voyage down, no key, …), so an
+        outage can't drain the day's allowance for everyone."""
+        with self._lock:
+            self._spent = max(0, self._spent - 1)
+
 
 _embed_budget = _DailyBudget()
 
 
 def _embed_query(text: str) -> list[float]:
-    if _request_session.get() is not None:  # hosted: a shared, paid quota
-        _embed_budget.spend(get_api_settings().mcp_daily_embeddings)
-    return embeddings.embed_query(text[:_MAX_EMBED_CHARS])
+    text = text.strip()[:_MAX_EMBED_CHARS]
+    if not text:
+        raise LabError("Nothing to search for — give me some words.")
+    if _request_session.get() is None:
+        return embeddings.embed_query(text)
+    _embed_budget.spend(get_api_settings().mcp_daily_embeddings)  # hosted: shared, paid
+    try:
+        return embeddings.embed_query(text)
+    except Exception:
+        _embed_budget.refund()
+        raise
 
 
 def _hydrate(client: Client, posts: list[dict]) -> list[dict]:

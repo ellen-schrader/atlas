@@ -301,6 +301,26 @@ Tests:
 - `tests/local_supabase.py`: shared OAuth and local-stack helpers for the integration
   tests.
 
+Code review (high) fixes, same PR:
+- **Own thread pools.** Tools: 8 threads (`tools.TOOL_THREADS`). Key-set fetches: 2.
+  Before, they shared anyio's default pool with FastAPI's sync endpoints and the Teams
+  webhook, so a busy or stuck connector could have starved the API.
+- **No refetch amplification.** A token naming an unknown key id refetches Supabase's
+  JWKS at most once per 5 minutes; otherwise each junk token was an outbound fetch.
+  Key fetches time out after 5 s.
+- **30 s clock leeway** on token times, for a machine just resumed from suspend.
+- **Embedding allowance.** A failed call (Voyage down, no key) is refunded; an empty
+  query is refused before spending.
+- **Misconfiguration.** Missing Supabase settings now say so, instead of looking like
+  an expired sign-in.
+- **`mcp>=1.28`** in the `api` extra (the version tested).
+- **Wiring.** The connector is now an outermost ASGI middleware (`ConnectorHost`), so
+  its requests skip the API's CORS (web-app origins only). It has its own policy
+  (claude.ai, claude.com), and each lifespan builds a fresh server, so the app can
+  start more than once (tests). The dead `build_app` is gone.
+- Tests: 27 offline (mutation-checked: the thread pool and the refetch throttle); the
+  production image was rebuilt and re-probed.
+
 **Production steps (yours; nothing goes live until M4):**
 1. Merge. The deploy mounts the connector on `mcp.labatlas.app`, which nothing can
    reach yet.

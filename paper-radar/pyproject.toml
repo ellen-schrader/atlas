@@ -49,7 +49,9 @@ api = [
     "bibtexparser>=1.4",   # .bib import (ingest/bibtex.py)
     # The hosted Claude connector (atlas_mcp/http.py) runs in this process. Just the
     # SDK and JWT verification — the mood board's Pillow/matplotlib stay in `mcp`.
-    "mcp>=1.2",
+    # >=1.28: the auth APIs atlas_mcp/http.py needs (AccessToken.subject,
+    # transport security, stateless HTTP) — the version it was built and tested on.
+    "mcp>=1.28",
     "pyjwt[crypto]>=2.8",
 ]
 # Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
