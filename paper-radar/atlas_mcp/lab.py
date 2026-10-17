@@ -812,6 +812,9 @@ def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
         if getattr(exc, "code", None) == "42501":
             raise LabError(f"You are not a member of {team['name']}.") from exc
         raise LabError(f"Could not share the paper: {exc}") from exc
+    from api.merge_suggestions import suggest_for_post  # never raises
+
+    suggest_for_post(team["id"], paper_id)
     return inserted.data[0]["id"], paper_id, False
 
 

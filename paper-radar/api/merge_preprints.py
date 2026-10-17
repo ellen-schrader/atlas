@@ -48,14 +48,17 @@ from .supa import service_client
 _PAGE = 500
 
 
-def _fetch_papers(svc) -> list[dict]:
-    """Every paper's identifying fields, oldest first."""
+_COLUMNS = "id, doi, url, title, authors, venue, edited_fields, created_at"
+
+
+def _fetch_papers(svc, columns: str = _COLUMNS) -> list[dict]:
+    """Every paper's identifying fields, oldest first. Shared with api/preprint_watch.py."""
     rows: list[dict] = []
     start = 0
     while True:
         page = (
             svc.table("papers")
-            .select("id, doi, url, title, authors, venue, edited_fields, created_at")
+            .select(columns)
             # created_at alone ties (a Teams import inserts a batch with one now()),
             # and offset paging over ties can repeat one row and skip another.
             .order("created_at")

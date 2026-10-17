@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Copy, GitMerge } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,28 @@ import { cn, formatAuthors } from "@/lib/utils";
 export function SamePaperBanner({ paperId, teamId }: { paperId: string; teamId: string }) {
   const { data: suggestions } = useMergeSuggestions(teamId);
   const [comparing, setComparing] = useState<MergeSuggestion | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [, setSearchParams] = useSearchParams();
+
+  // Merging from the preprint's own page deletes the paper on screen: show the
+  // one it became, on the page or in the modal, whichever this is.
+  function merged(s: MergeSuggestion) {
+    if (s.preprint.id !== paperId) return;
+    if (location.pathname === `/papers/${paperId}`) {
+      navigate(`/papers/${s.published.id}`, { replace: true });
+      return;
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("paper", s.published.id);
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
   const mine = (suggestions ?? []).filter(
     (s) => s.preprint.id === paperId || s.published.id === paperId,
   );
@@ -35,7 +58,7 @@ export function SamePaperBanner({ paperId, teamId }: { paperId: string; teamId: 
               <span>
                 {isPreprint
                   ? "This looks like the preprint of "
-                  : `This looks like the published version of a ${s.preprint.venue ?? ""} preprint in your lab, `}
+                  : `This looks like the published version of a preprint${s.preprint.venue ? ` on ${s.preprint.venue}` : ""} in your lab, `}
                 <strong className="font-semibold">“{other.title ?? other.url}”</strong>
                 {isPreprint && source(other) ? ` (${source(other)})` : ""}. Same paper?
               </span>
@@ -46,7 +69,12 @@ export function SamePaperBanner({ paperId, teamId }: { paperId: string; teamId: 
           </div>
         );
       })}
-      <CompareDialog suggestion={comparing} teamId={teamId} onClose={() => setComparing(null)} />
+      <CompareDialog
+        suggestion={comparing}
+        teamId={teamId}
+        onClose={() => setComparing(null)}
+        onMerged={merged}
+      />
     </>
   );
 }
@@ -105,10 +133,12 @@ function CompareDialog({
   suggestion,
   teamId,
   onClose,
+  onMerged,
 }: {
   suggestion: MergeSuggestion | null;
   teamId: string;
   onClose: () => void;
+  onMerged?: (s: MergeSuggestion) => void;
 }) {
   const decide = useDecideMergeSuggestion(teamId);
   const [busy, setBusy] = useState<"merge" | "dismiss" | null>(null);
@@ -121,6 +151,7 @@ function CompareDialog({
     try {
       await decide(suggestion.id, merge);
       onClose();
+      if (merge) onMerged?.(suggestion);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

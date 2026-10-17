@@ -68,11 +68,16 @@ def find_pairs(rows: list[dict], only: str | None = None) -> list[tuple[dict, di
         )
         side.append((row, fold(row["title"]), _author_keys(row.get("authors") or [])))
 
+    if only:
+        # A new post pairs only with the other side: narrow first, so a lab of
+        # thousands costs one pass, not every preprint against every paper.
+        if any(row["id"] == only for row, _, _ in preprints):
+            preprints = [p for p in preprints if p[0]["id"] == only]
+        else:
+            published = [p for p in published if p[0]["id"] == only]
     pairs = []
     for pre, pre_title, pre_authors in preprints:
         for pub, pub_title, pub_authors in published:
-            if only and only not in (pre["id"], pub["id"]):
-                continue
             if not (pre_authors & pub_authors):
                 continue
             matcher = SequenceMatcher(None, pre_title, pub_title)
@@ -129,8 +134,10 @@ def suggest(svc, team_id: str, only: str | None = None) -> int:
     return len(pairs)
 
 
-def suggest_for_post(team_id: str, paper_id: str) -> None:
-    """Background task after a post: suggestions involving the new paper."""
+def suggest_for_post(team_id: str, paper_id: str | None) -> None:
+    """Background task after a post: suggestions involving the new paper, or
+    the whole lab (``paper_id=None``, after an import). Every way of posting
+    calls it: the web, BibTeX imports, Teams and MCP."""
     from .supa import service_client
 
     try:

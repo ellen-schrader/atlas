@@ -497,32 +497,23 @@ def notify_preprint_published(
     preprint_venue: str | None = None,
 ) -> None:
     """Tell a lab's Teams channel that a preprint it shared has been published.
-    No-op for unmapped labs; never raises (api/preprint_watch.py)."""
-    try:
-        webhook_url = webhook_url_for_team(team_id)
-        if not webhook_url:
-            return
-        try:
-            webhook_url = validate_webhook_url(webhook_url)
-        except ValueError as exc:
-            log.warning("refusing configured Teams webhook for team %s: %s", team_id, exc)
-            return
-        where = f" in {venue}" if venue else ""
-        card = build_paper_card(
-            url=url,
-            title=title,
-            authors=authors,
-            venue=venue,
-            year=year,
-            note=(
-                f"📰 Now published{where}. Your lab shared it as a "
-                f"{preprint_venue or 'preprint'} preprint; Atlas has the published version."
-            ),
-            atlas_url=_atlas_paper_url(paper_id),
-        )
-        post_to_teams(webhook_url, card)
-    except Exception as exc:
-        log.warning("Teams 'preprint published' notice for team %s failed: %s", team_id, exc)
+    The same card, webhook checks and failure handling as a new post
+    (api/preprint_watch.py)."""
+    where = f" in {venue}" if venue else ""
+    server = f" on {preprint_venue}" if preprint_venue else ""
+    notify_paper_posted(
+        team_id,
+        url=url,
+        paper_id=paper_id,
+        title=title,
+        authors=authors,
+        venue=venue,
+        year=year,
+        note=(
+            f"📰 Now published{where}. Your lab shared it as a preprint{server}; "
+            "Atlas has the published version."
+        ),
+    )
 
 
 # === inbound: Teams channel → Atlas (M2, papers) ===========================

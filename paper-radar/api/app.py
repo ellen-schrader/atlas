@@ -2427,6 +2427,9 @@ def bibtex_import(
     # would otherwise fire 400 separate embedding requests.
     if to_embed and get_api_settings().voyage_api_key:
         background.add_task(_embed_batch, to_embed)
+    if imported:
+        # One pass over the whole lab, not one per imported paper.
+        background.add_task(merge_suggestions.suggest_for_post, req.team_id, None)
 
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
 

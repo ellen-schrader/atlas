@@ -26,6 +26,7 @@ class _Query:
 
     def upsert(self, rows, **kw):
         self.db.upserts.append((self.table, rows, kw))
+        self.db.log.append(f"upsert:{self.table}")
         return self
 
     def execute(self):
@@ -43,12 +44,14 @@ class _Db:
         self.tables = tables
         self.upserts: list = []
         self.rpcs: list = []
+        self.log: list = []
 
     def table(self, name):
         return _Query(self, name)
 
     def rpc(self, name, args):
         self.rpcs.append((name, args))
+        self.log.append(f"rpc:{name}")
         return types.SimpleNamespace(execute=lambda: None)
 
 
@@ -156,6 +159,55 @@ def _watch(monkeypatch, found, record=_RECORD):
         lambda team_id, **kw: sent.append((team_id, kw)),
     )
     return sent
+
+
+def test_people_are_told_before_the_merge_and_teams_after(monkeypatch):
+    # The merge can't be undone and takes the preprint out of tomorrow's run, so
+    # a notice that failed after it would be lost; written first, a failed merge
+    # is retried and the notice is not doubled (unique per person and paper).
+    sent = _watch(monkeypatch, ("10.1038/x", "crossref"))
+    order: list = []
+    db = _db_with_post()
+    monkeypatch.setattr(
+        preprint_watch.teams_integration,
+        "notify_preprint_published",
+        lambda team_id, **kw: order.append("teams") or sent.append(team_id),
+    )
+    row = {"id": "pre", "doi": "10.1101/1", "url": "u", "venue": "bioRxiv"}
+    preprint_watch.handle_preprint(db, row, {"10.1038/x": {"id": "pub"}}, dry_run=False)
+    assert db.log == ["upsert:notifications", "rpc:merge_papers"] and order == ["teams"]
+
+
+def test_a_failed_merge_leaves_the_notice_and_sends_no_card(monkeypatch):
+    sent = _watch(monkeypatch, ("10.1038/x", "crossref"))
+    db = _db_with_post()
+
+    def failing_rpc(name, args):
+        db.log.append(f"rpc:{name}")
+        raise RuntimeError("network")
+
+    db.rpc = failing_rpc
+    row = {"id": "pre", "doi": "10.1101/1", "url": "u", "venue": "bioRxiv"}
+    try:
+        preprint_watch.handle_preprint(db, row, {"10.1038/x": {"id": "pub"}}, dry_run=False)
+    except RuntimeError:
+        pass
+    assert db.log == ["upsert:notifications", "rpc:merge_papers"] and sent == []
+
+
+def test_the_teams_card_names_the_server_only_when_known(monkeypatch):
+    from api import teams_integration
+
+    notes: list = []
+    monkeypatch.setattr(
+        teams_integration, "notify_paper_posted", lambda team_id, **kw: notes.append(kw["note"])
+    )
+    teams_integration.notify_preprint_published(
+        "t", paper_id="p", url="u", venue="Nature", preprint_venue="arXiv"
+    )
+    teams_integration.notify_preprint_published("t", paper_id="p", url="u")
+    assert "in Nature" in notes[0] and "as a preprint on arXiv" in notes[0]
+    assert "preprint preprint" not in notes[1] and "as a preprint;" in notes[1]
 
 
 def _db_with_post():

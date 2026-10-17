@@ -4,7 +4,7 @@
 -- Isolated id space so it rolls back cleanly anywhere.
 
 begin;
-select plan(23);
+select plan(25);
 
 -- Ada and Bo in lab B1, Cy alone in lab B2.
 insert into auth.users (id, email) values
@@ -42,6 +42,11 @@ insert into public.paper_posts (paper_id, team_id, posted_by, source) values
 
 -- === promote_to_published ==================================================
 
+-- A pending suggestion treating c1 as a preprint.
+insert into public.merge_suggestions (team_id, preprint_id, published_id, score, status) values
+    ('e9000000-0000-0000-0000-0000000000b1', 'e9000000-0000-0000-0000-0000000000c1',
+     'e9000000-0000-0000-0000-0000000000c4', 0.9, 'pending');
+
 select throws_ok(
     $$ select public.promote_to_published('e9000000-0000-0000-0000-0000000000c1',
          '{"doi":"10.1016/pw-taken","url":"https://doi.org/10.1016/pw-taken","url_norm":"pw/new"}', 'crossref') $$,
@@ -69,6 +74,9 @@ select is((select embedded_at is null and enriched_at is null from public.papers
 select is((select kind || ' | ' || reason || ' | ' || doi || ' | ' || url_norm from public.paper_aliases
             where paper_id = 'e9000000-0000-0000-0000-0000000000c1'),
     'preprint | crossref | 10.1101/2025.02.02.000001 | pw/pre', 'the preprint is kept as an alias');
+select is((select count(*)::int from public.merge_suggestions
+            where preprint_id = 'e9000000-0000-0000-0000-0000000000c1'),
+    0, 'a promoted paper is no longer offered as the preprint of another');
 select is((select after ->> 'title' from public.paper_edits
             where paper_id = 'e9000000-0000-0000-0000-0000000000c1' and kind = 'resolve'),
     'Published title', 'the change is in the paper''s history');
@@ -98,6 +106,12 @@ select throws_ok(
 reset role;
 
 -- === merge suggestions =====================================================
+
+-- Ada was told about both papers of the pair: the merge must not collide.
+insert into public.notifications (id, user_id, team_id, paper_id, kind) values
+    ('e9000000-0000-0000-0000-0000000000d2', 'e9000000-0000-0000-0000-0000000000a1',
+     'e9000000-0000-0000-0000-0000000000b1', 'e9000000-0000-0000-0000-0000000000c3',
+     'preprint_published');
 
 insert into public.merge_suggestions (id, team_id, preprint_id, published_id, score) values
     ('e9000000-0000-0000-0000-0000000000e1', 'e9000000-0000-0000-0000-0000000000b1',
@@ -134,8 +148,12 @@ select is((select merged_by from public.paper_aliases where old_paper_id = 'e900
     'e9000000-0000-0000-0000-0000000000a2'::uuid, 'the alias records who merged it');
 select is((select reason from public.paper_aliases where old_paper_id = 'e9000000-0000-0000-0000-0000000000c2'),
     'manual', 'as a manual merge');
-select is((select paper_id from public.notifications where id = 'e9000000-0000-0000-0000-0000000000d1'),
-    'e9000000-0000-0000-0000-0000000000c3'::uuid, 'notifications move with the merge');
+select is((select count(*)::int from public.notifications
+            where user_id = 'e9000000-0000-0000-0000-0000000000a1'
+              and paper_id = 'e9000000-0000-0000-0000-0000000000c3'),
+    1, 'a person told about both papers keeps one notice, on the kept paper');
+select is((select count(*)::int from public.notifications where id = 'e9000000-0000-0000-0000-0000000000d1'),
+    0, 'the duplicate notice goes');
 select is((select count(*)::int from public.merge_suggestions where id = 'e9000000-0000-0000-0000-0000000000e1'), 0,
     'the suggestion goes with the preprint');
 

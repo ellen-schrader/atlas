@@ -47,6 +47,13 @@ grant select, insert, update, delete on public.notifications to service_role;
 -- Not for the Claude connector (20261017150000_connector_lockdown.sql).
 select public.close_to_connectors('public.notifications');
 
+-- === when the daily check last asked about a preprint ========================
+
+-- The check works through preprints stalest first and stops at a time budget,
+-- so a library too big for one run is covered over several. Written only by
+-- the job (service role); nothing else reads it.
+alter table public.papers add column preprint_checked_at timestamptz;
+
 -- === who merged what ========================================================
 
 -- Set when a person confirmed the merge (decide_merge_suggestion), null when a
@@ -157,6 +164,14 @@ begin
     update public.removed_posts      set paper_id = p_into where paper_id = p_from;
     update public.inbound_unresolved set resolved_paper_id = p_into where resolved_paper_id = p_from;
     update public.paper_aliases      set paper_id = p_into where paper_id = p_from;
+    -- A person told about both papers keeps the kept paper's notice.
+    delete from public.notifications s
+     where s.paper_id = p_from
+       and exists (
+           select 1 from public.notifications d
+            where d.paper_id = p_into and d.user_id = s.user_id
+              and d.team_id = s.team_id and d.kind = s.kind
+       );
     update public.notifications      set paper_id = p_into where paper_id = p_from;
 
     -- 5. Paper ids held in jsonb, without a foreign key to cascade.
@@ -309,6 +324,10 @@ begin
         enriched_at     = case when (nxt.title, nxt.abstract) is distinct from (cur.title, cur.abstract)
                                then null else cur.enriched_at end
      where id = p_paper;
+
+    -- It is not a preprint any more: a suggestion to merge it into some other
+    -- published paper would now merge two published papers.
+    delete from public.merge_suggestions where preprint_id = p_paper and status = 'pending';
 
     -- The paper's history shows what the publication changed, like a Re-resolve.
     select array_agg(k) into touched

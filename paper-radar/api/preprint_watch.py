@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from datetime import UTC, datetime
 
 from paper_radar.ingest.metadata import (
     arxiv_id_for,
@@ -38,33 +39,12 @@ from paper_radar.ingest.metadata import (
 from paper_radar.ingest.urls import _normalize_key, norm_doi
 
 from . import merge_suggestions, teams_integration
+from .merge_preprints import _fetch_papers
 from .supa import service_client
 
 log = logging.getLogger(__name__)
 
-_PAGE = 500
-_PAPER_COLUMNS = "id, doi, url, title, authors, venue, year, created_at"
-
-
-def _fetch_papers(svc) -> list[dict]:
-    rows: list[dict] = []
-    start = 0
-    while True:
-        page = (
-            svc.table("papers")
-            .select(_PAPER_COLUMNS)
-            .order("created_at")
-            .order("id")
-            .range(start, start + _PAGE - 1)
-            .execute()
-            .data
-            or []
-        )
-        rows.extend(page)
-        if len(page) < _PAGE:
-            break
-        start += _PAGE
-    return rows
+_PAPER_COLUMNS = "id, doi, url, title, authors, venue, year, created_at, preprint_checked_at"
 
 
 def published_patch(record) -> dict:
@@ -134,7 +114,14 @@ def recipients(svc, paper_id: str) -> dict[str, set[str]]:
 
 
 def notify(svc, who: dict[str, set[str]], paper_id: str, record, preprint_venue: str | None) -> int:
-    """Bell notifications and Teams cards for one publication; returns how many people."""
+    """Bell notifications for one publication; returns how many people.
+
+    Written *before* the merge or promotion they announce. Those can't be undone
+    and take the paper out of the next run's preprints, so a notice written
+    after them and lost to a network blip would be lost for good; written first,
+    a failed merge is retried tomorrow and the notice, unique per person, lab,
+    paper and kind, is not doubled.
+    """
     payload = {
         "title": record.title,
         "venue": record.venue,
@@ -156,6 +143,12 @@ def notify(svc, who: dict[str, set[str]], paper_id: str, record, preprint_venue:
         svc.table("notifications").upsert(
             rows, on_conflict="user_id,team_id,paper_id,kind", ignore_duplicates=True
         ).execute()
+    return len(rows)
+
+
+def post_cards(who: dict[str, set[str]], paper_id: str, record, preprint_venue: str | None) -> None:
+    """Teams cards, once the paper is in its published form. Best effort: a
+    card lost to a blip is not resent (the bell has the notice)."""
     for team_id in who:
         teams_integration.notify_preprint_published(
             team_id,
@@ -167,7 +160,6 @@ def notify(svc, who: dict[str, set[str]], paper_id: str, record, preprint_venue:
             year=record.year,
             preprint_venue=preprint_venue,
         )
-    return len(rows)
 
 
 def handle_preprint(svc, row: dict, by_doi: dict[str, dict], *, dry_run: bool) -> str | None:
@@ -185,10 +177,11 @@ def handle_preprint(svc, row: dict, by_doi: dict[str, dict], *, dry_run: bool) -
             print(f"  would merge ({reason}): {label} -> {owner['id']}")
             return "merge"
         who = recipients(svc, row["id"])
+        n = notify(svc, who, owner["id"], record, row.get("venue"))
         svc.rpc(
             "merge_papers", {"p_from": row["id"], "p_into": owner["id"], "p_reason": reason}
         ).execute()
-        n = notify(svc, who, owner["id"], record, row.get("venue"))
+        post_cards(who, owner["id"], record, row.get("venue"))
         print(f"  merged ({reason}): {label} -> {owner['id']}; told {n}")
         return "merge"
 
@@ -203,6 +196,7 @@ def handle_preprint(svc, row: dict, by_doi: dict[str, dict], *, dry_run: bool) -
         print(f"  would promote ({reason}) to {published_doi} ({record.venue}): {label}")
         return "promote"
     who = recipients(svc, row["id"])
+    n = notify(svc, who, row["id"], record, row.get("venue"))
     svc.rpc(
         "promote_to_published",
         {
@@ -213,7 +207,7 @@ def handle_preprint(svc, row: dict, by_doi: dict[str, dict], *, dry_run: bool) -
         },
     ).execute()
     by_doi[norm_doi(published_doi)] = row
-    n = notify(svc, who, row["id"], record, row.get("venue"))
+    post_cards(who, row["id"], record, row.get("venue"))
     print(f"  promoted ({reason}) to {published_doi} ({record.venue}): {label}; told {n}")
     return "promote"
 
@@ -241,6 +235,12 @@ def main(argv: list[str] | None = None) -> None:
         "--arxiv-delay", type=float, default=3.0, help="seconds after an arXiv lookup (its rule)"
     )
     parser.add_argument("--no-backfill", action="store_true", help="skip re-embedding and tagging")
+    parser.add_argument(
+        "--budget-minutes",
+        type=float,
+        default=20,
+        help="stop looking up preprints after this long; the rest go first next run",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -248,21 +248,35 @@ def main(argv: list[str] | None = None) -> None:
     rows = _fetch_papers(svc)
     by_doi = {norm_doi(r["doi"]): r for r in rows if r.get("doi")}
     preprints = [r for r in rows if looks_like_preprint(r.get("doi"), r.get("url"), r.get("venue"))]
+    # Stalest first: never-checked, then longest ago. With the time budget below,
+    # a library too big for one run is covered over several, instead of the
+    # same first few hundred every day and the rest never.
+    preprints.sort(key=lambda r: r.get("preprint_checked_at") or "")
     if args.limit:
         preprints = preprints[: args.limit]
     print(f"Preprints to look up: {len(preprints)}")
+    deadline = time.monotonic() + args.budget_minutes * 60
 
     done = {"merge": 0, "promote": 0}
     failed = 0
+    checked = 0
     for row in preprints:
+        if time.monotonic() > deadline:
+            print(f"  time budget spent; {len(preprints) - checked} left for the next run")
+            break
+        checked += 1
         doi, url = row.get("doi"), row.get("url")
         if not (doi or arxiv_id_for(doi, url)):
             continue
         try:
             outcome = handle_preprint(svc, row, by_doi, dry_run=args.dry_run)
+            if outcome is None and not args.dry_run:
+                svc.table("papers").update(
+                    {"preprint_checked_at": datetime.now(UTC).isoformat()}
+                ).eq("id", row["id"]).execute()
         except Exception as exc:  # noqa: BLE001 -- one bad paper must not stop the run
             failed += 1
-            print(f"  ! {row['id']} failed, left as is: {exc}")
+            print(f"  ! {row['id']} failed, left for the next run: {exc}")
             outcome = None
         if outcome:
             done[outcome] += 1
@@ -283,8 +297,10 @@ def main(argv: list[str] | None = None) -> None:
         f"Done ({verb}): merged={done['merge']} promoted={done['promote']} "
         f"likely-pairs={suggested} failed={failed}"
     )
-    if not (args.dry_run or args.no_backfill) and (done["merge"] or done["promote"]):
-        # Merged and promoted papers may have a new title or abstract.
+    if not (args.dry_run or args.no_backfill):
+        # Papers merged or promoted here, and merges a member confirmed in the
+        # app since the last run, may have a new title or abstract. A no-op when
+        # nothing is waiting.
         from . import backfill_embeddings, backfill_enrichment
 
         steps = ((backfill_embeddings.main, []), (backfill_enrichment.main, ["--batch-size", "5"]))
