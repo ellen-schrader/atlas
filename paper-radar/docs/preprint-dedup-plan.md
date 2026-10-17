@@ -2,7 +2,7 @@
 
 Status: PR 1 built (migration `20261017120000_paper_aliases.sql`,
 `api/merge_preprints.py`, #129). PR 2 built (ingest, `api/paper_identity.py`,
-preprint venues and labels). PR 3: lowercase DOIs enforced. PR 4 to follow.
+preprint venues and labels). PR 3: DOI form enforced. PR 4 to follow.
 
 ## Why
 
@@ -110,12 +110,14 @@ server as `PB`.
    link the preprint. The alias the web dialog posts back is trusted as far as
    the fields it posts with are: both come from /resolve, and a member could
    already store any title under any link.
-3. **DOIs stored lowercase, enforced** (built). With no DOI-case duplicates
-   left on prod, `20261017140000_doi_lowercase.sql` adds `check (doi =
-   lower(doi))` instead of the planned unique index on `lower(doi)`: the
-   existing unique constraint is then case-insensitive in effect, and every
-   DOI lookup — which folds — finds what is stored. `_repair_untitled` was the
-   one writer that did not fold.
+3. **DOIs stored in `norm_doi` form, enforced** (built, #134). With no
+   DOI-case duplicates left on prod, `20261017140000_doi_normalised.sql` adds a
+   SQL `norm_doi` mirroring the Python one and checks `papers.doi` and
+   `paper_aliases.doi` against it, instead of the planned unique index on
+   `lower(doi)`: the existing unique constraint is then case-insensitive in
+   effect, and every DOI lookup finds what is stored. `_repair_untitled`, the
+   one writer that did not fold, now does — and fills only blank fields, and
+   no DOI another paper or alias holds.
 4. **"Your preprint has been published" alerts.** A scheduled run (GitHub
    Actions cron, free) of the check, notifying everyone in a lab who posted or
    saved the preprint, in-app and in Teams. The same run should turn a stored

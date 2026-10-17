@@ -4,7 +4,7 @@
 -- Isolated id space so it rolls back cleanly anywhere.
 
 begin;
-select plan(32);
+select plan(33);
 
 -- Ada and Bo in lab B1, Cy alone in lab B2.
 -- P1 = preprint (bioRxiv), P2 = published. B1 posted both, B2 only the preprint.
@@ -161,6 +161,8 @@ select is((select title || '/' || (authors ->> 0) || '/' || year from public.pap
     'Case title/Ada Lovelace/2024', 'an empty title, authors and year are filled from the first merge');
 select is((select venue from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
     null, 'the venue is never taken from the old row');
+select is((select doi from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
+    null, 'nor the DOI: it stays on the alias, where ingest finds it');
 
 -- Guards.
 select throws_ok(

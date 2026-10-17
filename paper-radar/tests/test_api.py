@@ -621,20 +621,34 @@ def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
     from paper_radar.ingest.metadata import PaperMetadata
 
     patches: list[dict] = []
+    owners: dict[str, str] = {}  # doi -> id of the paper already holding it
 
     class _Svc:
+        def __init__(self):
+            self.filters = {}
+
         def table(self, _n):
+            self.filters = {}
+            return self
+
+        def select(self, *_a):
             return self
 
         def update(self, patch):
             patches.append(patch)
             return self
 
-        def eq(self, *_a):
+        def eq(self, col, val):
+            self.filters[col] = val
+            return self
+
+        def limit(self, *_a):
             return self
 
         def execute(self):
-            return type("R", (), {"data": []})()
+            doi = self.filters.get("doi")
+            hit = [{"id": owners[doi]}] if doi in owners else []
+            return type("R", (), {"data": hit})()
 
     monkeypatch.setattr(app_mod, "service_client", lambda: _Svc())
 
@@ -649,12 +663,28 @@ def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
     assert app_mod._repair_untitled({"id": "p2", "title": "Real title"}, typed) is False
     assert len(patches) == 1
 
-    # The DOI is stored folded: papers.doi refuses anything else (papers_doi_lowercase).
+    # The DOI is stored folded: papers.doi refuses anything else (papers_doi_normalised).
     resolved = PaperMetadata(
-        url="u", title="T", doi="10.1158/2159-8290.CD-25-1745", source="crossref"
+        url="u", title="T", doi="10.1158/2159-8290.CD-25-1745", venue="Cancer Discov", year=2026
     )
     assert app_mod._repair_untitled({"id": "p3", "title": None}, resolved) is True
     assert patches[1]["doi"] == "10.1158/2159-8290.cd-25-1745"
+
+    # Only blanks are filled: a row found through an alias keeps its own DOI and venue.
+    row = {"id": "p4", "title": None, "doi": "10.1038/own", "venue": "Nature", "year": None}
+    assert app_mod._repair_untitled(row, resolved) is True
+    assert "doi" not in patches[2] and "venue" not in patches[2]
+    assert patches[2]["year"] == 2026
+
+    # A DOI another paper holds is left off; the title still lands.
+    owners["10.1158/2159-8290.cd-25-1745"] = "other"
+    assert app_mod._repair_untitled({"id": "p5", "title": None}, resolved) is True
+    assert "doi" not in patches[3] and patches[3]["title"] == "T"
+
+    # A DOI that folds to nothing never blanks anything.
+    blank = PaperMetadata(url="u", title="T", doi="")
+    assert app_mod._repair_untitled({"id": "p6", "title": None, "doi": "10.1/x"}, blank)
+    assert "doi" not in patches[4]
 
 
 def test_norm_doi_casefolds_and_strips_resolver_prefix():
