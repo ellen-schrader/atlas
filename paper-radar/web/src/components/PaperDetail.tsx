@@ -32,6 +32,7 @@ import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, normaliseTag, safeHref } from "@/lib/utils";
+import { SamePaperBanner } from "@/components/MergeSuggestions";
 import { PreprintBadge, PreprintVersionLink } from "@/components/PreprintBadge";
 import { usePreprintLinks } from "@/hooks/usePreprintLinks";
 import { isPreprintVenue } from "@/lib/preprint";
@@ -138,6 +139,7 @@ export function PaperDetail({
                 <PreprintVersionLink preprint={preprint} />
               </div>
             )}
+            <SamePaperBanner paperId={p.id} teamId={teamId} />
 
             {/* Two clusters, so the row is navigable rather than six equal buttons.
                 Left: what you do with the paper and your own state on it. Right,

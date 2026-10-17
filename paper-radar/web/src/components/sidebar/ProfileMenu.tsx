@@ -13,7 +13,7 @@ import {
   Sun,
 } from "lucide-react";
 
-import { NotificationsList, useUnseenMentions } from "@/components/NotificationsBell";
+import { NotificationsList, useUnseenNotifications } from "@/components/NotificationsBell";
 import { useTheme, type Theme } from "@/components/ThemeProvider";
 import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
@@ -79,7 +79,7 @@ export function ProfileMenu({
   // The collapsed bar has no bell, so its menu carries notifications instead,
   // and the avatar wears the unread dot the bell would have.
   const withNotifications = variant === "avatar";
-  const unseen = useUnseenMentions(userId).length;
+  const unseen = useUnseenNotifications(userId).length;
 
   const close = (returnFocus: boolean) => {
     setOpen(false);

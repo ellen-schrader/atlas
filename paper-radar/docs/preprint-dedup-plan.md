@@ -2,7 +2,7 @@
 
 Status: PR 1 built (migration `20261017120000_paper_aliases.sql`,
 `api/merge_preprints.py`, #129). PR 2 built (ingest, `api/paper_identity.py`,
-preprint venues and labels). PR 3: DOI form enforced. PR 4 to follow.
+preprint venues and labels). PR 3: DOI form enforced (#134). PR 4: daily check, alerts and merge suggestions.
 
 ## Why
 
@@ -118,9 +118,17 @@ server as `PB`.
    effect, and every DOI lookup finds what is stored. `_repair_untitled`, the
    one writer that did not fold, now does — and fills only blank fields, and
    no DOI another paper or alias holds.
-4. **"Your preprint has been published" alerts.** A scheduled run (GitHub
-   Actions cron, free) of the check, notifying everyone in a lab who posted or
-   saved the preprint, in-app and in Teams. The same run should turn a stored
-   preprint whose published version is *not* in Atlas into that version in
-   place (with an alias), and do the same for old arXiv rows that hold their
-   journal DOI — the two cases `merge_preprints.py` only reports today.
+4. **"Your preprint has been published" alerts and "same paper?" suggestions**
+   (built). `api/preprint_watch.py` runs daily
+   (`.github/workflows/preprint-watch.yml`, secrets in the `production`
+   environment). For each preprint with a stated published version: merge into
+   it if Atlas holds it, otherwise `promote_to_published` turns the preprint
+   into it in place (same id; the preprint becomes an alias) — which also
+   covers old arXiv rows holding their journal DOI. Whoever posted the
+   preprint, saved it or started reading it gets a `notifications` row (shown
+   in the bell beside @mentions); labs with Teams get a card. Pairs nothing
+   links but that look alike (title similarity ≥ 0.85 and a shared first or
+   last author) become `merge_suggestions`, also checked when a paper is
+   posted; any lab member answers them from the paper page or the Library's
+   "Possible duplicates" (`decide_merge_suggestion`), and a dismissed pair is
+   never suggested again.

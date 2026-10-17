@@ -5,15 +5,54 @@ import { Bell } from "lucide-react";
 import { useDismissable } from "@/hooks/useDismissable";
 import { useMentionActions } from "@/hooks/useMentionActions";
 import { useMentions } from "@/hooks/useMentions";
+import { usePaperNoticeActions, usePaperNotices } from "@/hooks/usePaperNotices";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
-/** Unseen mentions, for the bell and for the collapsed bar's avatar dot. */
-export function useUnseenMentions(userId: string) {
-  const { data: mentions } = useMentions(userId);
-  return (mentions ?? []).filter((m) => !m.seen_at);
+/** One row in the bell: an @-mention, or a preprint that has been published. */
+interface Unseen {
+  key: string;
+  kind: "mention" | "published";
+  paperId: string;
+  createdAt: string;
+  title: string;
+  /** For "published": where, e.g. "Nature · 2026". */
+  detail?: string;
+  /** What to mark seen: the mention's paper, or the notice's id. */
+  seenId: string;
 }
 
-/** "Mark all read" and the unseen mentions. Opening one shows the paper (via the
+/** Everything unseen, newest first: for the bell and for the collapsed bar's
+ *  avatar dot. */
+export function useUnseenNotifications(userId: string): Unseen[] {
+  const { data: mentions } = useMentions(userId);
+  const { data: notices } = usePaperNotices(userId);
+  const items: Unseen[] = [
+    ...(mentions ?? [])
+      .filter((m) => !m.seen_at)
+      .map((m) => ({
+        key: `m-${m.id}`,
+        kind: "mention" as const,
+        paperId: m.paper_id,
+        createdAt: m.created_at,
+        title: m.papers?.title ?? "A paper",
+        seenId: m.paper_id,
+      })),
+    ...(notices ?? [])
+      .filter((n) => !n.seen_at)
+      .map((n) => ({
+        key: `n-${n.id}`,
+        kind: "published" as const,
+        paperId: n.paper_id,
+        createdAt: n.created_at,
+        title: n.payload.title ?? "A preprint",
+        detail: [n.payload.venue, n.payload.year].filter(Boolean).join(" · ") || undefined,
+        seenId: n.id,
+      })),
+  ];
+  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** "Mark all read" and everything unseen. Opening one shows the paper (via the
  *  ?paper= route) and marks it seen. `inMenu` makes the rows menu items, for the
  *  copy that lives inside the profile menu. */
 export function NotificationsList({
@@ -27,13 +66,19 @@ export function NotificationsList({
   onMarkedAll?: () => void;
   inMenu?: boolean;
 }) {
-  const unseen = useUnseenMentions(userId);
-  const { markSeen, markAllSeen } = useMentionActions(userId);
+  const unseen = useUnseenNotifications(userId);
+  const mentions = useMentionActions(userId);
+  const notices = usePaperNoticeActions(userId);
   const [, setSearchParams] = useSearchParams();
   const role = inMenu ? "menuitem" : undefined;
 
-  function openMention(paperId: string) {
-    void markSeen(paperId);
+  function markAllSeen() {
+    return Promise.all([mentions.markAllSeen(), notices.markAllSeen()]);
+  }
+
+  function open(item: Unseen) {
+    const paperId = item.paperId;
+    void (item.kind === "mention" ? mentions.markSeen(item.seenId) : notices.markSeen(item.seenId));
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set("paper", paperId);
@@ -65,17 +110,18 @@ export function NotificationsList({
         <div className="max-h-80 overflow-y-auto">
           {unseen.map((m) => (
             <button
-              key={m.id}
+              key={m.key}
               role={role}
-              onClick={() => openMention(m.paper_id)}
+              onClick={() => open(m)}
               className="flex w-full flex-col gap-0.5 border-b border-border px-3 py-2.5 text-left transition last:border-0 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
             >
               <span className="text-eyebrow font-bold uppercase tracking-eyebrow text-accent">
-                Mentioned you
+                {m.kind === "mention" ? "Mentioned you" : "Preprint published"}
               </span>
-              <span className="line-clamp-2 text-sm font-medium">{m.papers?.title ?? "A paper"}</span>
-              <span className="text-xs text-muted" title={formatDate(m.created_at)}>
-                {formatRelative(m.created_at)}
+              <span className="line-clamp-2 text-sm font-medium">{m.title}</span>
+              {m.detail && <span className="text-xs text-muted">Now in {m.detail}</span>}
+              <span className="text-xs text-muted" title={formatDate(m.createdAt)}>
+                {formatRelative(m.createdAt)}
               </span>
             </button>
           ))}
@@ -85,7 +131,7 @@ export function NotificationsList({
   );
 }
 
-/** Bell with an unread dot and a dropdown of unseen mentions. */
+/** Bell with an unread dot and a dropdown of unseen mentions and notices. */
 export function NotificationsBell({
   userId,
   align = "left",
@@ -95,7 +141,7 @@ export function NotificationsBell({
   align?: "left" | "right";
   className?: string;
 }) {
-  const unseen = useUnseenMentions(userId);
+  const unseen = useUnseenNotifications(userId);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
