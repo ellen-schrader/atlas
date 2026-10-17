@@ -3,6 +3,8 @@ import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
+import { PreprintBadge } from "@/components/PreprintBadge";
+import { isPreprintVenue } from "@/lib/preprint";
 
 /** Compact one-line paper row for dense lists (e.g. "Recently posted"). An unread
  *  dot + full-strength title distinguishes new papers; read ones dim. Metadata is
@@ -67,6 +69,7 @@ export function PaperListRow({
         <span className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted">
           {p.venue && <span className="font-semibold uppercase tracking-wide">{p.venue}</span>}
           {p.year != null && <span>· {p.year}</span>}
+          {isPreprintVenue(p.venue) && <PreprintBadge />}
           {tags.length > 0 && <span className="truncate text-faint">· {tags.join(", ")}</span>}
         </span>
       </span>

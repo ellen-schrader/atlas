@@ -439,8 +439,8 @@ def test_parse_crossref_reads_the_published_version_of_a_preprint():
     m = parse_crossref(_PREPRINT_MSG, "https://x")
     assert m.is_preprint
     assert m.published_doi == "10.1038/s41586-025-00001-x"
-    # The venue is left as Crossref has it: a venue-less paper exports as @misc.
-    assert m.venue is None
+    # Crossref names the server under "institution", not as a container title.
+    assert m.venue == "bioRxiv"
 
 
 def test_parse_crossref_marks_an_unpublished_preprint():
@@ -559,3 +559,62 @@ def test_relation_dois_are_normalised():
         "relation": {"is-preprint-of": [{"id-type": "doi", "id": "https://doi.org/10.1038/ABC"}]},
     }
     assert parse_crossref(msg, "https://x").published_doi == "10.1038/abc"
+
+
+# --- preprint venues and the published record (PR 2) --------------------------
+
+
+def test_arxiv_rows_get_arxivs_own_doi(monkeypatch):
+    atom = b"""<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+      <entry><title>Attention</title><published>2017-06-12T00:00:00Z</published>
+      <author><name>A. Vaswani</name></author>
+      <arxiv:doi>10.5555/3295222.3295349</arxiv:doi></entry></feed>"""
+    monkeypatch.setattr(metadata_module, "_get", lambda url, browser=False: atom)
+    meta = fetch_metadata("https://arxiv.org/abs/1706.03762v7")
+    assert meta.doi == "10.48550/arxiv.1706.03762"
+    assert meta.published_doi == "10.5555/3295222.3295349"
+    assert meta.venue == "arXiv" and meta.is_preprint
+
+
+def test_preprint_server_by_host_then_prefix():
+    ps = metadata_module.preprint_server
+    assert ps("10.1101/2025.01.01.1", "https://www.medrxiv.org/content/10.1101/x") == "medRxiv"
+    assert ps("10.1101/2025.01.01.1", "https://doi.org/10.1101/2025.01.01.1") is None
+    assert ps("10.21203/rs.3.rs-1/v1", None) == "Research Square"
+    assert ps("10.1038/x", "https://www.nature.com/x") is None
+
+
+def test_is_preprint_venue():
+    yes = ("bioRxiv", "medRxiv", "arXiv", "SSRN Electronic Journal", "Research Square")
+    assert all(metadata_module.is_preprint_venue(v) for v in yes)
+    assert not any(metadata_module.is_preprint_venue(v) for v in ("Nature", "Cell", None, ""))
+
+
+def test_published_record_fetches_the_published_version(monkeypatch):
+    published_msg = {
+        "title": ["A spatial atlas, published"],
+        "container-title": ["Nature"],
+        "DOI": "10.1038/s41586-025-00001-x",
+        "abstract": "<jats:p>Published abstract.</jats:p>",
+    }
+
+    def fake_get(url, browser=False):
+        assert "10.1038" in url
+        return json.dumps({"message": published_msg}).encode()
+
+    monkeypatch.setattr(metadata_module, "_get", fake_get)
+    preprint = parse_crossref(_PREPRINT_MSG, "https://www.biorxiv.org/content/x")
+    record, reason = metadata_module.published_record(preprint)
+    assert record.title == "A spatial atlas, published" and record.venue == "Nature"
+    assert record.url == "https://doi.org/10.1038/s41586-025-00001-x"
+    assert reason == "crossref"
+
+
+def test_published_record_leaves_an_unpublished_preprint(monkeypatch):
+    monkeypatch.setattr(
+        metadata_module, "_get", lambda url, browser=False: json.dumps({"collection": []}).encode()
+    )
+    preprint = parse_crossref({**_PREPRINT_MSG, "relation": {}}, "https://x")
+    assert metadata_module.published_record(preprint) is None
+    published = parse_crossref({"title": ["T"], "DOI": "10.1038/y", "type": "journal-article"}, "x")
+    assert metadata_module.published_record(published) is None

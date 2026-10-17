@@ -4,7 +4,9 @@ import { Chip } from "@/components/Chip";
 import { Cover } from "@/components/Cover";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { SelectCheckbox } from "@/components/ExportBar";
+import { PreprintVersionLink } from "@/components/PreprintBadge";
 import { SourceLabel } from "@/components/SourceLabel";
+import type { PreprintLink } from "@/lib/preprint";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 
@@ -26,6 +28,7 @@ export function PaperCard({
   selecting = false,
   selected = false,
   onToggleSelect,
+  preprint,
 }: {
   post: PaperPost;
   reactions?: number;
@@ -42,6 +45,8 @@ export function PaperCard({
   selecting?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+  /** The preprint of a published paper, linked under the source line. */
+  preprint?: PreprintLink;
 }) {
   const p = post.papers;
   const posterName = post.posted_by_label ?? post.poster?.display_name ?? null;
@@ -92,7 +97,10 @@ export function PaperCard({
 
       <div className="flex flex-1 flex-col gap-2.5 p-4">
         <div className="flex items-start justify-between gap-2">
-          <SourceLabel venue={p.venue} year={p.year} />
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+            <SourceLabel venue={p.venue} year={p.year} />
+            {preprint && !selecting && <PreprintVersionLink preprint={preprint} />}
+          </div>
           {read === false && (
             <span
               aria-label="Unread"

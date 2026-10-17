@@ -10,6 +10,7 @@
  */
 
 import { slugify } from "@/lib/utils";
+import { isPreprintVenue } from "@/lib/preprint";
 
 export interface ExportPaper {
   id: string;
@@ -97,14 +98,16 @@ function toBibtex(papers: ExportPaper[], opts: ExportOptions): string {
   return papers
     .map((p) => {
       const key = uniqueKey(bibKey(p), used);
-      // @article requires a journal, so an entry without a venue is @misc — that's
-      // the preprint case (a venue-less paper), regardless of whether it has a year.
-      const type = p.venue ? "article" : "misc";
+      // @article requires a journal, so an entry without a venue is @misc — and so
+      // is a preprint, whose venue is its server ("bioRxiv"), not a journal: it goes
+      // in howpublished, where reference managers expect a preprint's server.
+      const preprint = isPreprintVenue(p.venue);
+      const type = p.venue && !preprint ? "article" : "misc";
       const fields: [string, string][] = [];
       if (p.title) fields.push(["title", p.title]);
       if (p.authors.length) fields.push(["author", p.authors.map(bibEscape).join(" and ")]);
       if (p.year != null) fields.push(["year", String(p.year)]);
-      if (p.venue) fields.push(["journal", p.venue]);
+      if (p.venue) fields.push([preprint ? "howpublished" : "journal", p.venue]);
       const doi = p.doi ? bareDoi(p.doi) : null;
       if (doi) fields.push(["doi", doi]);
       const link = p.url ?? (doi ? `https://doi.org/${doi}` : null);
@@ -126,16 +129,18 @@ function toBibtex(papers: ExportPaper[], opts: ExportOptions): string {
 
 // RIS is a line-based tag format (EndNote, Mendeley, ProCite). One record per
 // paper, TY first and ER last; every value must be single-line, so newlines in a
-// title or abstract are collapsed. JOUR for a venue-backed paper, GEN otherwise
-// (the preprint case), mirroring the @article/@misc split in BibTeX.
+// title or abstract are collapsed. JOUR for a journal paper, GEN for a preprint
+// or a paper with no venue, mirroring the @article/@misc split in BibTeX; a
+// preprint's server goes in PB (publisher) rather than JO (journal).
 function toRis(papers: ExportPaper[], opts: ExportOptions): string {
   return papers
     .map((p) => {
-      const lines = [`TY  - ${p.venue ? "JOUR" : "GEN"}`];
+      const preprint = isPreprintVenue(p.venue);
+      const lines = [`TY  - ${p.venue && !preprint ? "JOUR" : "GEN"}`];
       if (p.title) lines.push(`TI  - ${collapse(p.title)}`);
       for (const a of p.authors) lines.push(`AU  - ${risAuthor(a)}`);
       if (p.year != null) lines.push(`PY  - ${p.year}`);
-      if (p.venue) lines.push(`JO  - ${collapse(p.venue)}`);
+      if (p.venue) lines.push(`${preprint ? "PB" : "JO"}  - ${collapse(p.venue)}`);
       const doi = p.doi ? bareDoi(p.doi) : null;
       if (doi) lines.push(`DO  - ${doi}`);
       const link = paperLink(p);

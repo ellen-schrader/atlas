@@ -331,23 +331,21 @@ def _fetch_arxiv(arxiv_id: str, url: str) -> PaperMetadata | None:
     summary_el = entry.find("a:summary", ns)
     abstract = _clean_text(summary_el.text) if summary_el is not None else None
     keywords = [c.get("term") for c in entry.findall("a:category", ns) if c.get("term")]
+    # <arxiv:doi> is the *journal* DOI the authors recorded, not arXiv's own.
     doi_el = entry.find("arxiv:doi", ns)
-    doi = doi_el.text.strip() if doi_el is not None and doi_el.text else None
+    journal_doi = doi_el.text.strip() if doi_el is not None and doi_el.text else None
     return PaperMetadata(
         url=url,
         title=title,
         authors=authors,
         venue="arXiv",
         year=year,
-        doi=doi,
+        doi=f"10.48550/arxiv.{arxiv_id.lower()}",
         abstract=abstract,
         keywords=keywords,
         source="arxiv",
         is_preprint=True,
-        # The journal DOI the authors recorded on arXiv. It is also still the
-        # row's `doi` for now; giving arXiv rows their own DOI comes with the
-        # ingest changes (docs/preprint-dedup-plan.md, PR 2).
-        published_doi=norm_doi(doi),
+        published_doi=norm_doi(journal_doi),
     )
 
 
@@ -368,8 +366,11 @@ def parse_crossref(msg: dict, url: str) -> PaperMetadata:
         " ".join(p for p in (a.get("given"), a.get("family")) if p) for a in msg.get("author", [])
     ]
     venue = (msg.get("container-title") or [None])[0]
-    # Preprint servers register their records as "posted-content".
+    # Preprint servers register their records as "posted-content", with the
+    # server's name under "institution" rather than as a container title.
     is_preprint = msg.get("type") == "posted-content"
+    if is_preprint and not venue:
+        venue = ((msg.get("institution") or [{}])[0] or {}).get("name")
     published = _relation_dois(msg, "is-preprint-of")
     year = None
     for key in ("published-print", "published-online", "issued", "created"):
@@ -706,6 +707,52 @@ PREPRINT_DOI_PREFIXES = (
 )
 
 
+# (name, DOI prefix, URL host) per server. bioRxiv and medRxiv share their DOI
+# prefixes, so only the host tells them apart.
+_PREPRINT_SERVERS = (
+    ("bioRxiv", None, "biorxiv.org"),
+    ("medRxiv", None, "medrxiv.org"),
+    ("arXiv", "10.48550/", "arxiv.org"),
+    ("Research Square", "10.21203/", "researchsquare.com"),
+    ("SSRN", "10.2139/", "ssrn.com"),
+    ("Preprints.org", "10.20944/", "preprints.org"),
+    ("OSF Preprints", "10.31219/", "osf.io"),
+    ("Authorea", "10.22541/", "authorea.com"),
+)
+# A venue naming a preprint server. Mirrored in web/src/lib/preprint.ts, which
+# labels cards and exports from the venue alone.
+_PREPRINT_VENUE_RE = re.compile(
+    r"\b(?:bio|med)rxiv\b|\barxiv\b|research square|\bssrn\b|preprints\.org|osf preprints|authorea",
+    re.IGNORECASE,
+)
+
+
+def preprint_server(doi: str | None, url: str | None) -> str | None:
+    """The preprint server a paper is on, from its URL host or DOI prefix."""
+    host = urlsplit(url or "").netloc.lower()
+    for name, _prefix, server_host in _PREPRINT_SERVERS:
+        if host == server_host or host.endswith("." + server_host):
+            return name
+    key = norm_doi(doi) or ""
+    for name, prefix, _host in _PREPRINT_SERVERS:
+        if prefix and key.startswith(prefix):
+            return name
+    return None
+
+
+def is_preprint_venue(venue: str | None) -> bool:
+    return bool(venue and _PREPRINT_VENUE_RE.search(venue))
+
+
+def looks_like_preprint(doi: str | None, url: str | None, venue: str | None) -> bool:
+    """True if a stored paper is a preprint, judged by its DOI, URL or venue."""
+    return (
+        (norm_doi(doi) or "").startswith(PREPRINT_DOI_PREFIXES)
+        or preprint_server(doi, url) is not None
+        or is_preprint_venue(venue)
+    )
+
+
 def parse_biorxiv_pubs(payload: bytes | dict) -> str | None:
     """The published DOI in a bioRxiv/medRxiv ``/pubs`` API reply, or None."""
     try:
@@ -725,6 +772,37 @@ def _fetch_biorxiv_published(doi: str) -> str | None:
         if raw is not None and (published := parse_biorxiv_pubs(raw)):
             return published
     return None
+
+
+def published_record(meta: PaperMetadata) -> tuple[PaperMetadata, str] | None:
+    """The published version of a preprint just resolved, and what linked them.
+
+    Uses the link ``meta`` already carries (Crossref's is-preprint-of, arXiv's
+    journal DOI) and asks bioRxiv's API only when it carries none. Returns None
+    for a paper that is not a preprint, has not been published, or whose
+    published DOI Crossref cannot resolve -- the preprint is then stored as is.
+    """
+    if not meta.is_preprint:
+        return None
+    published = meta.published_doi
+    reason = "arxiv" if meta.source == "arxiv" else "crossref"
+    doi = norm_doi(meta.doi)
+    if not published and doi and doi.startswith(RXIV_DOI_PREFIXES):
+        published, reason = _fetch_biorxiv_published(doi), "biorxiv"
+    if not published:
+        return None
+    record = _fetch_crossref(published, f"https://doi.org/{published}")
+    if record is None or not record.title:
+        return None
+    if not record.abstract and (extra := _fetch_europepmc(published, record.url)):
+        _merge(record, extra)
+    return record, reason
+
+
+def crossref_venue(doi: str) -> str | None:
+    """The venue Crossref gives a DOI: its journal, or a preprint's server."""
+    meta = _fetch_crossref(doi, f"https://doi.org/{doi}")
+    return meta.venue if meta else None
 
 
 def arxiv_id_for(doi: str | None, url: str | None) -> str | None:
@@ -833,5 +911,11 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
                 meta.keywords = keywords
         if not meta.abstract and meta.doi and (extra := _fetch_europepmc(meta.doi, url)):
             _merge(meta, extra)
+
+    # 4) A preprint is labelled with its server, whichever source resolved it.
+    if not meta.venue:
+        meta.venue = preprint_server(meta.doi, url)
+    if looks_like_preprint(meta.doi, url, meta.venue):
+        meta.is_preprint = True
 
     return meta

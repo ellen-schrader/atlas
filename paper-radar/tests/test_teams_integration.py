@@ -509,7 +509,11 @@ def test_plan_skips_non_paper_hosts(monkeypatch):
 
 
 def test_plan_new_when_paper_not_in_lab(monkeypatch):
-    monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"papers": [], "paper_aliases": []}),
+    )
     plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
     assert plan.status == "new" and plan.url == "https://arxiv.org/abs/2401.01234"
 
@@ -684,7 +688,11 @@ def test_new_reply_is_hedged_and_links_the_papers_feed(monkeypatch):
 
 
 def test_plan_skips_thumbnail_assets_and_picks_the_paper_link(monkeypatch):
-    monkeypatch.setattr(teams_integration, "service_client", lambda: _FakeClient({"papers": []}))
+    monkeypatch.setattr(
+        teams_integration,
+        "service_client",
+        lambda: _FakeClient({"papers": [], "paper_aliases": []}),
+    )
     plan = teams_integration.plan_inbound_import(
         "t1",
         "https://marlin-prod.literatumonline.com/cover.jpg then "
@@ -749,7 +757,8 @@ def test_plan_retries_once_when_the_pooled_connection_is_stale(monkeypatch):
 
     monkeypatch.setattr(teams_integration, "service_client", lambda: _FlakyClient())
     plan = teams_integration.plan_inbound_import("t1", "@Atlas https://arxiv.org/abs/2401.01234")
-    assert plan.status == "new" and calls["n"] == 2
+    # The papers lookup failed once and was retried; then the alias lookup.
+    assert plan.status == "new" and calls["n"] == 3
 
 
 def test_inbound_secret_for_team(monkeypatch):
@@ -815,6 +824,9 @@ def _fake_meta(**kw):
         authors=[],
         venue=None,
         year=None,
+        is_preprint=False,
+        published_doi=None,
+        preprint_dois=[],
         keywords=[],
         source="arxiv",
     )
@@ -826,7 +838,7 @@ def test_import_background_inserts_teams_post_with_sender_label(monkeypatch):
     import api.app as app_mod
 
     monkeypatch.setattr(teams_integration, "fetch_metadata", lambda url, **kw: _fake_meta())
-    monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm: ("p1", False))
+    monkeypatch.setattr(app_mod, "_upsert_paper", lambda meta, url, url_norm, *_: ("p1", False))
     cap = _InsertCapture()
     monkeypatch.setattr(teams_integration, "service_client", lambda: cap)
 

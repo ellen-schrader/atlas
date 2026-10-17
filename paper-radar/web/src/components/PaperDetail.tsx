@@ -32,6 +32,9 @@ import { useDismissable } from "@/hooks/useDismissable";
 import { supabase } from "@/lib/supabase";
 import type { Paper, PaperPost, SimilarPaper } from "@/lib/types";
 import { cn, formatDate, formatRelative, normaliseTag, safeHref } from "@/lib/utils";
+import { PreprintBadge, PreprintVersionLink } from "@/components/PreprintBadge";
+import { usePreprintLinks } from "@/hooks/usePreprintLinks";
+import { isPreprintVenue } from "@/lib/preprint";
 
 /** Every control in the paper's action row shares these metrics, so labels sit
  *  on one baseline and the row has an even rhythm. Only the colour treatment
@@ -85,6 +88,8 @@ export function PaperDetail({
   // same gate as removal. The server is the authority either way.
   const canEdit = canDelete;
   const [editing, setEditing] = useState(false);
+  const { data: preprints } = usePreprintLinks([p.id]);
+  const preprint = preprints?.[p.id];
 
   return (
     <div className={cn("flex flex-col", !fullPage && "min-h-0 flex-1")}>
@@ -112,6 +117,7 @@ export function PaperDetail({
           {[p.venue, p.year].filter(Boolean).length > 0 && (
             <span className="text-eyebrow font-semibold uppercase tracking-eyebrow tabular-nums text-white/90">
               {[p.venue, p.year].filter(Boolean).join(" · ")}
+              {isPreprintVenue(p.venue) && <PreprintBadge className="ml-2 align-[1px]" />}
             </span>
           )}
         </div>
@@ -127,6 +133,7 @@ export function PaperDetail({
             </h2>
             {p.authors.length > 0 && <AuthorList authors={p.authors} />}
             <PaperIdentifier doi={p.doi} url={p.url} />
+            {preprint && <PreprintVersionLink preprint={preprint} className="mt-1" />}
 
             {/* Two clusters, so the row is navigable rather than six equal buttons.
                 Left: what you do with the paper and your own state on it. Right,

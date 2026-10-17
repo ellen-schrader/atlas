@@ -655,11 +655,28 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
         ).data
         return rows[0] if rows else None
 
-    paper = _paper_by("url_norm", _normalize_key(url))
+    def _alias_paper(column: str, value: str) -> dict | None:
+        rows = _retry_stale_connection(
+            lambda: (
+                svc.table("paper_aliases")
+                .select("paper_id")
+                .eq(column, value)
+                .limit(1)
+                .execute()
+            )
+        ).data
+        return _paper_by("id", rows[0]["paper_id"]) if rows else None
+
+    url_norm = _normalize_key(url)
+    doi = _doi_from_url(url)
+    paper = _paper_by("url_norm", url_norm)
+    if paper is None and doi:
+        paper = _paper_by("doi", doi)
+    # A preprint merged into its published version (paper_identity.find_paper).
     if paper is None:
-        doi = _doi_from_url(url)
-        if doi:
-            paper = _paper_by("doi", doi)
+        paper = _alias_paper("url_norm", url_norm)
+    if paper is None and doi:
+        paper = _alias_paper("doi", doi)
     if paper:
         posted = (
             _retry_stale_connection(
@@ -764,6 +781,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
     # Deferred import: app imports this module, so importing app at module load
     # would be circular. These helpers carry the tested dedup + embed logic.
     from .app import _embed_and_store, _enrich_and_store, _upsert_paper
+    from .paper_identity import swap_to_published
 
     try:
         url = _clean_url(url)
@@ -774,7 +792,12 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             log.info("inbound: %s did not resolve to a paper (%s); queued", url, reason)
             record_unresolved(team_id, url, url_norm, sender_name, reason)
             return None
-        paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
+        # A published preprint is stored as its published version. The queue row
+        # below is keyed on the link as posted, so url_norm stays the original.
+        meta, stored_url, preprint = swap_to_published(meta, url)
+        paper_id, needs_embedding = _upsert_paper(
+            meta, stored_url, _normalize_key(stored_url), [preprint] if preprint else []
+        )
         # It resolved, so any queue row for this link is done -- whether it was
         # queued a minute ago or is being re-driven months later.
         close_unresolved(team_id, url_norm, paper_id)

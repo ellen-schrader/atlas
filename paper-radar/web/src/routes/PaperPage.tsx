@@ -5,6 +5,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { PaperDetail } from "@/components/PaperDetail";
 import { Button } from "@/components/ui/button";
+import { useMergedInto } from "@/hooks/usePreprintLinks";
 import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost } from "@/lib/types";
@@ -60,6 +61,13 @@ export default function PaperPage() {
       return (data as unknown as PaperPost) ?? null;
     },
   });
+
+  // A preprint merged into its published version keeps its old links working:
+  // Teams cards and bookmarks point at the id that no longer exists.
+  const { data: mergedInto } = useMergedInto(paperId, post === null);
+  useEffect(() => {
+    if (mergedInto) navigate(`/papers/${mergedInto}`, { replace: true });
+  }, [mergedInto, navigate]);
 
   return (
     <div className="mx-auto max-w-3xl p-6 md:p-8">

@@ -8,6 +8,8 @@ import { HeadingLink, SectionHeading, Segmented, TopicDot } from "@/components/h
 import type { Counts } from "@/hooks/useEngagementCounts";
 import type { PaperPost } from "@/lib/types";
 import { cn, formatAgo, formatDate } from "@/lib/utils";
+import { PreprintBadge } from "@/components/PreprintBadge";
+import { isPreprintVenue } from "@/lib/preprint";
 
 type FeedFilter = "all" | "unread" | "comments";
 
@@ -199,6 +201,7 @@ function FeedRow({
                 {p.year}
               </span>
             )}
+            {isPreprintVenue(p.venue) && <PreprintBadge />}
             {mobile ? (
               <>
                 {poster && <span className="truncate">· {poster.split(/[\s@]/)[0]}</span>}

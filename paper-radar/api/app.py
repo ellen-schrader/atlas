@@ -42,6 +42,13 @@ from . import overview as overview_mod
 from .backfill_metadata import _doi_owner, follow_year, plan_update
 from .config import get_api_settings
 from .deps import require_token
+from .paper_identity import (
+    PreprintRef,
+    find_paper,
+    link_preprints,
+    preprint_refs,
+    swap_to_published,
+)
 from .supa import get_user_id, service_client, user_client
 
 # Uvicorn configures only its own loggers, so without a root handler the app's
@@ -82,8 +89,25 @@ class ResolveRequest(BaseModel):
     network: bool = True  # set false in tests to skip all HTTP lookups
 
 
+PreprintReason = Literal["crossref", "biorxiv", "arxiv"]
+
+
+class Preprint(BaseModel):
+    """The preprint a posted link pointed at, when Atlas stores its published version."""
+
+    doi: str | None = Field(default=None, max_length=255)
+    url: str | None = Field(default=None, max_length=2_000)
+    venue: str | None = Field(default=None, max_length=200)
+    reason: PreprintReason
+
+
 class ResolvedPaper(BaseModel):
-    """Best-effort metadata for a URL, plus the dedup key used for `papers`."""
+    """Best-effort metadata for a URL, plus the dedup key used for `papers`.
+
+    ``replaced_preprint`` is set when the link was a preprint that has been
+    published: the rest of the record is then the published version, which is
+    what gets stored, and the client tells the poster so.
+    """
 
     url: str
     url_norm: str
@@ -95,6 +119,7 @@ class ResolvedPaper(BaseModel):
     abstract: str | None = None
     keywords: list[str] = []
     source: str = "unknown"
+    replaced_preprint: Preprint | None = None
 
 
 # Where a paper's metadata came from. Client-supplied, so it's an enum, not free
@@ -142,6 +167,9 @@ class PostRequest(BaseModel):
     note: str | None = Field(default=None, max_length=5_000)
     # Omitted (the CLI, older clients) => resolve the URL server-side, as before.
     fields: PaperFields | None = None
+    # With `fields`: the preprint /resolve swapped for this published version,
+    # echoed back so the post records it. Trusted as far as `fields` are.
+    replaced_preprint: Preprint | None = None
 
 
 class PostResponse(BaseModel):
@@ -309,9 +337,12 @@ def _reject_dangerous_url(raw: str) -> None:
 # --- helpers ---------------------------------------------------------------
 
 
-def _resolved(meta: PaperMetadata, url: str, url_norm: str) -> ResolvedPaper:
+def _resolved(
+    meta: PaperMetadata, url: str, url_norm: str, preprint: PreprintRef | None = None
+) -> ResolvedPaper:
     fields = {k: v for k, v in asdict(meta).items() if k != "url"}
-    return ResolvedPaper(url=meta.url, url_norm=url_norm, **fields)
+    replaced = Preprint(**asdict(preprint)) if preprint else None
+    return ResolvedPaper(url=meta.url, url_norm=url_norm, replaced_preprint=replaced, **fields)
 
 
 def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
@@ -361,36 +392,34 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
 _norm_doi = norm_doi
 
 
-def _upsert_paper(meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:
-    """Find the canonical paper (by url_norm, then DOI) or insert it. Service role.
+def _upsert_paper(
+    meta: PaperMetadata,
+    url: str,
+    url_norm: str,
+    preprints: list[PreprintRef] | tuple = (),
+) -> tuple[str, bool]:
+    """Find the canonical paper (url_norm, DOI, then alias) or insert it. Service role.
 
     Returns ``(paper_id, needs_embedding)`` — an existing row may still lack an
     embedding (posted before embeddings landed, or a previous embed failed).
+
+    ``preprints`` are earlier versions to record against the paper (the one
+    `swap_to_published` replaced); the preprints the record itself names are
+    added. A preprint Atlas already holds as a paper is merged into this one.
     """
     svc = service_client()
+    paper_id, needs_embedding = _find_or_insert_paper(svc, meta, url, url_norm)
+    linked = [*preprints, *preprint_refs(meta)]
+    if linked:
+        link_preprints(svc, paper_id, linked)
+    return paper_id, needs_embedding
 
-    found = (
-        svc.table("papers")
-        .select("id, title, embedded_at, edited_fields")
-        .eq("url_norm", url_norm)
-        .limit(1)
-        .execute()
-    )
-    if found.data:
-        row = found.data[0]
-        return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
+
+def _find_or_insert_paper(svc, meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:
     doi = _norm_doi(meta.doi)
-    if doi:
-        by_doi = (
-            svc.table("papers")
-            .select("id, title, embedded_at, edited_fields")
-            .eq("doi", doi)
-            .limit(1)
-            .execute()
-        )
-        if by_doi.data:
-            row = by_doi.data[0]
-            return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
+    row = find_paper(svc, url_norm, doi, "id, title, embedded_at, edited_fields")
+    if row:
+        return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
 
     row = {
         "url": url,
@@ -530,7 +559,10 @@ def resolve(req: ResolveRequest, token: str = Depends(require_token)) -> Resolve
     url = _validated_fetch_url(req.url)
     _resolve_limiter.check(user_id)
     meta = fetch_metadata(url, network=req.network)
-    return _resolved(meta, url, _normalize_key(url))
+    preprint = None
+    if req.network:
+        meta, url, preprint = swap_to_published(meta, url)
+    return _resolved(meta, url, _normalize_key(url), preprint)
 
 
 @app.post("/posts", response_model=PostResponse)
@@ -559,6 +591,11 @@ def create_post(
         # work, no network — the SSRF concerns that gate _validated_fetch_url don't apply.
         url = _clean_url(coerce_fetch_url(req.url))
         meta = PaperMetadata(url=url, **req.fields.model_dump())
+        preprint = None
+        if req.replaced_preprint is not None:
+            if req.replaced_preprint.url:
+                _reject_dangerous_url(req.replaced_preprint.url)
+            preprint = PreprintRef(**req.replaced_preprint.model_dump())
     else:
         # No fields: this resolves the URL server-side — the same SSRF sink as /resolve,
         # so it gets the same rate limit and validation. Membership narrows who can reach
@@ -566,9 +603,9 @@ def create_post(
         # blocked URL doesn't spend quota.
         url = _validated_fetch_url(req.url)
         _resolve_limiter.check(user_id)
-        meta = fetch_metadata(url)
+        meta, url, preprint = swap_to_published(fetch_metadata(url), url)
     url_norm = _normalize_key(url)
-    paper_id, needs_embedding = _upsert_paper(meta, url, url_norm)
+    paper_id, needs_embedding = _upsert_paper(meta, url, url_norm, [preprint] if preprint else [])
     post_id, already, post_source = _create_post(token, req.team_id, paper_id, user_id, req.note)
 
     # Embed + tag after responding so posting stays fast; each no-ops without
@@ -601,7 +638,7 @@ def create_post(
         post_id=post_id,
         paper_id=paper_id,
         already_posted=already,
-        paper=_resolved(meta, url, url_norm),
+        paper=_resolved(meta, url, url_norm, preprint),
     )
 
 
@@ -2202,7 +2239,7 @@ def _preview(e: bib.BibEntry, status: str, reason: str | None = None) -> BibEntr
 def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview]:
     """Label each entry against what's already in the lab. Read-only.
 
-    Dedupes exactly the way `_upsert_paper` does — by url_norm AND by DOI — because a
+    Dedupes exactly the way `_upsert_paper` does — by url_norm, DOI and alias — because a
     pre-flight that promises "3 new" while the commit merges one of them into an
     existing paper is worse than no pre-flight at all. It also dedupes *within* the
     file: a library that lists the same DOI twice must not be counted twice.
@@ -2222,6 +2259,22 @@ def _classify(entries: list[bib.BibEntry], team_id: str) -> list[BibEntryPreview
     for batch in _chunked(list(set(dois))):
         rows = svc.table("papers").select("id, doi").in_("doi", batch).execute().data or []
         by_doi |= {_norm_doi(r["doi"]): r["id"] for r in rows if r.get("doi")}
+    # Then the aliases, as find_paper does: a preprint merged into its published
+    # version is still that paper.
+    for column, keys, found in (
+        ("url_norm", set(norms.values()), by_norm),
+        ("doi", set(dois), by_doi),
+    ):
+        for batch in _chunked(list(keys - found.keys())):
+            rows = (
+                svc.table("paper_aliases")
+                .select(f"paper_id, {column}")
+                .in_(column, batch)
+                .execute()
+                .data
+                or []
+            )
+            found |= {r[column]: r["paper_id"] for r in rows}
 
     known_ids = list(set(by_norm.values()) | set(by_doi.values()))
     posted: set[str] = set()

@@ -112,7 +112,10 @@ def test_posts_with_fields_coerces_bare_doi(monkeypatch):
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
-        lambda meta, url, url_norm: (seen.update(url=url, url_norm=url_norm), ("paper-1", False))[1],
+        lambda meta, url, url_norm, *_: (
+            seen.update(url=url, url_norm=url_norm),
+            ("paper-1", False),
+        )[1],
     )
     monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
 
@@ -335,7 +338,7 @@ def test_posts_with_fields_does_not_validate_or_fetch_url(monkeypatch):
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
-        lambda meta, _u, _n: (seen.update(meta=meta), ("paper-1", False))[1],
+        lambda meta, _u, _n, *_: (seen.update(meta=meta), ("paper-1", False))[1],
     )
     monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
 
@@ -462,7 +465,7 @@ def _stub_post(monkeypatch, seen: dict):
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
-        lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
+        lambda meta, _url, _norm, *_: (seen.update(meta=meta), ("paper-1", False))[1],
     )
     monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
 
@@ -515,7 +518,7 @@ def test_posting_without_fields_still_resolves_server_side(monkeypatch):
     monkeypatch.setattr(
         app_mod,
         "_upsert_paper",
-        lambda meta, _url, _norm: (seen.update(meta=meta), ("paper-1", False))[1],
+        lambda meta, _url, _norm, *_: (seen.update(meta=meta), ("paper-1", False))[1],
     )
     monkeypatch.setattr(app_mod, "_create_post", lambda *_a, **_k: ("post-1", False, "web"))
     monkeypatch.setattr(
