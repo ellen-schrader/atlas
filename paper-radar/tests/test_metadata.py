@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from paper_radar.ingest import metadata as metadata_module
 from paper_radar.ingest.metadata import (
     _clean_text,
@@ -618,3 +620,63 @@ def test_published_record_leaves_an_unpublished_preprint(monkeypatch):
     assert metadata_module.published_record(preprint) is None
     published = parse_crossref({"title": ["T"], "DOI": "10.1038/y", "type": "journal-article"}, "x")
     assert metadata_module.published_record(published) is None
+
+
+# --- titles with inline markup (Crossref JATS) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        # Real titles from Atlas, as Crossref returns them.
+        ("Spatial Context from H&amp;E Images", "Spatial Context from H&E Images"),
+        (
+            "APOE\n                    <sup>+</sup>\n                    macrophages and POSTN"
+            "\n                    <sup>+</sup>\n                    fibroblasts",
+            "APOE+ macrophages and POSTN+ fibroblasts",
+        ),
+        (
+            "Combining xenium\n                  <i>in situ</i>\n                  spatial",
+            "Combining xenium in situ spatial",
+        ),
+        (
+            "prevalence of\n                    <scp>PD</scp>\n                    ‐"
+            "\n                    <scp>L1</scp>\n                    expression",
+            "prevalence of PD‐L1 expression",
+        ),
+        (
+            "<scp>HISTAI</scp>\n                    : a valuable dataset",
+            "HISTAI: a valuable dataset",
+        ),
+        (
+            "identifies\n                  <i>POSTN</i>\n                  <sup>+</sup>\n   cells",
+            "identifies POSTN+ cells",
+        ),
+        (
+            "Na\n   <sup>+</sup>\n   /H\n   <sup>+</sup>\n   exchanger NHE1",
+            "Na+/H+ exchanger NHE1",
+        ),
+        ("CD8<sup>+</sup> T cells (in mice)", "CD8+ T cells (in mice)"),
+        ("Plain title", "Plain title"),
+        ("", None),
+    ],
+)
+def test_clean_title(raw, clean):
+    assert metadata_module.clean_title(raw) == clean
+
+
+def test_parse_crossref_cleans_the_title():
+    msg = {"title": ["Na\n   <sup>+</sup>\n   /H\n   <sup>+</sup>\n   exchanger"], "DOI": "10.1/x"}
+    assert parse_crossref(msg, "https://x").title == "Na+/H+ exchanger"
+
+
+def test_clean_titles_script_skips_clean_and_hand_edited_titles():
+    from api.clean_titles import plan
+
+    rows = [
+        {"id": "a", "title": "APOE\n  <sup>+</sup>\n  macrophages", "edited_fields": []},
+        {"id": "b", "title": "Already clean", "edited_fields": []},
+        {"id": "c", "title": "Typed <i>by</i> hand", "edited_fields": ["title"]},
+        {"id": "d", "title": None, "edited_fields": []},
+    ]
+    assert [(r["id"], t) for r, t in plan(rows)] == [("a", "APOE+ macrophages")]
