@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from atlas_mcp import lab, server
+from atlas_mcp import lab, tools
 
 
 @pytest.fixture(autouse=True)
@@ -21,9 +21,9 @@ def _clean_context():
 def test_error_returns_are_not_counted_as_success():
     """Tools return `f"Error: {exc}"` rather than raising, so an exception check
     alone would record a refused call as a success."""
-    assert server._succeeded("**A paper**\nsome authors") is True
-    assert server._succeeded("Error: Claude access is off for TME Lab.") is False
-    assert server._succeeded(["image", "parts"]) is True  # get_figure_image returns a list
+    assert tools._succeeded("**A paper**\nsome authors") is True
+    assert tools._succeeded("Error: Claude access is off for TME Lab.") is False
+    assert tools._succeeded(["image", "parts"]) is True  # get_figure_image returns a list
 
 
 def test_audited_logs_the_resolved_lab(monkeypatch):
@@ -32,7 +32,7 @@ def test_audited_logs_the_resolved_lab(monkeypatch):
         lab, "log_tool_call", lambda team, tool, ok: calls.append((team["id"], tool, ok))
     )
 
-    @server.audited
+    @tools.audited
     def a_tool():
         lab._current_team.set({"id": "team-1", "name": "TME Lab"})
         return "ok"
@@ -49,7 +49,7 @@ def test_audited_records_a_refused_call_as_a_failure(monkeypatch):
         lab, "log_tool_call", lambda team, tool, ok: calls.append((team["id"], tool, ok))
     )
 
-    @server.audited
+    @tools.audited
     def blocked_tool():
         # What resolve_team does: attribute first, then refuse.
         lab._current_team.set({"id": "team-1", "name": "TME Lab"})
@@ -66,12 +66,12 @@ def test_audited_does_not_inherit_a_previous_calls_lab(monkeypatch):
     logged: list[object] = []
     monkeypatch.setattr(lab, "log_tool_call", lambda team, tool, ok: logged.append(team))
 
-    @server.audited
+    @tools.audited
     def resolves_a_lab():
         lab._current_team.set({"id": "team-1", "name": "TME Lab"})
         return "ok"
 
-    @server.audited
+    @tools.audited
     def resolves_nothing():
         return "ok"
 
@@ -87,7 +87,7 @@ def test_audited_preserves_the_tool_signature():
     behind (*args, **kwargs), every tool would register with no parameters."""
     import inspect
 
-    @server.audited
+    @tools.audited
     def a_tool(query: str, limit: int = 10) -> str:
         return "ok"
 

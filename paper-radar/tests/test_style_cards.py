@@ -312,19 +312,19 @@ import asyncio  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 
-def _server(monkeypatch):
+def _figures(monkeypatch):
     pytest.importorskip("supabase")
     pytest.importorskip("mcp")
+    from atlas_mcp import figures
     from atlas_mcp import lab as L
-    from atlas_mcp import server
 
     monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t", "name": "Lab A"})
-    return server
+    return figures
 
 
 def test_format_figure_style_card_cites_and_flags_synthetic(monkeypatch):
-    server = _server(monkeypatch)
-    text = server._format_figure(
+    figures = _figures(monkeypatch)
+    text = figures._format_figure(
         {
             "id": "f1",
             "title": "Dose–response, log x",
@@ -352,7 +352,7 @@ class _FakeCtx:
 
 
 def _drive_add(monkeypatch, *, confirm, ctx, spec_dict=None):
-    server = _server(monkeypatch)
+    figures = _figures(monkeypatch)
     from atlas_mcp import moodboard as M
 
     writes = {"n": 0, "spec": None}
@@ -363,7 +363,7 @@ def _drive_add(monkeypatch, *, confirm, ctx, spec_dict=None):
         return {"id": "fig1"}
 
     monkeypatch.setattr(M, "add_style_card", fake_add)
-    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    fn = figures.add_plot_to_moodboard
     out = asyncio.run(
         fn(
             spec=spec_dict or {"chart": {"type": "line"}},
@@ -398,14 +398,14 @@ def test_add_plot_accept_writes_and_stamps_cvd(monkeypatch):
 
 
 def test_add_plot_links_paper_after_validation(monkeypatch):
-    server = _server(monkeypatch)
+    figures = _figures(monkeypatch)
     from atlas_mcp import lab as L
     from atlas_mcp import moodboard as M
 
     captured = {}
     monkeypatch.setattr(M, "add_style_card", lambda team, **kw: captured.update(kw) or {"id": "f1"})
     monkeypatch.setattr(L, "get_post", lambda team, pid: {"paper": {"title": "Spatial atlas of X"}})
-    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    fn = figures.add_plot_to_moodboard
     out = asyncio.run(
         fn(spec={"chart": {"type": "line"}}, title="T", paper_id="p1", confirm=True, ctx=None)
     )
@@ -414,7 +414,7 @@ def test_add_plot_links_paper_after_validation(monkeypatch):
 
 
 def test_add_plot_refuses_unknown_paper(monkeypatch):
-    server = _server(monkeypatch)
+    figures = _figures(monkeypatch)
     from atlas_mcp import lab as L
     from atlas_mcp import moodboard as M
 
@@ -425,7 +425,7 @@ def test_add_plot_refuses_unknown_paper(monkeypatch):
         raise L.LabError(f"No paper {pid} in {team['name']}.")
 
     monkeypatch.setattr(L, "get_post", no_post)
-    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    fn = figures.add_plot_to_moodboard
     out = asyncio.run(
         fn(spec={"chart": {"type": "line"}}, title="T", paper_id="nope", confirm=True, ctx=None)
     )
@@ -443,8 +443,8 @@ def test_add_plot_degrades_when_elicit_unsupported(monkeypatch):
 
 
 def test_add_plot_rejects_bad_spec_and_bad_source_url(monkeypatch):
-    server = _server(monkeypatch)
-    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    figures = _figures(monkeypatch)
+    fn = figures.add_plot_to_moodboard
     out = asyncio.run(fn(spec={"chart": {"type": "pie"}}, title="X", confirm=True, ctx=None))
     assert out.startswith("Error:")
     out = asyncio.run(
@@ -460,8 +460,8 @@ def test_add_plot_rejects_bad_spec_and_bad_source_url(monkeypatch):
 
 
 def test_preview_plot_spec_reports_invalid_spec(monkeypatch):
-    server = _server(monkeypatch)
-    fn = getattr(server.preview_plot_spec, "fn", server.preview_plot_spec)
+    figures = _figures(monkeypatch)
+    fn = figures.preview_plot_spec
     out = fn(spec={"chart": {"type": "pie"}})
     assert isinstance(out, list) and out[0].startswith("Error:")
 
@@ -469,8 +469,8 @@ def test_preview_plot_spec_reports_invalid_spec(monkeypatch):
 def test_preview_plot_spec_returns_text_and_image(monkeypatch):
     pytest.importorskip("matplotlib")
     pytest.importorskip("PIL")
-    server = _server(monkeypatch)
-    fn = getattr(server.preview_plot_spec, "fn", server.preview_plot_spec)
+    figures = _figures(monkeypatch)
+    fn = figures.preview_plot_spec
     out = fn(spec={"chart": {"type": "line"}, "data_hints": {"n_points": 8}})
     assert len(out) == 2
     assert "Spec is valid" in out[0]

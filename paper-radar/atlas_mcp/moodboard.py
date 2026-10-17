@@ -134,7 +134,7 @@ def add_style_card(
     """
     from . import render as figrender
 
-    lab._card_limiter.check()  # bounds an injection-driven loop of card writes
+    lab._card_limiter.check(lab.current_user_id())  # bounds an injection-driven loop of card writes
     uid = lab.current_user_id()
     if not uid:
         raise LabError("Couldn't determine your user id to attribute the style card to.")
