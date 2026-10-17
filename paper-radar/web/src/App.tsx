@@ -16,6 +16,7 @@ import MapView from "@/routes/Map";
 import MapDashboard from "@/routes/MapDashboard";
 import MapsLibrary from "@/routes/MapsLibrary";
 import MoodBoard from "@/routes/MoodBoard";
+import OAuthConsent from "@/routes/OAuthConsent";
 import Onboarding from "@/routes/Onboarding";
 import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
@@ -86,6 +87,8 @@ export default function App() {
               gone from the address bar and from history before the recipient has
               even logged in — and sharing is the whole point of the route. */}
           <Route path="/papers/:paperId" element={<LoginWithReturn />} />
+          {/* Claude's sign-in lands here (Supabase OAuth); sign in, then come back. */}
+          <Route path="/oauth/consent" element={<LoginWithReturn />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </LinkErrorRedirect>
@@ -174,9 +177,17 @@ function AuthedApp({ session }: { session: Session }) {
   // the oldest membership (useMemberships orders by joined_at, so it's stable).
   const team = (teams.find((m) => m.teams?.id === stored) ?? teams[0])?.teams;
 
+  // Claude's consent screen stands apart from the app shell, and must not be lost to
+  // onboarding: someone with no lab yet still gets a clear answer there.
+  const consent = (
+    <OAuthConsent memberships={teams} userId={session.user.id} email={session.user.email ?? ""} />
+  );
+
   if (!team) {
     return (
       <Routes>
+        <Route path="/oauth/consent" element={consent} />
+        <Route path="/login" element={<ReturnToNext />} />
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="*" element={<Navigate to="/onboarding" replace />} />
       </Routes>
@@ -186,6 +197,7 @@ function AuthedApp({ session }: { session: Session }) {
   return (
     <Routes>
       <Route path="/onboarding" element={<Navigate to="/" replace />} />
+      <Route path="/oauth/consent" element={consent} />
       <Route
         element={
           <Layout session={session} team={team} labs={teams.flatMap((m) => (m.teams ? [m.teams] : []))} onSwitchLab={switchLab} />

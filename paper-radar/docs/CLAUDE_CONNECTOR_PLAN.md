@@ -332,14 +332,66 @@ Code review (high) fixes, same PR:
 5. **Don't** turn on Supabase's OAuth server in production yet. That happens with M4,
    once the consent page and its redirect allowlist exist.
 
-### M4 — Consent page + Connect page (web)
-- `/oauth/consent`: log in if needed (existing `?next=` flow) → redirect-URI allowlist
-  check → "**Claude** will be able to search and read papers in <your lab>" → if the lab's
-  Claude access is off: owners can switch it on
-  here, members see "ask your lab owner" with Allow disabled → Allow / Deny.
-- `/connect`: lead with "Copy connector URL" and short steps for the Claude app and
-  Claude Code. Move the local stdio setup under "Advanced". Keep "Recent Claude activity".
-  Add **"Connected apps → Revoke"**.
+### M4 — Consent page + Connect page (web) ✅ (branch `connector-m4`)
+
+What landed:
+- **`/oauth/consent`** (`web/src/routes/OAuthConsent.tsx`), where Supabase's OAuth server
+  sends Claude's sign-in:
+  - **Signed out:** login first, then back (the existing `?next=` flow, extended to
+    users with no lab).
+  - **The request is judged by its redirect** (`lib/oauthRedirects.ts`), since anyone can
+    register a client under any name. Only Claude's callbacks
+    (`https://claude.ai|claude.com/api/mcp/auth_callback`) and loopback (Claude Code)
+    pass.
+  - **Anything else is refused on our page:** the request is denied and spent, the
+    address is shown, and the browser never navigates to it. The redirect returned
+    after approval is checked again.
+  - **Labs:** each of the user's labs is listed with its Claude-access state. An owner
+    can **Turn on** right there; a member sees "ask a lab owner". **Allow** stays
+    disabled until a lab has access.
+  - Also: what Claude can and can't do, Cancel, and "Not you? Sign out".
+- **`/connect`:** leads with the connector (copy URL; steps for the Claude app and
+  Claude Code), then **Your connected apps** with **Disconnect** (Supabase grants;
+  revocation takes effect at once via the M2 gate). It marks local-only abilities
+  (posting, figure tools); the old local setup moves under "Advanced".
+- **Local `config.toml`:** OAuth server and dynamic registration are on, now that the
+  consent page and allowlist exist. The consent URL is site_url (`127.0.0.1:3000`) +
+  `/oauth/consent`.
+- **Web tests:** Vitest added; 20 allowlist cases, including the spike's
+  "Claude"→evil.example, lookalike hosts, credentials-in-URL and LAN http. `npm test`
+  now runs in CI.
+
+Verified end to end (local stack, a real browser via Playwright, the MCP SDK's OAuth
+client standing in for Claude):
+1. Claude's sign-in goes to Atlas login, then back to consent.
+2. Allow is disabled while access is off; the owner's "Turn on" enables it.
+3. The code goes back to Claude's callback, and Claude lists 9 tools answering from the
+   lab.
+4. An impostor named "Claude" redirecting to evil.example is refused on our page, and
+   evil.example is never reached.
+5. The Connect page lists the connections, and Disconnect → Claude's next call says
+   "revoked".
+
+Code review (high) fixes, same PR (no security holes found; the allowlist held):
+- The consent request is cached per user, so after "Not you? Sign out" the next
+  account looks it up as itself.
+- "Turn on" failures are shown; the consent page uses the shared `useSetMcpAccess`.
+- The deny-on-unknown-redirect effect fires once, not on every re-render.
+- A redirect that fails the check *after* approval says so ("Connected, but not sent
+  back", and to remove it under Connected apps) instead of "nothing was shared".
+- A failed access lookup shows an error with Retry, instead of reading as "access off".
+- The Connect page's Disconnect hint only appears when there are connected apps, and
+  load errors are shown. One `Segmented` picker replaces two copies.
+- The browser end-to-end test was rerun after the fixes: all 8 steps pass.
+
+**Production steps, in this order (yours):**
+1. Merge (Vercel deploys the web app; nothing else changes).
+2. In the Supabase dashboard, **Authentication → OAuth Server**: enable it, allow
+   dynamic client registration, and set the authorization path to `/oauth/consent`
+   (Site URL is already `https://labatlas.app`).
+3. In claude.ai: Settings → Connectors → Add custom connector → `https://mcp.labatlas.app/mcp`
+   → Connect. If the consent page says it doesn't recognise the app, send me the address
+   it shows: Claude's callback would then differ from the one assumed here.
 
 **This is where chat works:** paste the URL into claude.ai → Settings → Connectors → Add
 custom connector, sign in, ask about your lab's papers. The same URL works in the desktop
