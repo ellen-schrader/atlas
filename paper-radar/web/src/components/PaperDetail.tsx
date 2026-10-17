@@ -133,7 +133,11 @@ export function PaperDetail({
             </h2>
             {p.authors.length > 0 && <AuthorList authors={p.authors} />}
             <PaperIdentifier doi={p.doi} url={p.url} />
-            {preprint && <PreprintVersionLink preprint={preprint} className="mt-1" />}
+            {preprint && (
+              <div className="mt-1">
+                <PreprintVersionLink preprint={preprint} />
+              </div>
+            )}
 
             {/* Two clusters, so the row is navigable rather than six equal buttons.
                 Left: what you do with the paper and your own state on it. Right,
