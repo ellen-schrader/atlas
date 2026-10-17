@@ -153,13 +153,21 @@ What landed:
   instead adds just the `mcp` SDK to the `api` extra, so the image still gets no
   Pillow/matplotlib.
 
+Code review (high) fixes, same PR:
+- Sync tools now run in worker threads (`tools.in_worker_thread`, which carries the
+  request's contextvars), so one user's slow call can't stall the others. Tested through
+  FastMCP's own call path, and mutation-checked: dropping the context fails closed.
+- The env-user switch is a contextvar set by the stdio entry point, not a process-wide
+  flag.
+- An expired hosted token gives a clean "reconnect Atlas" error instead of a raw 401.
+- The rate limiter is shared with the API (`api/ratelimit.py`): the key is required, and
+  idle users are evicted past 10k keys.
+- The local `config.toml` OAuth switch is reverted until M2/M4 protect it (consent page +
+  redirect allowlist + token lockdown). Turn it on together with those.
+
 Carried into M3:
-- FastMCP calls sync tools **on the event loop**, so one slow Supabase call stalls
-  every user. The hosted server should register the read tools wrapped to run in a
-  worker thread (`anyio.to_thread.run_sync`, which carries contextvars), and the session
-  tests already cover the threaded case.
-- `act_as` builds a Supabase client per request. That's fine at our volume; revisit if it
-  ever shows up in latency.
+- `act_as` builds a Supabase client (and its connection pools) per request. Reuse one
+  pooled client per process and attach the token per request, before going live.
 - There's **no CI test workflow** today (only deploy + backup). Adding one (offline tests
   on every PR, roughly free within GitHub's included minutes) is a small separate PR. The
   integration test needs a Supabase stack in CI, so it stays a local pre-merge step for

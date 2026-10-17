@@ -24,8 +24,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -33,6 +31,7 @@ from functools import lru_cache, wraps
 
 from api import embeddings
 from api.config import get_api_settings
+from api.ratelimit import PerUserRateLimiter
 from paper_radar.ingest import url_guard
 from supabase import Client, ClientOptions, create_client
 
@@ -62,13 +61,16 @@ _request_session: ContextVar[tuple[Client, str] | None] = ContextVar(
     "atlas_request_session", default=None
 )
 # Whether a call with no bound user may act as the environment's user (stdio only).
-_env_session_allowed = False
+# A contextvar, not a module flag: it's set in the stdio entry point's own context
+# (which every task and worker thread of that server inherits), so nothing else
+# sharing the process can switch it on for requests it didn't start.
+_env_session_allowed: ContextVar[bool] = ContextVar("atlas_env_session_allowed", default=False)
 
 
 def allow_env_session() -> None:
-    """Let calls act as the user configured in the environment. Stdio entry point only."""
-    global _env_session_allowed
-    _env_session_allowed = True
+    """Let calls in this context act as the user configured in the environment.
+    Stdio entry point only."""
+    _env_session_allowed.set(True)
 
 
 def _user_client(token: str) -> Client:
@@ -107,7 +109,7 @@ def _session() -> tuple[Client, str | None]:
     bound = _request_session.get()
     if bound is not None:
         return bound
-    if not _env_session_allowed:
+    if not _env_session_allowed.get():
         raise LabError("Not signed in to Atlas.")
     return _env_session()
 
@@ -186,10 +188,16 @@ def with_refresh(fn):
         except LabError:
             raise
         except Exception as exc:  # noqa: BLE001
-            if _is_auth_error(exc) and _request_session.get() is None:
-                _env_session.cache_clear()
-                return fn(*args, **kwargs)
-            raise
+            if not _is_auth_error(exc):
+                raise
+            if _request_session.get() is not None:
+                # Tools only catch LabError; a raw PostgREST 401 would reach the
+                # client as an internal error instead of something actionable.
+                raise LabError(
+                    "Your Atlas sign-in has expired — reconnect Atlas in Claude."
+                ) from exc
+            _env_session.cache_clear()
+            return fn(*args, **kwargs)
 
     return wrapper
 
@@ -652,31 +660,18 @@ def validate_share_url(url: str) -> str:
         raise LabError(str(exc).replace("fetched", "shared")) from exc
 
 
-class _RateLimiter:
-    """A sliding-window cap per user, bounding injection-driven spam.
-
-    Keyed by user because the hosted server is one process serving everyone: a
-    single shared window would let one user's burst lock out every other lab.
-    """
-
-    def __init__(self, max_events: int, window_seconds: float) -> None:
-        self.max_events = max_events
-        self.window = window_seconds
-        self._events: dict[str | None, list[float]] = {}
-        self._lock = threading.Lock()
-
-    def check(self, key: str | None = None, now: float | None = None) -> None:
-        now = time.monotonic() if now is None else now
-        with self._lock:
-            events = [t for t in self._events.get(key, []) if now - t < self.window]
-            if len(events) >= self.max_events:
-                self._events[key] = events
-                raise LabError(
-                    "Too many shares in a short time — pausing to avoid flooding the lab. "
-                    "Try again shortly."
-                )
-            events.append(now)
-            self._events[key] = events
+def _RateLimiter(max_events: int, window_seconds: float) -> PerUserRateLimiter:
+    """A per-user cap bounding injection-driven spam. Per user because the hosted
+    server is one process serving everyone: a single shared window would let one
+    user's burst lock out every other lab."""
+    return PerUserRateLimiter(
+        max_events,
+        window_seconds,
+        lambda: LabError(
+            "Too many shares in a short time — pausing to avoid flooding the lab. "
+            "Try again shortly."
+        ),
+    )
 
 
 # Writes and outbound metadata fetches are capped separately: the fetch limiter
@@ -741,7 +736,7 @@ def resolve_metadata(url: str) -> dict:
     from paper_radar.ingest.metadata import fetch_metadata
     from paper_radar.ingest.urls import _clean_url, _normalize_key
 
-    _fetch_limiter.check(current_user_id())
+    _fetch_limiter.check(current_user_id() or "")
     # validate_share_url now covers the DNS check too (it's inside validate_public_url),
     # so the separate _reject_private_dns call it used to need is gone.
     safe = validate_share_url(url)
@@ -782,7 +777,7 @@ def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
     @with_refresh so an expired JWT is refreshed + retried, like the read path."""
     from api.app import _upsert_paper  # global-corpus dedup (service role, contained)
 
-    _post_limiter.check(current_user_id())
+    _post_limiter.check(current_user_id() or "")
     meta, clean_url, url_norm = resolved["meta"], resolved["clean_url"], resolved["url_norm"]
     preprint = resolved.get("preprint")
     paper_id, _needs_embedding = _upsert_paper(

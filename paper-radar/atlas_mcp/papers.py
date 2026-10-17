@@ -20,6 +20,7 @@ from .tools import (
     _render,
     _untrusted,
     audited,
+    in_worker_thread,
 )
 
 
@@ -54,7 +55,7 @@ def search_lab_papers(
         team = lab.resolve_team(team_id)
         hits = lab.search(team, query.strip(), mode, _clamp(limit))
     except embeddings.EmbeddingError as exc:
-        return f"Semantic search is unavailable ({exc}). Try mode=\"keyword\"."
+        return f'Semantic search is unavailable ({exc}). Try mode="keyword".'
     except lab.LabError as exc:
         return f"Error: {exc}"
     return _papers_result(hits, f"No papers in {team['name']} match {query!r}.")
@@ -255,7 +256,9 @@ def draft_related_work(
         else:
             return "Give me a topic or a paper_id to draft related work for."
     except embeddings.EmbeddingError as exc:
-        return f"Semantic gathering needs the embedding service ({exc}). Try a paper_id or keywords."
+        return (
+            f"Semantic gathering needs the embedding service ({exc}). Try a paper_id or keywords."
+        )
     except lab.LabError as exc:
         return f"Error: {exc}"
     if not hits:
@@ -376,7 +379,11 @@ async def post_paper(
 
     try:
         _post_id, paper_id, already = lab.post_paper(team, resolved)
-        warn = lab.add_comment_with_mention(team, paper_id, note or "", member) if (note or member) else None
+        warn = (
+            lab.add_comment_with_mention(team, paper_id, note or "", member)
+            if (note or member)
+            else None
+        )
     except lab.LabError as exc:
         return f"Error: {exc}"
 
@@ -388,17 +395,21 @@ async def post_paper(
     return f"{body}\n{warn}" if warn else body
 
 
-# Read-only tools: safe to serve to any authenticated lab member.
+# Read-only tools: safe to serve to any authenticated lab member. Registered from
+# worker threads (see `in_worker_thread`); the module-level functions stay sync.
 READ_TOOLS = [
-    list_labs,
-    search_lab_papers,
-    list_recent_papers,
-    recommend_reading,
-    similar_papers,
-    lab_digest,
-    novelty_check,
-    draft_related_work,
-    get_paper,
+    in_worker_thread(t)
+    for t in (
+        list_labs,
+        search_lab_papers,
+        list_recent_papers,
+        recommend_reading,
+        similar_papers,
+        lab_digest,
+        novelty_check,
+        draft_related_work,
+        get_paper,
+    )
 ]
 # Writes into the shared lab (preview unless confirmed).
 WRITE_TOOLS = [post_paper]

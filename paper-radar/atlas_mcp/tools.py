@@ -14,6 +14,7 @@ import logging
 import re
 from collections.abc import Callable
 
+import anyio
 from mcp.server.fastmcp import Context
 from pydantic import BaseModel
 
@@ -105,6 +106,24 @@ def audited(fn: Callable) -> Callable:
             return result
         finally:
             _record(ok)
+
+    return wrapper
+
+
+def in_worker_thread(fn: Callable) -> Callable:
+    """Serve a sync tool from a worker thread instead of the event loop.
+
+    FastMCP calls sync tools directly on the loop, so on the hosted server one user's
+    slow Supabase or embedding call would stall every other user's requests. anyio's
+    worker threads run in a copy of the caller's context, so the user `lab.act_as`
+    bound for this request comes along. Async tools are returned unchanged.
+    """
+    if inspect.iscoroutinefunction(fn):
+        return fn
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
 
     return wrapper
 

@@ -13,7 +13,7 @@ from mcp.server.fastmcp import Context, Image
 from . import lab, moodboard
 from . import render as card_render
 from . import spec as card_spec
-from .tools import _clamp, _elicit_confirm, _untrusted, audited
+from .tools import _clamp, _elicit_confirm, _untrusted, audited, in_worker_thread
 
 
 def _provenance(f: dict, *, with_license: bool = False) -> list[str]:
@@ -117,9 +117,7 @@ def moodboard_categories(team_id: str | None = None) -> str:
         return f"Error: {exc}"
     if not cats:
         return f"{team['name']} has no categorised figures yet."
-    return _untrusted(
-        "categories", "\n".join(f"- {c['category']} ({c['n']})" for c in cats)
-    )
+    return _untrusted("categories", "\n".join(f"- {c['category']} ({c['n']})" for c in cats))
 
 
 @audited
@@ -198,7 +196,7 @@ def check_colorblind_safety(
             source = f"figure “{fig.get('title') or fig['id']}”"
             from_figure = True  # `source` carries an external, user-authored title
         else:
-            return "Give me a figure_id or a palette (e.g. \"#4477AA,#EE6677\")."
+            return 'Give me a figure_id or a palette (e.g. "#4477AA,#EE6677").'
     except lab.LabError as exc:
         return f"Error: {exc}"
 
@@ -262,8 +260,10 @@ def get_moodboard_style(
         style = moodboard.mplstyle(hexes, team["name"])
     except lab.LabError as exc:
         return f"Error: {exc}"
-    palette_line = ", ".join(hexes) if hexes else (
-        "(no distinct colours found — using a CVD-safe default cycle)"
+    palette_line = (
+        ", ".join(hexes)
+        if hexes
+        else ("(no distinct colours found — using a CVD-safe default cycle)")
     )
     return (
         f"Lab identity from {len(raws)} figure(s) on {team['name']}'s mood board.\n"
@@ -277,12 +277,9 @@ def _spec_summary(norm: dict) -> str:
     """One line describing what a spec will draw — v1 or v2."""
     if card_spec.is_composite(norm):
         kinds = ", ".join(p["kind"] for p in norm["panels"])
-        doms = ", ".join(
-            f"{n} x{c['n_categories']}" for n, c in norm["domains"].items()
-        )
-        return (
-            f"composite: {len(norm['panels'])} panels ({kinds})"
-            + (f" over shared rows [{doms}]" if doms else "")
+        doms = ", ".join(f"{n} x{c['n_categories']}" for n, c in norm["domains"].items())
+        return f"composite: {len(norm['panels'])} panels ({kinds})" + (
+            f" over shared rows [{doms}]" if doms else ""
         )
     return f"{norm['chart']['type']} chart, {len(norm['series'])} series"
 
@@ -510,9 +507,7 @@ async def add_plot_to_moodboard(
                 detail.append(f"{dname} labels: {', '.join(cfg['labels'])}")
         text_bits = [p["title"] for p in norm["panels"] if p.get("title")]
         text_bits += [
-            p["colorbar"]["label"]
-            for p in norm["panels"]
-            if p.get("colorbar", {}).get("label")
+            p["colorbar"]["label"] for p in norm["panels"] if p.get("colorbar", {}).get("label")
         ]
         if text_bits:
             detail.append("panel text: " + " · ".join(text_bits))
@@ -535,8 +530,7 @@ async def add_plot_to_moodboard(
 
     if not confirm:
         lines.append(
-            "\nNothing added yet. See it with preview_plot_spec; re-run with "
-            "confirm=true to add."
+            "\nNothing added yet. See it with preview_plot_spec; re-run with confirm=true to add."
         )
         return "\n".join(lines)
 
@@ -567,12 +561,15 @@ async def add_plot_to_moodboard(
 
 
 FIGURE_TOOLS = [
-    list_moodboard,
-    moodboard_categories,
-    get_figure_image,
-    get_figure_palette,
-    check_colorblind_safety,
-    get_moodboard_style,
-    preview_plot_spec,
-    add_plot_to_moodboard,
+    in_worker_thread(t)
+    for t in (
+        list_moodboard,
+        moodboard_categories,
+        get_figure_image,
+        get_figure_palette,
+        check_colorblind_safety,
+        get_moodboard_style,
+        preview_plot_spec,
+        add_plot_to_moodboard,
+    )
 ]

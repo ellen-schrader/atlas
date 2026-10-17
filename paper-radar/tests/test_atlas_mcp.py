@@ -62,12 +62,12 @@ def test_validate_share_url_blocks_unsafe(url):
 
 def test_rate_limiter_caps_within_window():
     rl = lab._RateLimiter(max_events=2, window_seconds=100)
-    rl.check(now=0)
-    rl.check(now=10)
+    rl.check("u", now=0)
+    rl.check("u", now=10)
     with pytest.raises(lab.LabError):
-        rl.check(now=20)
+        rl.check("u", now=20)
     # once the window passes, it frees up again
-    rl.check(now=200)
+    rl.check("u", now=200)
 
 
 # --- mention resolution (never guesses) -------------------------------------

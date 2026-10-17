@@ -21,8 +21,10 @@ from atlas_mcp import lab  # noqa: E402
 @pytest.fixture(autouse=True)
 def _hosted(monkeypatch):
     """Hosted-server defaults: no environment user, and a fake client per token."""
-    monkeypatch.setattr(lab, "_env_session_allowed", False)
+    reset = lab._env_session_allowed.set(False)
     monkeypatch.setattr(lab, "_user_client", lambda token: f"client-for-{token}")
+    yield
+    lab._env_session_allowed.reset(reset)
 
 
 def test_no_bound_user_fails_closed(monkeypatch):
@@ -98,8 +100,9 @@ def test_threads_each_see_their_own_user():
 
 
 def test_with_refresh_never_signs_in_again_for_a_hosted_request(monkeypatch):
-    """An expired caller token must surface as an error — re-signing in could only
-    mean signing in as the environment's user."""
+    """An expired caller token must surface as a clean, actionable error — re-signing
+    in could only mean signing in as the environment's user, and a raw PostgREST 401
+    would escape the tools (they only catch LabError)."""
     monkeypatch.setattr(lab, "_env_session", lambda: pytest.fail("signed in as the env user"))
     calls = {"n": 0}
 
@@ -109,7 +112,7 @@ def test_with_refresh_never_signs_in_again_for_a_hosted_request(monkeypatch):
         raise RuntimeError("JWT expired")
 
     with lab.act_as("tok-a", "user-a"):
-        with pytest.raises(RuntimeError, match="JWT expired"):
+        with pytest.raises(lab.LabError, match="expired — reconnect"):
             read()
     assert calls["n"] == 1
 
@@ -155,3 +158,43 @@ def test_rate_limit_is_per_user():
     with pytest.raises(lab.LabError):
         rl.check("user-a", now=2)
     rl.check("user-b", now=2)  # unaffected
+
+
+def test_env_permission_does_not_leak_into_other_contexts():
+    """allow_env_session switches on the env user for the stdio server's own context
+    only; a context started elsewhere in the process stays fail-closed."""
+    import contextvars
+
+    outside = contextvars.copy_context()  # taken before the stdio server switches it on
+    lab.allow_env_session()
+    assert outside.run(lab._env_session_allowed.get) is False
+
+
+def test_worker_thread_tools_run_as_the_bound_user():
+    """Tools are served from worker threads; the request's user must come along."""
+    from atlas_mcp.tools import in_worker_thread
+
+    tool = in_worker_thread(lambda: lab.current_user_id())
+
+    async def request(user: str) -> str:
+        with lab.act_as(f"tok-{user}", user):
+            return await tool()
+
+    async def main() -> list[str]:
+        return await asyncio.gather(*(request(f"user-{i}") for i in range(20)))
+
+    assert asyncio.run(main()) == [f"user-{i}" for i in range(20)]
+
+
+def test_threaded_tools_keep_their_schema():
+    """Wrapping must not change a tool's name or parameters as clients see them."""
+    from mcp.server.fastmcp import FastMCP
+
+    from atlas_mcp.papers import READ_TOOLS
+
+    mcp = FastMCP("t")
+    for t in READ_TOOLS:
+        mcp.add_tool(t)
+    tool = mcp._tool_manager.get_tool("search_lab_papers")
+    assert tool.is_async
+    assert list(tool.parameters["properties"]) == ["query", "mode", "limit", "team_id"]

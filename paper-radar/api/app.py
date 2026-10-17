@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
-import time
 from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -49,6 +47,7 @@ from .paper_identity import (
     preprint_refs,
     swap_to_published,
 )
+from .ratelimit import PerUserRateLimiter
 from .supa import get_user_id, service_client, user_client
 
 # Uvicorn configures only its own loggers, so without a root handler the app's
@@ -248,39 +247,16 @@ class OverviewResponse(BaseModel):
 # --- rate limiting ---------------------------------------------------------
 
 
-class _PerUserRateLimiter:
-    """Sliding-window cap, keyed by user.
-
-    In-process, so it bounds one worker rather than the fleet — enough to stop a single
-    caller looping an endpoint that makes an outbound request every time, which is what
-    /resolve does. Multi-process (gunicorn -w N, or several Fly machines) multiplies the
-    effective cap by the process count; a fleet-wide limit wants a shared store (Redis).
-
-    FastAPI runs these sync endpoints in a threadpool, so `check` is called from several
-    threads at once. Without the lock the read-modify-write races (two callers both see
-    room and both append, defeating the cap) and the eviction rebuild can hit
-    "dictionary changed size during iteration"; the lock makes each check atomic.
-    """
+class _PerUserRateLimiter(PerUserRateLimiter):
+    """The shared per-user limiter (api/ratelimit.py), answering 429 when it trips —
+    /resolve makes an outbound request every time, the query endpoints a paid one."""
 
     def __init__(self, max_events: int, window_seconds: float) -> None:
-        self.max_events = max_events
-        self.window = window_seconds
-        self._events: dict[str, list[float]] = {}
-        self._lock = threading.Lock()
-
-    def check(self, key: str) -> None:
-        now = time.monotonic()
-        with self._lock:
-            events = [t for t in self._events.get(key, []) if now - t < self.window]
-            if len(events) >= self.max_events:
-                raise HTTPException(status_code=429, detail="Too many lookups — give it a minute.")
-            events.append(now)
-            self._events[key] = events
-            # Don't let the map grow without bound as users come and go.
-            if len(self._events) > 10_000:
-                self._events = {
-                    k: v for k, v in self._events.items() if v and now - v[-1] < self.window
-                }
+        super().__init__(
+            max_events,
+            window_seconds,
+            lambda: HTTPException(status_code=429, detail="Too many lookups — give it a minute."),
+        )
 
 
 # Someone adding papers by hand does a handful a minute. 30 is far above real use and

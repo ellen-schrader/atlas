@@ -15,9 +15,9 @@ It refuses to run against anything but a local Supabase (127.0.0.1 / localhost).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import random
-import threading
 import uuid
 
 import pytest
@@ -155,9 +155,10 @@ def _local_settings(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", LOCAL_URL)
     monkeypatch.setenv("SUPABASE_ANON_KEY", ANON)
     get_api_settings.cache_clear()
-    monkeypatch.setattr(lab, "_env_session_allowed", False)
+    reset = lab._env_session_allowed.set(False)
     monkeypatch.setattr(embeddings, "embed_query", lambda text, **_: _vec(999))
     yield
+    lab._env_session_allowed.reset(reset)
     get_api_settings.cache_clear()
 
 
@@ -187,13 +188,15 @@ def _run_every_read_tool(me: Lab, other: Lab) -> dict[str, str]:
 REACHING = ("get other", "search other lab", "similar other", "recent other lab")
 
 
-def _assert_isolated(me: Lab, other: Lab, out: dict[str, str]) -> None:
+def _assert_isolated(me: Lab, other: Lab, out: dict[str, str], check_own: bool = True) -> None:
     for label, text in out.items():
         # A refusal may echo back the id the caller passed in; it must not add any of
         # the other lab's data (its marker is in every title, abstract and its name).
         forbidden = [other.marker] if label in REACHING else other.forbidden()
         for s in forbidden:
             assert s not in text, f"{me.tag} saw {other.tag}'s {s!r} via {label}:\n{text}"
+    if not check_own:
+        return
     # And the tools really did return this lab's own data (not just errors).
     for label in (
         "list_labs",
@@ -218,24 +221,60 @@ def test_each_lab_sees_only_itself(labs):
 
 
 def test_isolation_holds_under_concurrency(labs):
-    """Both users hammering the same process at once — the hosted server's normal day."""
+    """Both users hammering one server at once — the hosted server's normal day.
+
+    Driven through FastMCP's own call path with the tools as registered (each served
+    from a worker thread), and `act_as` entered per task the way the auth layer will:
+    so a user lost between the request task and the tool's thread fails here too.
+    """
+    from mcp.server.fastmcp import FastMCP
+
     a, b = labs
-    failures: list[BaseException] = []
+    mcp = FastMCP("isolation")
+    for t in papers.READ_TOOLS:
+        mcp.add_tool(t)
 
-    def user(me: Lab, other: Lab) -> None:
-        try:
-            for _ in range(3):
-                _assert_isolated(me, other, _run_every_read_tool(me, other))
-        except BaseException as exc:  # noqa: BLE001 — collected and re-raised below
-            failures.append(exc)
+    async def call(me: Lab, tool: str, args: dict) -> str:
+        with lab.act_as(me.token, me.user_id):
+            result = await mcp.call_tool(tool, args)
+        blocks = result[0] if isinstance(result, tuple) else result
+        return "\n".join(getattr(c, "text", "") for c in blocks)
 
-    threads = [threading.Thread(target=user, args=pair) for pair in ((a, b), (b, a)) * 2]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    if failures:
-        raise failures[0]
+    def calls(me: Lab, other: Lab) -> list[tuple[Lab, Lab, str, str, dict]]:
+        plan = [
+            ("list_labs", "list_labs", {}),
+            ("search keyword", "search_lab_papers", {"query": "isolation study"}),
+            ("search semantic", "search_lab_papers", {"query": "isolation", "mode": "semantic"}),
+            ("recent", "list_recent_papers", {"limit": 50}),
+            ("recommend", "recommend_reading", {"limit": 50}),
+            ("similar", "similar_papers", {"paper_id": me.paper_ids[0], "limit": 50}),
+            ("digest", "lab_digest", {"days": 7}),
+            ("novelty", "novelty_check", {"text": "spatial isolation"}),
+            ("related work", "draft_related_work", {"topic": "isolation", "limit": 20}),
+            ("get own", "get_paper", {"paper_id": me.paper_ids[1]}),
+            ("get other", "get_paper", {"paper_id": other.paper_ids[0]}),
+            (
+                "search other lab",
+                "search_lab_papers",
+                {"query": "isolation", "team_id": other.team_id},
+            ),
+            ("similar other", "similar_papers", {"paper_id": other.paper_ids[0]}),
+            ("recent other lab", "list_recent_papers", {"team_id": other.team_id}),
+        ]
+        return [(me, other, label, tool, args) for label, tool, args in plan]
+
+    async def main() -> None:
+        jobs = (calls(a, b) + calls(b, a)) * 3
+        random.Random(0).shuffle(jobs)  # interleave the two users' calls
+        outputs = await asyncio.gather(*(call(me, tool, args) for me, _, _, tool, args in jobs))
+        by_user: dict[str, dict[str, str]] = {a.tag: {}, b.tag: {}}
+        for (me, other, label, _, _), text in zip(jobs, outputs, strict=True):
+            by_user[me.tag][label] = text
+            _assert_isolated(me, other, {label: text}, check_own=False)
+        _assert_isolated(a, b, by_user[a.tag])
+        _assert_isolated(b, a, by_user[b.tag])
+
+    asyncio.run(main())
 
 
 def test_rpcs_refuse_another_labs_id_directly(labs):
