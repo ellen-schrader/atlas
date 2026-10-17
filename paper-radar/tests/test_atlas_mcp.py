@@ -178,7 +178,7 @@ class _FakeCtx:
         return SimpleNamespace(action=self.action, data=schema())
 
 
-def _drive_post_paper(monkeypatch, *, confirm, ctx):
+def _drive_post_paper(monkeypatch, *, confirm, ctx, preprint=None):
     """Run the post_paper tool with the lab data-layer stubbed; returns
     (result_text, number_of_writes)."""
     pytest.importorskip("mcp")
@@ -194,6 +194,7 @@ def _drive_post_paper(monkeypatch, *, confirm, ctx):
             "clean_url": url,
             "url_norm": "n",
             "meta": SimpleNamespace(title="A Paper", authors=[], venue=None, year=None),
+            "preprint": preprint,
         },
     )
     monkeypatch.setattr(
@@ -225,6 +226,19 @@ def test_post_paper_decline_blocks_write(monkeypatch):
 def test_post_paper_accept_writes(monkeypatch):
     out, n = _drive_post_paper(monkeypatch, confirm=True, ctx=_FakeCtx(action="accept"))
     assert "Shared to Lab A" in out
+    assert n == 1
+
+
+def test_post_paper_says_when_a_preprint_was_swapped_for_its_published_version(monkeypatch):
+    """Sharing a published preprint posts the published version; both the preview and
+    the result must say so, so the user isn't surprised by a different paper."""
+    pre = SimpleNamespace(venue="bioRxiv")
+    out, _ = _drive_post_paper(monkeypatch, confirm=False, ctx=_FakeCtx(), preprint=pre)
+    assert "bioRxiv preprint which has since been published" in out
+    out, n = _drive_post_paper(
+        monkeypatch, confirm=True, ctx=_FakeCtx(action="accept"), preprint=pre
+    )
+    assert "published version of the preprint you linked" in out
     assert n == 1
 
 
