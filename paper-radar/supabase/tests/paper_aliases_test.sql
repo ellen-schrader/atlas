@@ -4,7 +4,7 @@
 -- Isolated id space so it rolls back cleanly anywhere.
 
 begin;
-select plan(32);
+select plan(33);
 
 -- Ada and Bo in lab B1, Cy alone in lab B2.
 -- P1 = preprint (bioRxiv), P2 = published. B1 posted both, B2 only the preprint.
@@ -134,16 +134,19 @@ select set_eq(
     $$ select jsonb_array_elements_text(tags) from public.papers where id = 'e7000000-0000-0000-0000-0000000000c2' $$,
     $$ values ('spatial'), ('tumour'), ('immunology') $$, 'AI tags are combined');
 
--- Three rows whose DOIs differ only in case; the kept one failed to resolve.
--- The second merge would write the same alias DOI as the first.
+-- One DOI held twice, one after the other: a row merged away, then the same
+-- paper posted again (before ingest read aliases) and merged a second time. The
+-- second merge would write the alias DOI the first already holds. The kept row
+-- failed to resolve, so the first merge also fills it.
 insert into public.papers (id, doi, url, url_norm, title, authors, year, venue) values
-    ('e7000000-0000-0000-0000-000000000011', '10.9999/MRG-ABC', 'https://x/1', 'mrg/case-1', 'Case title', '["Ada Lovelace"]', 2024, 'Cell'),
-    ('e7000000-0000-0000-0000-000000000012', '10.9999/Mrg-Abc', 'https://x/2', 'mrg/case-2', 'Other title', '["Bo"]', 2023, 'Cell'),
-    ('e7000000-0000-0000-0000-000000000013', '10.9999/mrg-abc', 'https://x/3', 'mrg/case-3', null, '[]', null, null);
+    ('e7000000-0000-0000-0000-000000000011', '10.9999/mrg-abc', 'https://x/1', 'mrg/case-1', 'Case title', '["Ada Lovelace"]', 2024, 'Cell'),
+    ('e7000000-0000-0000-0000-000000000013', null, 'https://x/3', 'mrg/case-3', null, '[]', null, null);
 
 select lives_ok(
     $$ select public.merge_papers('e7000000-0000-0000-0000-000000000011', 'e7000000-0000-0000-0000-000000000013', 'doi_case') $$,
     'first DOI-case merge');
+insert into public.papers (id, doi, url, url_norm, title, authors, year, venue) values
+    ('e7000000-0000-0000-0000-000000000012', '10.9999/mrg-abc', 'https://x/2', 'mrg/case-2', 'Other title', '["Bo"]', 2023, 'Cell');
 select lives_ok(
     $$ select public.merge_papers('e7000000-0000-0000-0000-000000000012', 'e7000000-0000-0000-0000-000000000013', 'doi_case') $$,
     'a second merge with the same alias DOI does not fail');
@@ -158,6 +161,8 @@ select is((select title || '/' || (authors ->> 0) || '/' || year from public.pap
     'Case title/Ada Lovelace/2024', 'an empty title, authors and year are filled from the first merge');
 select is((select venue from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
     null, 'the venue is never taken from the old row');
+select is((select doi from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
+    null, 'nor the DOI: it stays on the alias, where ingest finds it');
 
 -- Guards.
 select throws_ok(

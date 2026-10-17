@@ -328,7 +328,13 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
     null and which therefore renders as a bare URL everywhere. If someone now
     supplies the title by hand, adopt it — otherwise the manual path would
     silently do nothing for the very papers it exists to fix. Only ever fills a
-    blank; it never overwrites metadata a resolver already got right.
+    blank; it never overwrites metadata a resolver already got right. ``row``
+    must carry the fields it compares (``_REPAIR_COLUMNS``): a field the row
+    was read without would look blank and be overwritten.
+
+    The DOI is filled only when no other paper (or alias) holds it. The row may
+    have been found through an alias, and a DOI another paper owns would either
+    fail the write on the unique key or give this paper another's identity.
     """
     if row.get("title") or not meta.title:
         return False
@@ -342,21 +348,23 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
         # Repairing the title makes the paper embeddable for the first time.
         "embedded_at": None,
     }
-    for key in ("authors", "keywords"):
+    for key in ("authors", "keywords", "venue", "year", "abstract"):
         value = getattr(meta, key)
-        if value:
+        if value not in (None, "", []) and row.get(key) in (None, "", []):
             patch[key] = value
-    for key in ("venue", "year", "doi", "abstract"):
-        value = getattr(meta, key)
-        if value is not None:
-            patch[key] = value
+    # papers.doi holds only the folded form (20261017140000_doi_normalised.sql).
+    doi = _norm_doi(meta.doi)
+    if doi and not row.get("doi"):
+        owner = find_paper(service_client(), None, doi)
+        if owner is None or owner["id"] == row["id"]:
+            patch["doi"] = doi
     # A row can be untitled and still have hand-corrected fields (the API allows
     # editing venue or year without a title); those are not the resolver's to fill.
     for key in row.get("edited_fields") or []:
         patch.pop(key, None)
     try:
         service_client().table("papers").update(patch).eq("id", row["id"]).execute()
-    except Exception as exc:  # a unique-DOI clash shouldn't fail the post
+    except Exception as exc:  # a lost race on the DOI shouldn't fail the post
         log.warning("repairing untitled paper %s failed: %s", row["id"], exc)
         return False
     return True
@@ -391,9 +399,15 @@ def _upsert_paper(
     return paper_id, needs_embedding
 
 
+# What _repair_untitled compares against: it fills only fields that are blank.
+_REPAIR_COLUMNS = (
+    "id, title, embedded_at, edited_fields, doi, venue, year, abstract, authors, keywords"
+)
+
+
 def _find_or_insert_paper(svc, meta: PaperMetadata, url: str, url_norm: str) -> tuple[str, bool]:
     doi = _norm_doi(meta.doi)
-    row = find_paper(svc, url_norm, doi, "id, title, embedded_at, edited_fields")
+    row = find_paper(svc, url_norm, doi, _REPAIR_COLUMNS)
     if row:
         return row["id"], _repair_untitled(row, meta) or row["embedded_at"] is None
 
@@ -412,7 +426,14 @@ def _find_or_insert_paper(svc, meta: PaperMetadata, url: str, url_norm: str) -> 
     try:
         inserted = svc.table("papers").insert(row).execute()
         return inserted.data[0]["id"], True
-    except Exception:
+    except Exception as exc:
+        if getattr(exc, "code", None) == "23514" and doi:
+            # papers_doi_normalised: the database folded this DOI differently
+            # from norm_doi (an exotic character). A DOI no lookup would find is
+            # worth less than the post, so store the paper without it.
+            log.warning("DOI %r refused by papers_doi_normalised; storing without it", doi)
+            inserted = svc.table("papers").insert({**row, "doi": None}).execute()
+            return inserted.data[0]["id"], True
         # Lost a race on the url_norm unique constraint — re-read the winner.
         again = svc.table("papers").select("id").eq("url_norm", url_norm).limit(1).execute()
         if again.data:
@@ -734,6 +755,10 @@ def _apply_edit(
         if code == "23505":  # unique_violation — the DOI guard lost a race
             raise HTTPException(
                 status_code=409, detail="Another paper already holds that DOI."
+            ) from exc
+        if code == "23514":  # check_violation — papers_doi_normalised
+            raise HTTPException(
+                status_code=422, detail="That DOI isn’t in a form Atlas can store."
             ) from exc
         raise
 
