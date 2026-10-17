@@ -7,9 +7,12 @@ then checks the extractor recovers both.
 
 from __future__ import annotations
 
-import fitz  # PyMuPDF
+import pytest
 
-from paper_radar.ingest.pdf_extract import (
+# PyMuPDF is AGPL and lives in the `legacy` extra, which CI doesn't install.
+fitz = pytest.importorskip("fitz")
+
+from paper_radar.ingest.pdf_extract import (  # noqa: E402
     _normalize_key,
     extract_urls_from_pdf,
     parse_posted_at,
