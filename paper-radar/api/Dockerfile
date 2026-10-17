@@ -19,6 +19,9 @@ RUN uv sync --frozen --extra api --no-dev --no-install-project
 COPY README.md ./
 COPY paper_radar ./paper_radar
 COPY api ./api
+# The hosted Claude connector (atlas_mcp/http.py) is served by this process. Only
+# its paper tools are imported, so the mood board's Pillow/matplotlib stay out.
+COPY atlas_mcp ./atlas_mcp
 RUN uv sync --frozen --extra api --no-dev
 
 # Drop root: an RCE (or a compromised dependency) in the app then runs as an

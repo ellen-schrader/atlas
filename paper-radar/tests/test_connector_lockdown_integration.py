@@ -19,12 +19,8 @@ Opt-in, local only, and needs `[auth.oauth_server] enabled = true` in config.tom
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import os
-import secrets
 import uuid
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -38,77 +34,18 @@ import httpx  # noqa: E402
 from api import embeddings  # noqa: E402
 from api.config import get_api_settings  # noqa: E402
 from atlas_mcp import lab, papers  # noqa: E402
+from tests.local_supabase import (  # noqa: E402
+    ANON,
+    AUTH,
+    LOCAL_URL,
+    REST,
+    SERVICE,
+    oauth_server_on,
+)
+from tests.local_supabase import bearer as _bearer  # noqa: E402
+from tests.local_supabase import connector_token as _connector_token  # noqa: E402
 
-LOCAL_URL = os.environ.get("ATLAS_IT_SUPABASE_URL", "http://127.0.0.1:54321")
-AUTH = f"{LOCAL_URL}/auth/v1"
-REST = f"{LOCAL_URL}/rest/v1"
-# The standard local-stack demo keys (`supabase status`) — never a real project's.
-ANON = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24i"
-    "LCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-)
-SERVICE = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZp"
-    "Y2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
-)
-REDIRECT = "http://localhost:33418/callback"
 PASSWORD = "connector-lockdown-test-only"
-
-assert LOCAL_URL.startswith(("http://127.0.0.1", "http://localhost")), "local Supabase only"
-
-
-def _bearer(token: str) -> dict:
-    return {"apikey": ANON, "Authorization": f"Bearer {token}"}
-
-
-def _connector_token(web_token: str) -> tuple[str, str]:
-    """(access_token, client_id) for a fresh OAuth client, approved by the user."""
-    client = httpx.post(
-        f"{AUTH}/oauth/clients/register",
-        json={
-            "client_name": "Lockdown test",
-            "redirect_uris": [REDIRECT],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-        },
-    ).json()
-    verifier = secrets.token_urlsafe(48)
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    )
-    r = httpx.get(
-        f"{AUTH}/oauth/authorize",
-        params={
-            "response_type": "code",
-            "client_id": client["client_id"],
-            "redirect_uri": REDIRECT,
-            "state": "s",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        },
-    )
-    aid = parse_qs(urlparse(r.headers["location"]).query)["authorization_id"][0]
-    # The consent page: read the request (binds it to the user), then approve.
-    httpx.get(f"{AUTH}/oauth/authorizations/{aid}", headers=_bearer(web_token))
-    approved = httpx.post(
-        f"{AUTH}/oauth/authorizations/{aid}/consent",
-        headers=_bearer(web_token),
-        json={"action": "approve"},
-    ).json()
-    code = parse_qs(urlparse(approved["redirect_url"]).query)["code"][0]
-    tokens = httpx.post(
-        f"{AUTH}/oauth/token",
-        headers={"apikey": ANON},
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT,
-            "client_id": client["client_id"],
-            "code_verifier": verifier,
-        },
-    ).json()
-    return tokens["access_token"], client["client_id"]
 
 
 def _vec() -> list[float]:
@@ -117,7 +54,7 @@ def _vec() -> list[float]:
 
 @pytest.fixture(scope="module")
 def world():
-    if httpx.get(f"{AUTH}/.well-known/oauth-authorization-server").status_code != 200:
+    if not oauth_server_on():
         pytest.skip("local Supabase OAuth server is off ([auth.oauth_server] in config.toml)")
     admin = _bearer(SERVICE)
     marker = f"LOCKDOWN-{uuid.uuid4().hex[:8]}"

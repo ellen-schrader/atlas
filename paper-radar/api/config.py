@@ -33,6 +33,14 @@ class ApiSettings(BaseSettings):
     # slash optional. Empty = omit the Atlas button (the card still links the paper).
     atlas_web_url: str = ""
 
+    # --- Hosted MCP server (Claude connector, docs/CLAUDE_CONNECTOR_PLAN.md M3) ---
+    # Public URL the connector is served at, e.g. https://mcp.labatlas.app. Requests
+    # for that host go to the MCP server; empty = not hosted (local dev, tests).
+    mcp_public_url: str = ""
+    # Query embeddings (Voyage) the hosted connector may spend per UTC day, across all
+    # users. Past it, semantic tools say so and keyword search still works.
+    mcp_daily_embeddings: int = 2000
+
     @property
     def configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_anon_key and self.supabase_service_role_key)

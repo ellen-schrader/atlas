@@ -6,6 +6,11 @@ primary_region = "lhr"
 [build]
   dockerfile = "api/Dockerfile"
 
+[env]
+  # The Claude connector (atlas_mcp/http.py): requests for this host go to the hosted
+  # MCP server in this same process; every other host is the API. Not a secret.
+  MCP_PUBLIC_URL = "https://mcp.labatlas.app"
+
 [http_service]
   internal_port = 8080
   force_https = true
