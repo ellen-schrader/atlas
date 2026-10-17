@@ -377,12 +377,15 @@ enabled = false
 
 # OAuth server configuration
 [auth.oauth_server]
-# Enable OAuth server functionality
-enabled = false
+# The Claude connector signs in through this (docs/CLAUDE_CONNECTOR_PLAN.md). Safe to
+# have on: connector tokens can only read papers (connector_lockdown migration), and
+# the consent page (web/src/routes/OAuthConsent.tsx) only approves Claude's own
+# redirects. The consent URL is site_url + this path; run the web app on 3000 locally.
+enabled = true
 # Path for OAuth consent flow UI
 authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
-allow_dynamic_registration = false
+allow_dynamic_registration = true
 
 [edge_runtime]
 enabled = true

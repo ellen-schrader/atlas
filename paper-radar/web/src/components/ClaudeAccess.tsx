@@ -48,7 +48,7 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
           </Heading>
           <p className="mt-1 max-w-[54ch] text-sm text-muted">
             {enabled
-              ? `Claude can read ${teamName}'s papers and post into it. Every call is logged.`
+              ? `Claude can read ${teamName}'s papers (and, with the local setup, post into it). Every call is logged.`
               : `Atlas refuses every Claude tool call for ${teamName} while this is off.`}
           </p>
         </div>
@@ -112,13 +112,14 @@ export function ClaudeScope({ teamName }: { teamName: string }) {
       </Line>
       <Line kind="allow">
         Read the figure gallery, derive your palette + a matplotlib style sheet, and check it for
-        colourblind-safety
+        colourblind-safety — <em>local setup only</em>
       </Line>
       <Line kind="write">
         <strong className="font-semibold text-fg">Post a paper</strong> into {teamName}, optionally
         with a comment that @-mentions a teammate. This{" "}
         <strong className="font-semibold text-fg">writes to the shared lab</strong> — it previews by
-        default and only writes when you confirm.
+        default and only writes when you confirm. <em>Local setup only</em>: the Claude connector
+        can only read.
       </Line>
       <Line kind="deny">
         Read the <strong className="font-semibold">text of comments</strong>, or who reacted with
