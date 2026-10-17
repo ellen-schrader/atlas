@@ -34,7 +34,7 @@ from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url, norm_doi
 
-from . import embeddings, enrichment, integrations, maps, teams_integration
+from . import embeddings, enrichment, integrations, maps, merge_suggestions, teams_integration
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .backfill_metadata import _doi_owner, follow_year, plan_update
@@ -611,6 +611,10 @@ def create_post(
         background.add_task(_embed_and_store, paper_id, meta.title, meta.abstract)
     if needs_embedding:
         background.add_task(_enrich_and_store, paper_id, meta.title, meta.abstract)
+    if not already:
+        # A preprint and its published version the lab now holds both of, that
+        # nothing links: ask the lab (api/merge_suggestions.py).
+        background.add_task(merge_suggestions.suggest_for_post, req.team_id, paper_id)
 
     # Mirror new web posts to the lab's Teams channel (no-op for unmapped labs;
     # failures are logged inside, never surfaced). Loop guard: only source='web'

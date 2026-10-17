@@ -30,9 +30,7 @@ Usage (from paper-radar/, with api/.env configured):
 from __future__ import annotations
 
 import argparse
-import re
 import time
-import unicodedata
 from collections import defaultdict
 
 from paper_radar.ingest.metadata import (
@@ -44,6 +42,7 @@ from paper_radar.ingest.metadata import (
 )
 from paper_radar.ingest.urls import norm_doi
 
+from .merge_suggestions import fold, surname
 from .supa import service_client
 
 _PAGE = 500
@@ -112,16 +111,8 @@ def title_key(row: dict) -> tuple[str, str] | None:
     authors = row.get("authors") or []
     if not title.strip() or not authors:
         return None
-
-    def fold(text: str) -> str:
-        text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-        return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-
-    words = fold(str(authors[0])).split()
-    names = [w for w in words if len(w) > 2] or words
-    if not names:
-        return None
-    return fold(title), names[-1]
+    first = surname(authors[0])
+    return (fold(title), first) if first else None
 
 
 def find_title_pairs(preprints: list[dict], rows: list[dict]) -> list[tuple[dict, dict]]:
