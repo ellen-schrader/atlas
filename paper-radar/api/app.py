@@ -20,14 +20,17 @@ import json
 import logging
 import re
 from collections import Counter
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
 import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, StringConstraints
+from starlette.routing import Host
 
 from paper_radar.ingest import bibtex as bib
 from paper_radar.ingest import url_guard
@@ -61,7 +64,38 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Atlas API", version="0.1.0")
+
+def _connector():
+    """The hosted MCP server — the Claude connector (atlas_mcp/http.py) — if this
+    deployment serves one (MCP_PUBLIC_URL). Imported lazily: most API work never needs it."""
+    s = get_api_settings()
+    if not s.mcp_public_url:
+        return None
+    from atlas_mcp.http import build_mcp
+
+    return build_mcp(s.mcp_public_url, s.supabase_url)
+
+
+_mcp = _connector()
+_mcp_app = _mcp.streamable_http_app() if _mcp else None
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # A mounted sub-app's own lifespan never runs, so start the MCP session manager here.
+    if _mcp is None:
+        yield
+        return
+    async with _mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title="Atlas API", version="0.1.0", lifespan=_lifespan)
+if _mcp_app is not None:
+    # Everything for the connector's host goes to the MCP server; every other host
+    # (the API's own) never reaches it. First, so it wins over the API's routes.
+    _mcp_host = urlparse(get_api_settings().mcp_public_url).hostname
+    app.router.routes.insert(0, Host(_mcp_host, _mcp_app))
 
 # The Vite dev server calls this cross-origin. Origins are configurable
 # (CORS_ORIGINS, comma-separated) so dev on an alternate port and the deployed

@@ -47,6 +47,10 @@ api = [
     "supabase>=2.9",
     "httpx>=0.27",         # direct import (teams_integration retry); also a supabase dep
     "bibtexparser>=1.4",   # .bib import (ingest/bibtex.py)
+    # The hosted Claude connector (atlas_mcp/http.py) runs in this process. Just the
+    # SDK and JWT verification — the mood board's Pillow/matplotlib stay in `mcp`.
+    "mcp>=1.2",
+    "pyjwt[crypto]>=2.8",
 ]
 # Local stdio MCP server (atlas_mcp) — reuses api/.env + Supabase (see
 # docs/CLAUDE_INTEGRATION_PLAN.md). Run: uv run --extra mcp python -m atlas_mcp

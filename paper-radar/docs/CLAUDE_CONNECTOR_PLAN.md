@@ -261,16 +261,56 @@ Code review (high) fixes, same PR:
 
 Redirect-URI allowlist: moved to M4 (the consent page), where it's enforced.
 
-### M3 — Host it ($0)
-- `FastMCP(token_verifier=SupabaseTokenVerifier(), auth=AuthSettings(...))`, mounted at
-  `/mcp` in the existing FastAPI app. `stateless_http=True` (needed because the machine
-  suspends).
-- The verifier checks the JWT **locally against Supabase's JWKS** (cached, no network
-  call per request): ES256 only, issuer, expiry, `client_id` present, and session alive
-  (cached for about a minute). Prod already signs with ES256 (M0).
-- Per-user rate limit, size caps, global Voyage cap with keyword fallback.
-- `mcp.labatlas.app` CNAME. Enable the OAuth server on the prod project via the
-  dashboard. Deploy on merge to main as usual, never from a laptop.
+### M3 — Host it ($0) ✅ (branch `connector-m3`)
+
+What landed:
+- **`atlas_mcp/http.py`:** a FastMCP resource server serving only the 9 read tools.
+  Each tool is wrapped (`as_caller`) to run as the token's user through `lab.act_as`.
+  Settings: `stateless_http`, JSON responses, and DNS-rebinding protection allowing
+  only the public host (origins: our own, claude.ai, claude.com; no `Origin` is fine).
+- **`SupabaseTokenVerifier`:** checks the JWT locally against Supabase's JWKS (cached
+  for an hour): ES256/RS256 only (**never HS256**), issuer, `aud=authenticated`,
+  exp/iat/sub required, and **`client_id` required**, so web-session tokens are refused.
+  Revocation is enforced by the M2 database gate on every query, so the verifier doesn't
+  check sessions itself.
+- **Served by the existing API process:** `api/app.py` mounts it as a Starlette `Host`
+  route for `MCP_PUBLIC_URL`'s host (set in `fly.toml [env]`), and its lifespan starts
+  the MCP session manager. Every other host is the API, unchanged (`POST /mcp` → 404).
+- **Pooled database client** (the item carried over from M1): each request gets a
+  lightweight `SyncPostgrestClient` over one shared httpx pool. A test pins that tokens
+  never leak between callers on the pool.
+- **Limits:** 60 tool calls per user per minute. Query embeddings are capped at
+  **2000 per UTC day across all users** (`MCP_DAILY_EMBEDDINGS`); past that, semantic
+  tools say so and keyword search still works. Inputs are cut to 4000 characters
+  before embedding.
+- **Image:** the `api` extra gains `mcp` + `pyjwt[crypto]` (lockfile +4 lines). The
+  Dockerfile now copies `atlas_mcp`, which `.dockerignore` used to exclude. **Without
+  this the API would have crashed at boot**; a local `docker build` + run caught it.
+  Inside the image: Pillow and matplotlib aren't loaded, and the process uses ~77 MB.
+
+Tests:
+- `tests/test_mcp_http.py` (offline, CI, 17): the verifier (good, web, wrong
+  iss/aud/exp/sub, HS256 forgery, bad signature), pool header isolation, the 401
+  challenge, metadata, the read-tools-only list, per-call user binding, foreign Host
+  refused, the per-user cap, and the embedding budget. Mutation-checked: dropping the
+  `client_id` check or the `act_as` binding fails tests.
+- `tests/test_mcp_http_integration.py` (opt-in, 5): the **real API process** under
+  uvicorn with the connector mounted, the MCP SDK client, and a real OAuth token. It
+  covers unauthenticated → 401 + metadata, web token → 401, connector → 9 tools
+  answering from its lab, the API host unaffected, and revoke → the next call says so.
+- `tests/local_supabase.py`: shared OAuth and local-stack helpers for the integration
+  tests.
+
+**Production steps (yours; nothing goes live until M4):**
+1. Merge. The deploy mounts the connector on `mcp.labatlas.app`, which nothing can
+   reach yet.
+2. DNS: add a **CNAME** `mcp` → `paper-radar-api.fly.dev` at your DNS provider.
+3. `fly certs add mcp.labatlas.app` (from `paper-radar/`), then wait for the
+   certificate. Fly includes a handful of certificates free; check `fly certs list`.
+4. Check: `curl -i -X POST https://mcp.labatlas.app/mcp` → 401 with a
+   `resource_metadata` link.
+5. **Don't** turn on Supabase's OAuth server in production yet. That happens with M4,
+   once the consent page and its redirect allowlist exist.
 
 ### M4 — Consent page + Connect page (web)
 - `/oauth/consent`: log in if needed (existing `?next=` flow) → redirect-URI allowlist

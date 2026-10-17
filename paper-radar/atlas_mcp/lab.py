@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -90,14 +91,16 @@ def _user_client(token: str) -> Client:
 
 
 @contextmanager
-def act_as(token: str, user_id: str) -> Iterator[None]:
+def act_as(token: str, user_id: str, client: Client | None = None) -> Iterator[None]:
     """Run the enclosed tool call as the user who owns `token`.
 
     The caller (the hosted server's auth layer) must already have verified the token
     and taken `user_id` from it. The binding lives in a contextvar, so concurrent
-    requests — each in its own task — never see each other's user.
+    requests — each in its own task — never see each other's user. `client`, if
+    given, is a client already carrying `token` (the hosted server passes a cheap
+    one over a shared connection pool); otherwise a full Supabase client is built.
     """
-    reset = _request_session.set((_user_client(token), user_id))
+    reset = _request_session.set((client or _user_client(token), user_id))
     try:
         yield
     finally:
@@ -337,6 +340,41 @@ def _pick_team(team_id: str | None) -> dict:
     raise LabError(f"You're in multiple labs — pass team_id. Options: {opts}")
 
 
+# Query embeddings are the one paid call a hosted tool makes (Voyage). Bounded per
+# user by the hosted server's call limit, and here across everyone per UTC day, so no
+# amount of use can run up a bill. Long inputs are cut: a few paragraphs is plenty.
+_MAX_EMBED_CHARS = 4000
+
+
+class _DailyBudget:
+    def __init__(self) -> None:
+        self._day = ""
+        self._spent = 0
+        self._lock = threading.Lock()
+
+    def spend(self, limit: int) -> None:
+        from datetime import UTC, datetime
+
+        today = datetime.now(UTC).date().isoformat()
+        with self._lock:
+            if today != self._day:
+                self._day, self._spent = today, 0
+            if self._spent >= limit:
+                raise embeddings.EmbeddingError(
+                    "today's semantic-search allowance is used up; keyword search still works"
+                )
+            self._spent += 1
+
+
+_embed_budget = _DailyBudget()
+
+
+def _embed_query(text: str) -> list[float]:
+    if _request_session.get() is not None:  # hosted: a shared, paid quota
+        _embed_budget.spend(get_api_settings().mcp_daily_embeddings)
+    return embeddings.embed_query(text[:_MAX_EMBED_CHARS])
+
+
 def _hydrate(client: Client, posts: list[dict]) -> list[dict]:
     """Attach each post's paper (one `in_` query), preserving post order."""
     ids = list({p["paper_id"] for p in posts})
@@ -376,7 +414,7 @@ def search(team: dict, query: str, mode: str, limit: int) -> list[dict]:
     if mode == "semantic":
         # The embedding key is server-side only; the ranking RPC runs as the
         # user, so RLS still scopes results to this lab.
-        vector = embeddings.embed_query(query)  # raises EmbeddingError if unavailable
+        vector = _embed_query(query)  # raises EmbeddingError if unavailable
         matches = (
             client.rpc("match_papers", {"p_team": team["id"], "p_query": vector, "p_limit": limit})
             .execute()
@@ -557,7 +595,7 @@ def novelty(
         if vec is None:
             raise LabError("That paper has no embedding to compare against.")
     elif text and text.strip():
-        vec = embeddings.embed_query(text.strip())
+        vec = _embed_query(text.strip())
     else:
         raise LabError("Give me some text or a paper_id to check.")
     hits = _match_by_vector(client, team, vec, limit + (1 if paper_id else 0))
