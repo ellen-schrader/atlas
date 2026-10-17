@@ -20,6 +20,7 @@ import json
 import logging
 import re
 from collections import Counter
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -61,7 +62,31 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Atlas API", version="0.1.0")
+
+def _connector():
+    """The hosted MCP server — the Claude connector (atlas_mcp/http.py) — if this
+    deployment serves one (MCP_PUBLIC_URL). Imported lazily: most API work never needs it."""
+    s = get_api_settings()
+    if not s.mcp_public_url:
+        return None
+    from atlas_mcp.http import Connector
+
+    return Connector(s.mcp_public_url, s.supabase_url)
+
+
+_mcp = _connector()
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    if _mcp is None:
+        yield
+        return
+    async with _mcp.running():
+        yield
+
+
+app = FastAPI(title="Atlas API", version="0.1.0", lifespan=_lifespan)
 
 # The Vite dev server calls this cross-origin. Origins are configurable
 # (CORS_ORIGINS, comma-separated) so dev on an alternate port and the deployed
@@ -75,6 +100,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+if _mcp is not None:
+    # Added last = outermost: the connector's host goes straight to it, past the API's
+    # routes and CORS; every other host is the API as before.
+    from atlas_mcp.http import ConnectorHost
+
+    app.add_middleware(ConnectorHost, connector=_mcp)
 
 app.include_router(maps.router)
 app.include_router(integrations.router)

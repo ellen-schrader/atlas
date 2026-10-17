@@ -110,6 +110,13 @@ def audited(fn: Callable) -> Callable:
     return wrapper
 
 
+# The tools' own threads. anyio's default pool (40) is shared with FastAPI's sync
+# endpoints and the Teams webhook in the same process, so tools stuck on a slow
+# Supabase or Voyage call could otherwise starve the API — and Teams gives the
+# webhook ~5 s. With their own cap, a busy connector only queues behind itself.
+TOOL_THREADS = anyio.CapacityLimiter(8)
+
+
 def in_worker_thread(fn: Callable) -> Callable:
     """Serve a sync tool from a worker thread instead of the event loop.
 
@@ -123,7 +130,9 @@ def in_worker_thread(fn: Callable) -> Callable:
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
-        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+        return await anyio.to_thread.run_sync(
+            functools.partial(fn, *args, **kwargs), limiter=TOOL_THREADS
+        )
 
     return wrapper
 

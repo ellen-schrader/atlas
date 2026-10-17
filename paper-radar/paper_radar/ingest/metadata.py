@@ -191,6 +191,31 @@ def _clean_text(text: str | None) -> str | None:
     return text or None
 
 
+# Crossref titles keep their JATS inline markup, and lay it out like XML: each
+# element on its own indented line. "Na\n    <sup>+</sup>\n    /H …" has to read
+# "Na+/H …", "of\n    <scp>PD</scp>\n    ‐\n    <scp>L1</scp>" "of PD‐L1", and
+# "xenium\n    <i>in situ</i>\n    spatial" keep its spaces. So the whitespace
+# around a tag goes when it only separates the tag from punctuation, or sits
+# before a superscript or subscript; elsewhere it becomes one space.
+_TAG = r"<[^>]+>"
+_BEFORE_SCRIPT_RE = re.compile(r"\s+(?=<(?:[a-z]+:)?su[bp]\b)", re.IGNORECASE)
+_AFTER_TAG_RE = re.compile(r"(?<=>)\s+(?=[.,;:!?)\]}/\-\u2010-\u2015])")
+_BEFORE_TAG_RE = re.compile(r"(?<=[(\[{/\-\u2010-\u2015])\s+(?=<)")
+
+
+def clean_title(text: str | None) -> str | None:
+    """A title as plain text: inline markup (JATS, HTML, MathML) and entities
+    removed, with the spacing a reader would expect."""
+    if not text:
+        return None
+    text = _BEFORE_SCRIPT_RE.sub("", text)
+    text = _AFTER_TAG_RE.sub("", text)
+    text = _BEFORE_TAG_RE.sub("", text)
+    text = re.sub(_TAG, "", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
 # --- identifier extraction ---------------------------------------------------
 
 
@@ -380,7 +405,7 @@ def parse_crossref(msg: dict, url: str) -> PaperMetadata:
             break
     return PaperMetadata(
         url=url,
-        title=titles[0] if titles else None,
+        title=clean_title(titles[0]) if titles else None,
         authors=[a for a in authors if a],
         venue=venue,
         year=year,
@@ -508,7 +533,7 @@ def parse_europepmc(payload: bytes | dict, url: str) -> PaperMetadata | None:
     venue = ((r.get("journalInfo") or {}).get("journal") or {}).get("title")
     return PaperMetadata(
         url=url,
-        title=r.get("title", "").strip().rstrip(".") or None,
+        title=(clean_title(r.get("title")) or "").rstrip(".") or None,
         authors=authors,
         venue=venue,
         year=_year_from(r.get("pubYear")),

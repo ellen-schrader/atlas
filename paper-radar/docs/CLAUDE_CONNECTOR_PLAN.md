@@ -261,25 +261,137 @@ Code review (high) fixes, same PR:
 
 Redirect-URI allowlist: moved to M4 (the consent page), where it's enforced.
 
-### M3 — Host it ($0)
-- `FastMCP(token_verifier=SupabaseTokenVerifier(), auth=AuthSettings(...))`, mounted at
-  `/mcp` in the existing FastAPI app. `stateless_http=True` (needed because the machine
-  suspends).
-- The verifier checks the JWT **locally against Supabase's JWKS** (cached, no network
-  call per request): ES256 only, issuer, expiry, `client_id` present, and session alive
-  (cached for about a minute). Prod already signs with ES256 (M0).
-- Per-user rate limit, size caps, global Voyage cap with keyword fallback.
-- `mcp.labatlas.app` CNAME. Enable the OAuth server on the prod project via the
-  dashboard. Deploy on merge to main as usual, never from a laptop.
+### M3 — Host it ($0) ✅ (branch `connector-m3`)
 
-### M4 — Consent page + Connect page (web)
-- `/oauth/consent`: log in if needed (existing `?next=` flow) → redirect-URI allowlist
-  check → "**Claude** will be able to search and read papers in <your lab>" → if the lab's
-  Claude access is off: owners can switch it on
-  here, members see "ask your lab owner" with Allow disabled → Allow / Deny.
-- `/connect`: lead with "Copy connector URL" and short steps for the Claude app and
-  Claude Code. Move the local stdio setup under "Advanced". Keep "Recent Claude activity".
-  Add **"Connected apps → Revoke"**.
+What landed:
+- **`atlas_mcp/http.py`:** a FastMCP resource server serving only the 9 read tools.
+  Each tool is wrapped (`as_caller`) to run as the token's user through `lab.act_as`.
+  Settings: `stateless_http`, JSON responses, and DNS-rebinding protection allowing
+  only the public host (origins: our own, claude.ai, claude.com; no `Origin` is fine).
+- **`SupabaseTokenVerifier`:** checks the JWT locally against Supabase's JWKS (cached
+  for an hour): ES256/RS256 only (**never HS256**), issuer, `aud=authenticated`,
+  exp/iat/sub required, and **`client_id` required**, so web-session tokens are refused.
+  Revocation is enforced by the M2 database gate on every query, so the verifier doesn't
+  check sessions itself.
+- **Served by the existing API process:** `api/app.py` mounts it as a Starlette `Host`
+  route for `MCP_PUBLIC_URL`'s host (set in `fly.toml [env]`), and its lifespan starts
+  the MCP session manager. Every other host is the API, unchanged (`POST /mcp` → 404).
+- **Pooled database client** (the item carried over from M1): each request gets a
+  lightweight `SyncPostgrestClient` over one shared httpx pool. A test pins that tokens
+  never leak between callers on the pool.
+- **Limits:** 60 tool calls per user per minute. Query embeddings are capped at
+  **2000 per UTC day across all users** (`MCP_DAILY_EMBEDDINGS`); past that, semantic
+  tools say so and keyword search still works. Inputs are cut to 4000 characters
+  before embedding.
+- **Image:** the `api` extra gains `mcp` + `pyjwt[crypto]` (lockfile +4 lines). The
+  Dockerfile now copies `atlas_mcp`, which `.dockerignore` used to exclude. **Without
+  this the API would have crashed at boot**; a local `docker build` + run caught it.
+  Inside the image: Pillow and matplotlib aren't loaded, and the process uses ~77 MB.
+
+Tests:
+- `tests/test_mcp_http.py` (offline, CI, 17): the verifier (good, web, wrong
+  iss/aud/exp/sub, HS256 forgery, bad signature), pool header isolation, the 401
+  challenge, metadata, the read-tools-only list, per-call user binding, foreign Host
+  refused, the per-user cap, and the embedding budget. Mutation-checked: dropping the
+  `client_id` check or the `act_as` binding fails tests.
+- `tests/test_mcp_http_integration.py` (opt-in, 5): the **real API process** under
+  uvicorn with the connector mounted, the MCP SDK client, and a real OAuth token. It
+  covers unauthenticated → 401 + metadata, web token → 401, connector → 9 tools
+  answering from its lab, the API host unaffected, and revoke → the next call says so.
+- `tests/local_supabase.py`: shared OAuth and local-stack helpers for the integration
+  tests.
+
+Code review (high) fixes, same PR:
+- **Own thread pools.** Tools: 8 threads (`tools.TOOL_THREADS`). Key-set fetches: 2.
+  Before, they shared anyio's default pool with FastAPI's sync endpoints and the Teams
+  webhook, so a busy or stuck connector could have starved the API.
+- **No refetch amplification.** A token naming an unknown key id refetches Supabase's
+  JWKS at most once per 5 minutes; otherwise each junk token was an outbound fetch.
+  Key fetches time out after 5 s.
+- **30 s clock leeway** on token times, for a machine just resumed from suspend.
+- **Embedding allowance.** A failed call (Voyage down, no key) is refunded; an empty
+  query is refused before spending.
+- **Misconfiguration.** Missing Supabase settings now say so, instead of looking like
+  an expired sign-in.
+- **`mcp>=1.28`** in the `api` extra (the version tested).
+- **Wiring.** The connector is now an outermost ASGI middleware (`ConnectorHost`), so
+  its requests skip the API's CORS (web-app origins only). It has its own policy
+  (claude.ai, claude.com), and each lifespan builds a fresh server, so the app can
+  start more than once (tests). The dead `build_app` is gone.
+- Tests: 27 offline (mutation-checked: the thread pool and the refetch throttle); the
+  production image was rebuilt and re-probed.
+
+**Production steps (yours; nothing goes live until M4):**
+1. Merge. The deploy mounts the connector on `mcp.labatlas.app`, which nothing can
+   reach yet.
+2. DNS: add a **CNAME** `mcp` → `paper-radar-api.fly.dev` at your DNS provider.
+3. `fly certs add mcp.labatlas.app` (from `paper-radar/`), then wait for the
+   certificate. Fly includes a handful of certificates free; check `fly certs list`.
+4. Check: `curl -i -X POST https://mcp.labatlas.app/mcp` → 401 with a
+   `resource_metadata` link.
+5. **Don't** turn on Supabase's OAuth server in production yet. That happens with M4,
+   once the consent page and its redirect allowlist exist.
+
+### M4 — Consent page + Connect page (web) ✅ (branch `connector-m4`)
+
+What landed:
+- **`/oauth/consent`** (`web/src/routes/OAuthConsent.tsx`), where Supabase's OAuth server
+  sends Claude's sign-in:
+  - **Signed out:** login first, then back (the existing `?next=` flow, extended to
+    users with no lab).
+  - **The request is judged by its redirect** (`lib/oauthRedirects.ts`), since anyone can
+    register a client under any name. Only Claude's callbacks
+    (`https://claude.ai|claude.com/api/mcp/auth_callback`) and loopback (Claude Code)
+    pass.
+  - **Anything else is refused on our page:** the request is denied and spent, the
+    address is shown, and the browser never navigates to it. The redirect returned
+    after approval is checked again.
+  - **Labs:** each of the user's labs is listed with its Claude-access state. An owner
+    can **Turn on** right there; a member sees "ask a lab owner". **Allow** stays
+    disabled until a lab has access.
+  - Also: what Claude can and can't do, Cancel, and "Not you? Sign out".
+- **`/connect`:** leads with the connector (copy URL; steps for the Claude app and
+  Claude Code), then **Your connected apps** with **Disconnect** (Supabase grants;
+  revocation takes effect at once via the M2 gate). It marks local-only abilities
+  (posting, figure tools); the old local setup moves under "Advanced".
+- **Local `config.toml`:** OAuth server and dynamic registration are on, now that the
+  consent page and allowlist exist. The consent URL is site_url (`127.0.0.1:3000`) +
+  `/oauth/consent`.
+- **Web tests:** Vitest added; 20 allowlist cases, including the spike's
+  "Claude"→evil.example, lookalike hosts, credentials-in-URL and LAN http. `npm test`
+  now runs in CI.
+
+Verified end to end (local stack, a real browser via Playwright, the MCP SDK's OAuth
+client standing in for Claude):
+1. Claude's sign-in goes to Atlas login, then back to consent.
+2. Allow is disabled while access is off; the owner's "Turn on" enables it.
+3. The code goes back to Claude's callback, and Claude lists 9 tools answering from the
+   lab.
+4. An impostor named "Claude" redirecting to evil.example is refused on our page, and
+   evil.example is never reached.
+5. The Connect page lists the connections, and Disconnect → Claude's next call says
+   "revoked".
+
+Code review (high) fixes, same PR (no security holes found; the allowlist held):
+- The consent request is cached per user, so after "Not you? Sign out" the next
+  account looks it up as itself.
+- "Turn on" failures are shown; the consent page uses the shared `useSetMcpAccess`.
+- The deny-on-unknown-redirect effect fires once, not on every re-render.
+- A redirect that fails the check *after* approval says so ("Connected, but not sent
+  back", and to remove it under Connected apps) instead of "nothing was shared".
+- A failed access lookup shows an error with Retry, instead of reading as "access off".
+- The Connect page's Disconnect hint only appears when there are connected apps, and
+  load errors are shown. One `Segmented` picker replaces two copies.
+- The browser end-to-end test was rerun after the fixes: all 8 steps pass.
+
+**Production steps, in this order (yours):**
+1. Merge (Vercel deploys the web app; nothing else changes).
+2. In the Supabase dashboard, **Authentication → OAuth Server**: enable it, allow
+   dynamic client registration, and set the authorization path to `/oauth/consent`
+   (Site URL is already `https://labatlas.app`).
+3. In claude.ai: Settings → Connectors → Add custom connector → `https://mcp.labatlas.app/mcp`
+   → Connect. If the consent page says it doesn't recognise the app, send me the address
+   it shows: Claude's callback would then differ from the one assumed here.
 
 **This is where chat works:** paste the URL into claude.ai → Settings → Connectors → Add
 custom connector, sign in, ask about your lab's papers. The same URL works in the desktop

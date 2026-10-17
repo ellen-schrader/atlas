@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly NEXT_PUBLIC_SUPABASE_URL?: string;
   readonly NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?: string;
   readonly VITE_API_URL?: string;
+  // The hosted Claude connector (MCP server); defaults to production's.
+  readonly VITE_MCP_URL?: string;
 }
 
 interface ImportMeta {

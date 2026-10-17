@@ -48,6 +48,11 @@ class _PaperTags(BaseModel):
     tags: list[str]
 
 
+class _NoParsedReply(Exception):
+    """The reply carried no structured output: cut off at max_tokens (or refused)
+    before the JSON closed. Same cause and cure as a reply that won't parse."""
+
+
 class _BatchTags(BaseModel):
     papers: list[_PaperTags]
 
@@ -196,7 +201,9 @@ def _tag(
     An unparseable reply is almost always one cut off mid-JSON, which is a
     property of how much the batch asked for rather than of any paper in it —
     so the same papers in two smaller calls usually succeed. Without this, a
-    single truncation discards the tags for every paper in the batch.
+    single truncation discards the tags for every paper in the batch. A reply
+    cut off before any JSON parsed comes back with no ``parsed_output`` at all
+    rather than raising, and is retried the same way.
     """
     blocks = []
     for it in usable:
@@ -214,17 +221,20 @@ def _tag(
             messages=[{"role": "user", "content": prompt}],
             output_format=_BatchTags,
         )
+        if resp.parsed_output is None:
+            raise _NoParsedReply(getattr(resp, "stop_reason", None))
         replies = {p.id: _normalised(p.tags, aliases) for p in resp.parsed_output.papers}
         known = _known_tags(list(replies.values()), vocabulary)
         # Trimmed rather than constrained in the schema: a maxItems the model
         # overshot would raise here and send a fine batch down the retry path.
         return {pid: _cap_new(tags, known) for pid, tags in replies.items()}
-    except ValidationError as exc:
+    except (ValidationError, _NoParsedReply) as exc:
         if len(usable) == 1:
             log.warning("enrichment failed for paper %s: %s", usable[0]["id"], exc)
             return {}
         mid = len(usable) // 2
-        log.info("enrichment reply unparseable for %d papers; retrying in halves", len(usable))
+        why = f"stopped: {exc}" if isinstance(exc, _NoParsedReply) else "unparseable"
+        log.info("enrichment reply %s for %d papers; retrying in halves", why, len(usable))
         return _tag(usable[:mid], settings, vocabulary, aliases) | _tag(
             usable[mid:], settings, vocabulary, aliases
         )

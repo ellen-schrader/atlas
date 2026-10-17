@@ -131,6 +131,29 @@ def test_half_that_still_fails_does_not_sink_the_other_half(fake_anthropic):
     assert set(out) == {"p1", "p2", "p3"}
 
 
+def test_reply_without_parsed_output_is_retried_in_halves(fake_anthropic):
+    # A reply cut off before any JSON closed comes back with parsed_output=None
+    # instead of raising. It used to raise AttributeError in the catch-all, so
+    # the whole batch went untagged (20 of 24 papers on 2026-10-17).
+    def responder(ids):
+        if len(ids) > 2:
+            return types.SimpleNamespace(parsed_output=None, stop_reason="max_tokens")
+        return _ok(ids)
+
+    fake_anthropic.holder["responder"] = responder
+    out = enrich_batch(_papers(8), settings=_settings())
+    assert set(out) == {f"p{i}" for i in range(8)}
+    assert [len(c["ids"]) for c in fake_anthropic.calls] == [8, 4, 2, 2, 4, 2, 2]
+
+
+def test_single_paper_with_no_parsed_output_is_given_up_on(fake_anthropic):
+    fake_anthropic.holder["responder"] = lambda ids: types.SimpleNamespace(
+        parsed_output=None, stop_reason="refusal"
+    )
+    assert enrich_batch(_papers(1), settings=_settings()) == {}
+    assert len(fake_anthropic.calls) == 1
+
+
 def test_single_paper_that_will_not_parse_is_given_up_on(fake_anthropic):
     # The recursion has to bottom out rather than split forever.
     err = _truncation_error()
