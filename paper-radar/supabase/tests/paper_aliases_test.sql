@@ -4,7 +4,7 @@
 -- Isolated id space so it rolls back cleanly anywhere.
 
 begin;
-select plan(24);
+select plan(32);
 
 -- Ada and Bo in lab B1, Cy alone in lab B2.
 -- P1 = preprint (bioRxiv), P2 = published. B1 posted both, B2 only the preprint.
@@ -34,14 +34,15 @@ insert into public.papers (id, doi, url, url_norm, title, venue, abstract, code_
      'Published title', 'Nature', null, null, null,
      '[]', '["spatial", "immunology"]', '["data_url"]');
 
--- B1: preprint shared first by Bo with a note, published later by Ada.
-insert into public.paper_posts (id, paper_id, team_id, posted_by, posted_at, source, note, tags) values
+-- B1: preprint shared first by Bo from a Teams PDF with a note, published later
+-- by Ada on the web.
+insert into public.paper_posts (id, paper_id, team_id, posted_by, posted_at, source, source_pdf, page, note, tags) values
     ('e7000000-0000-0000-0000-0000000000d1', 'e7000000-0000-0000-0000-0000000000c1', 'e7000000-0000-0000-0000-0000000000b1',
-     'e7000000-0000-0000-0000-0000000000a2', '2025-01-05', 'web', 'Read the methods', '["lab-a"]'),
+     'e7000000-0000-0000-0000-0000000000a2', '2025-01-05', 'teams_pdf', 'chat.pdf', 12, 'Read the methods', '["lab-a"]'),
     ('e7000000-0000-0000-0000-0000000000d2', 'e7000000-0000-0000-0000-0000000000c2', 'e7000000-0000-0000-0000-0000000000b1',
-     'e7000000-0000-0000-0000-0000000000a1', '2025-09-01', 'web', null, '["lab-b"]'),
+     'e7000000-0000-0000-0000-0000000000a1', '2025-09-01', 'web', null, null, null, '["lab-b"]'),
     ('e7000000-0000-0000-0000-0000000000d3', 'e7000000-0000-0000-0000-0000000000c1', 'e7000000-0000-0000-0000-0000000000b2',
-     'e7000000-0000-0000-0000-0000000000a3', '2025-02-01', 'web', null, '[]');
+     'e7000000-0000-0000-0000-0000000000a3', '2025-02-01', 'web', null, null, null, '[]');
 
 -- Ada reacted 👍 to both versions (collides) and 🔥 to the preprint only.
 insert into public.reactions (paper_id, team_id, user_id, emoji) values
@@ -89,6 +90,9 @@ select is((select posted_by from public.paper_posts where id = 'e7000000-0000-00
     'e7000000-0000-0000-0000-0000000000a2'::uuid, 'the earlier sharer is credited');
 select is((select posted_at from public.paper_posts where id = 'e7000000-0000-0000-0000-0000000000d2'),
     '2025-01-05'::timestamptz, 'the earlier share date is kept');
+select is((select source || '/' || source_pdf || '/' || page from public.paper_posts
+            where id = 'e7000000-0000-0000-0000-0000000000d2'),
+    'teams_pdf/chat.pdf/12', 'the earlier share keeps its own source, not the later one''s');
 select is((select note from public.paper_posts where id = 'e7000000-0000-0000-0000-0000000000d2'),
     'Read the methods', 'the note survives');
 select set_eq(
@@ -129,6 +133,31 @@ select is((select data_url from public.papers where id = 'e7000000-0000-0000-000
 select set_eq(
     $$ select jsonb_array_elements_text(tags) from public.papers where id = 'e7000000-0000-0000-0000-0000000000c2' $$,
     $$ values ('spatial'), ('tumour'), ('immunology') $$, 'AI tags are combined');
+
+-- Three rows whose DOIs differ only in case; the kept one failed to resolve.
+-- The second merge would write the same alias DOI as the first.
+insert into public.papers (id, doi, url, url_norm, title, authors, year, venue) values
+    ('e7000000-0000-0000-0000-000000000011', '10.9999/MRG-ABC', 'https://x/1', 'mrg/case-1', 'Case title', '["Ada Lovelace"]', 2024, 'Cell'),
+    ('e7000000-0000-0000-0000-000000000012', '10.9999/Mrg-Abc', 'https://x/2', 'mrg/case-2', 'Other title', '["Bo"]', 2023, 'Cell'),
+    ('e7000000-0000-0000-0000-000000000013', '10.9999/mrg-abc', 'https://x/3', 'mrg/case-3', null, '[]', null, null);
+
+select lives_ok(
+    $$ select public.merge_papers('e7000000-0000-0000-0000-000000000011', 'e7000000-0000-0000-0000-000000000013', 'doi_case') $$,
+    'first DOI-case merge');
+select lives_ok(
+    $$ select public.merge_papers('e7000000-0000-0000-0000-000000000012', 'e7000000-0000-0000-0000-000000000013', 'doi_case') $$,
+    'a second merge with the same alias DOI does not fail');
+select is((select count(*)::int from public.paper_aliases where paper_id = 'e7000000-0000-0000-0000-000000000013'), 2,
+    'both merges leave an alias');
+select is((select count(*)::int from public.paper_aliases
+            where paper_id = 'e7000000-0000-0000-0000-000000000013' and doi = '10.9999/mrg-abc'), 1,
+    'the DOI is held by one alias only');
+select is((select kind from public.paper_aliases where old_paper_id = 'e7000000-0000-0000-0000-000000000011'),
+    'duplicate', 'a DOI-case merge is a duplicate, not a preprint');
+select is((select title || '/' || (authors ->> 0) || '/' || year from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
+    'Case title/Ada Lovelace/2024', 'an empty title, authors and year are filled from the first merge');
+select is((select venue from public.papers where id = 'e7000000-0000-0000-0000-000000000013'),
+    null, 'the venue is never taken from the old row');
 
 -- Guards.
 select throws_ok(

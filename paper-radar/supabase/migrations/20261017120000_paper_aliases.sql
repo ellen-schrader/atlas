@@ -80,13 +80,16 @@ $$;
 
 -- Fold paper p_from into paper p_into and delete p_from, all or nothing.
 --
--- p_into keeps its own bibliographic record (title, venue, year, DOI): it is the
--- published version. It only gains fields it lacks, and never one a person has
--- edited (edited_fields) — an empty field someone cleared on purpose stays empty.
+-- p_into keeps its own bibliographic record: it is the published version. It
+-- gains a title, authors, year, abstract, code/data link or keywords only where
+-- it has none, and never a field a person has edited (edited_fields) — an empty
+-- field someone cleared on purpose stays empty. Venue, DOI and dates are never
+-- taken from the old row: a preprint's would be wrong for the journal version.
 --
 -- Rows unique per paper collide when a lab touched both versions, and are
 -- combined rather than dropped:
 --   paper_posts (paper, lab): one post, tags combined, the earlier share kept
+--     whole (who, when and where from), so attribution matches its source
 --   reactions (paper, lab, user, emoji): the duplicate is dropped
 --   paper_status (user, paper, lab): saved if either was, the further progress
 -- Everything else just moves.
@@ -134,7 +137,11 @@ begin
                           end,
         posted_at       = least(d.posted_at, s.posted_at),
         posted_by       = case when s.posted_at < d.posted_at then s.posted_by else d.posted_by end,
-        posted_by_label = case when s.posted_at < d.posted_at then s.posted_by_label else d.posted_by_label end
+        posted_by_label = case when s.posted_at < d.posted_at then s.posted_by_label else d.posted_by_label end,
+        source          = case when s.posted_at < d.posted_at then s.source else d.source end,
+        source_pdf      = case when s.posted_at < d.posted_at then s.source_pdf else d.source_pdf end,
+        page            = case when s.posted_at < d.posted_at then s.page else d.page end,
+        via             = case when s.posted_at < d.posted_at then s.via else d.via end
       from public.paper_posts s
      where s.paper_id = p_from and d.paper_id = p_into and d.team_id = s.team_id;
 
@@ -201,10 +208,16 @@ begin
     update public.trends set paper_ids = public.jsonb_swap_id(paper_ids, p_from, p_into)
      where paper_ids ? p_from::text;
 
-    -- 6. Fill what the kept paper lacks. A new abstract changes what the
+    -- 6. Fill what the kept paper lacks. A new title or abstract changes what the
     --    embedding and tags were computed from, so both are queued again.
     held := dst.edited_fields;
     update public.papers set
+        title       = case when nullif(btrim(dst.title), '') is null and not held ? 'title'
+                           then coalesce(src.title, dst.title) else dst.title end,
+        authors     = case when dst.authors = '[]'::jsonb and not held ? 'authors'
+                           then src.authors else dst.authors end,
+        year        = case when dst.year is null and not held ? 'year'
+                           then src.year else dst.year end,
         abstract    = case when nullif(btrim(dst.abstract), '') is null and not held ? 'abstract'
                            then coalesce(src.abstract, dst.abstract) else dst.abstract end,
         code_url    = case when dst.code_url is null and not held ? 'code_url'
@@ -218,20 +231,23 @@ begin
      where id = p_into;
     update public.papers set embedded_at = null, enriched_at = null
      where id = p_into
-       and nullif(btrim(dst.abstract), '') is null
-       and nullif(btrim(src.abstract), '') is not null
-       and not held ? 'abstract';
+       and (title, abstract) is distinct from (dst.title, dst.abstract);
 
     -- 7. Remember the old row, then delete it. Nothing references it any more,
-    --    so the cascade has nothing left to do.
+    --    so the cascade has nothing left to do. Its DOI or url_norm can already
+    --    be an alias key — a third copy of one DOI, or a merged preprint posted
+    --    again before ingest read aliases — and those keys already lead to a
+    --    paper, so this alias goes without them rather than failing the merge.
     insert into public.paper_aliases (paper_id, kind, reason, doi, url, url_norm, venue, old_paper_id, snapshot)
     values (
         p_into,
         case when p_reason = 'doi_case' then 'duplicate' else 'preprint' end,
         p_reason,
-        lower(src.doi),
+        case when exists (select 1 from public.paper_aliases where doi = lower(src.doi))
+             then null else lower(src.doi) end,
         src.url,
-        src.url_norm,
+        case when exists (select 1 from public.paper_aliases where url_norm = src.url_norm)
+             then null else src.url_norm end,
         src.venue,
         src.id,
         to_jsonb(src) - 'embedding'

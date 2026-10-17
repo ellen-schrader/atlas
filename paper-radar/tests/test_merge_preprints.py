@@ -51,3 +51,64 @@ def test_title_pairs_match_a_preprint_to_a_published_paper_only():
     stranger = {"id": "s", "doi": "10.1038/2", "title": "Same title", "authors": ["Bo Byron"]}
     pairs = find_title_pairs([pre], [pre, pub, other_pre, stranger])
     assert [(a["id"], b["id"]) for a, b in pairs] == [("p", "j")]
+
+
+def test_title_key_reads_pubmed_style_names():
+    # PubMed and Europe PMC give "Doe J"; Crossref, arXiv and bioRxiv "Jane Doe".
+    crossref = {"title": "A title", "authors": ["Jane Doe"]}
+    for name in ("Doe J", "Doe JA", "J. Doe", "J Doe"):
+        assert title_key({"title": "A title", "authors": [name]}) == title_key(crossref), name
+
+
+def test_a_failing_merge_does_not_stop_the_run(monkeypatch, capsys):
+    import api.merge_preprints as script
+
+    rows = [
+        {"id": "a", "doi": "10.1/X", "title": "A", "authors": [], "url": "u1"},
+        {"id": "b", "doi": "10.1/x", "title": "B", "authors": [], "url": "u2"},
+        {"id": "c", "doi": "10.2/Y", "title": "C", "authors": [], "url": "u3"},
+        {"id": "d", "doi": "10.2/y", "title": "D", "authors": [], "url": "u4"},
+    ]
+
+    class Rpc:
+        def __init__(self, args):
+            self.args = args
+
+        def execute(self):
+            if self.args["p_from"] == "a":
+                raise RuntimeError("boom")
+
+    class Svc:
+        merged: list = []
+
+        def rpc(self, name, args):
+            Svc.merged.append(args["p_from"])
+            return Rpc(args)
+
+    monkeypatch.setattr(script, "service_client", lambda: Svc())
+    monkeypatch.setattr(script, "_fetch_papers", lambda svc: rows)
+    script.main(["--apply"])
+    out = capsys.readouterr().out
+    assert Svc.merged == ["a", "c"]
+    assert "merge failed" in out
+    assert "case-duplicates merged=1" in out and "failed=1" in out
+
+
+def test_published_but_not_in_atlas_still_gets_a_title_match(monkeypatch, capsys):
+    import api.merge_preprints as script
+
+    rows = [
+        {"id": "p", "doi": "10.1101/1", "title": "Same", "authors": ["Ada Lovelace"], "url": "u1"},
+        # The journal version, posted as a landing page that gave no DOI.
+        {"id": "j", "doi": None, "title": "Same", "authors": ["Lovelace A"], "url": "u2"},
+    ]
+    monkeypatch.setattr(script, "service_client", lambda: object())
+    monkeypatch.setattr(script, "_fetch_papers", lambda svc: rows)
+    monkeypatch.setattr(
+        script, "published_version", lambda doi, url: ("10.1016/j.cell.1", "crossref")
+    )
+    monkeypatch.setattr(script.time, "sleep", lambda s: None)
+    script.main([])
+    out = capsys.readouterr().out
+    assert "not in Atlas" in out
+    assert "title-pairs-to-review=1" in out

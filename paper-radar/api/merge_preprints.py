@@ -34,25 +34,13 @@ import time
 import unicodedata
 from collections import defaultdict
 
-from paper_radar.ingest.metadata import published_version
+from paper_radar.ingest.metadata import PREPRINT_DOI_PREFIXES, arxiv_id_for, published_version
 from paper_radar.ingest.urls import norm_doi
 
 from .supa import service_client
 
 _PAGE = 500
 
-# DOI prefixes of preprint servers: bioRxiv/medRxiv (10.1101, openRxiv's
-# 10.64898), Research Square, SSRN, arXiv, Preprints.org, OSF, Authorea.
-_PREPRINT_PREFIXES = (
-    "10.1101/",
-    "10.64898/",
-    "10.21203/",
-    "10.2139/",
-    "10.48550/",
-    "10.20944/",
-    "10.31219/",
-    "10.22541/",
-)
 _PREPRINT_VENUES = {
     "biorxiv",
     "medrxiv",
@@ -75,7 +63,10 @@ def _fetch_papers(svc) -> list[dict]:
         page = (
             svc.table("papers")
             .select("id, doi, url, title, authors, venue, created_at")
+            # created_at alone ties (a Teams import inserts a batch with one now()),
+            # and offset paging over ties can repeat one row and skip another.
             .order("created_at")
+            .order("id")
             .range(start, start + _PAGE - 1)
             .execute()
             .data
@@ -91,7 +82,7 @@ def _fetch_papers(svc) -> list[dict]:
 def is_preprint_row(row: dict) -> bool:
     """True if the stored row looks like a preprint: by DOI, venue or host."""
     doi = (row.get("doi") or "").lower()
-    if doi.startswith(_PREPRINT_PREFIXES):
+    if doi.startswith(PREPRINT_DOI_PREFIXES):
         return True
     if (row.get("venue") or "").strip().lower() in _PREPRINT_VENUES:
         return True
@@ -124,6 +115,9 @@ def title_key(row: dict) -> tuple[str, str] | None:
     Accents and punctuation are dropped and case folded, so "Single-cell" and
     "Single cell" agree; journals retitle papers often enough that this misses
     some pairs, which is acceptable for a list a person reviews.
+
+    The surname is the last word that is not an initial, so Crossref's
+    "Jane Doe", "J. Doe" and PubMed's "Doe J" all give "doe".
     """
     title = row.get("title") or ""
     authors = row.get("authors") or []
@@ -134,8 +128,11 @@ def title_key(row: dict) -> tuple[str, str] | None:
         text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
         return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
-    surname = fold(str(authors[0])).split(" ")[-1]
-    return fold(title), surname
+    words = fold(str(authors[0])).split()
+    names = [w for w in words if len(w) > 2] or words
+    if not names:
+        return None
+    return fold(title), names[-1]
 
 
 def find_title_pairs(preprints: list[dict], rows: list[dict]) -> list[tuple[dict, dict]]:
@@ -151,8 +148,16 @@ def find_title_pairs(preprints: list[dict], rows: list[dict]) -> list[tuple[dict
     return pairs
 
 
-def _merge(svc, from_id: str, into_id: str, reason: str) -> None:
-    svc.rpc("merge_papers", {"p_from": from_id, "p_into": into_id, "p_reason": reason}).execute()
+def _merge(svc, from_id: str, into_id: str, reason: str) -> bool:
+    """Merge one pair; on failure print why and carry on with the rest."""
+    try:
+        svc.rpc(
+            "merge_papers", {"p_from": from_id, "p_into": into_id, "p_reason": reason}
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 -- one bad pair must not stop the run
+        print(f"  ! merge failed, left as is: {from_id} -> {into_id}: {exc}")
+        return False
+    return True
 
 
 def _label(row: dict) -> str:
@@ -164,7 +169,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--apply", action="store_true", help="merge; without it, only report")
     parser.add_argument("--limit", type=int, help="look up at most this many preprints")
     parser.add_argument(
-        "--delay", type=float, default=3.0, help="seconds between lookups (arXiv asks for 3)"
+        "--delay", type=float, default=0.2, help="seconds after a Crossref/bioRxiv lookup"
+    )
+    parser.add_argument(
+        "--arxiv-delay", type=float, default=3.0, help="seconds after an arXiv lookup (its rule)"
     )
     parser.add_argument(
         "--pair",
@@ -176,23 +184,28 @@ def main(argv: list[str] | None = None) -> None:
     verb = "merged" if args.apply else "would merge"
     svc = service_client()
 
+    def merge(from_id: str, into_id: str, reason: str) -> bool:
+        return _merge(svc, from_id, into_id, reason) if args.apply else True
+
     if args.pair:
-        if args.apply:
-            _merge(svc, args.pair[0], args.pair[1], "manual")
-        print(f"{verb}: {args.pair[0]} -> {args.pair[1]}")
+        if merge(args.pair[0], args.pair[1], "manual"):
+            print(f"{verb}: {args.pair[0]} -> {args.pair[1]}")
         return
 
     rows = _fetch_papers(svc)
     by_id = {r["id"]: r for r in rows}
+    failed = 0
 
     # 1. DOI-case duplicates first, so pass 2's lowercase lookups find the kept rows.
     case_merges = plan_case_merges(rows)
     print(f"1. DOI-case duplicates: {len(case_merges)}")
+    merged_away: set[str] = set()
     for from_id, into_id in case_merges:
-        if args.apply:
-            _merge(svc, from_id, into_id, "doi_case")
+        if not merge(from_id, into_id, "doi_case"):
+            failed += 1
+            continue
+        merged_away.add(from_id)
         print(f"  {verb}: {_label(by_id[from_id])}\n      into {_label(by_id[into_id])}")
-    merged_away = {from_id for from_id, _ in case_merges}
     rows = [r for r in rows if r["id"] not in merged_away]
 
     # 2. Preprints whose published version is stated somewhere.
@@ -202,41 +215,47 @@ def main(argv: list[str] | None = None) -> None:
         preprints = preprints[: args.limit]
     print(f"2. Preprints to look up: {len(preprints)}")
     merged = not_in_atlas = holds_journal_doi = 0
-    linked: set[str] = set()
+    # Settled rows skip the title pass. "Published, but not in Atlas" is not
+    # settled: the journal version may be here under no DOI, or another one.
+    settled: set[str] = set()
     for i, row in enumerate(preprints, 1):
-        found = published_version(row.get("doi"), row.get("url"))
-        time.sleep(args.delay)
+        doi, url = row.get("doi"), row.get("url")
+        if not (doi or arxiv_id_for(doi, url)):
+            continue
+        found = published_version(doi, url)
+        time.sleep(args.arxiv_delay if arxiv_id_for(doi, url) else args.delay)
         if found is None:
             continue
         published_doi, reason = found
-        linked.add(row["id"])
         owner = by_doi.get(norm_doi(published_doi))
         if owner is None:
             not_in_atlas += 1
             print(f"  [{i}] published as {published_doi}, not in Atlas: {_label(row)}")
         elif owner["id"] == row["id"]:
             # An arXiv row already holding the journal DOI (see _fetch_arxiv).
+            settled.add(row["id"])
             holds_journal_doi += 1
             print(f"  [{i}] arXiv row holds its journal DOI {published_doi}: {_label(row)}")
-        else:
-            if args.apply:
-                _merge(svc, row["id"], owner["id"], reason)
+        elif merge(row["id"], owner["id"], reason):
+            settled.add(row["id"])
             merged += 1
             print(f"  [{i}] {verb} ({reason}): {_label(row)}\n      into {_label(owner)}")
+        else:
+            failed += 1
 
     # 3. Same title and first author, but nothing states the link.
-    unlinked = [r for r in preprints if r["id"] not in linked]
-    pairs = find_title_pairs(unlinked, rows)
+    unsettled = [r for r in preprints if r["id"] not in settled]
+    pairs = find_title_pairs(unsettled, rows)
     print(f"3. Probable pairs by title, for review (merge with --pair): {len(pairs)}")
     for pre, pub in pairs:
         print(f"  {_label(pre)}\n      and {_label(pub)}")
 
     print(
-        f"Done. case-duplicates {verb}={len(case_merges)} preprints {verb}={merged} "
-        f"published-not-in-atlas={not_in_atlas} arxiv-holding-journal-doi={holds_journal_doi} "
-        f"title-pairs-to-review={len(pairs)}"
+        f"Done. case-duplicates {verb}={len(merged_away)} preprints {verb}={merged} "
+        f"failed={failed} published-not-in-atlas={not_in_atlas} "
+        f"arxiv-holding-journal-doi={holds_journal_doi} title-pairs-to-review={len(pairs)}"
     )
-    if args.apply and (case_merges or merged):
+    if args.apply and (merged_away or merged):
         print(
             "Now run: uv run python -m api.backfill_embeddings && "
             "uv run python -m api.backfill_enrichment"

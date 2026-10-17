@@ -46,8 +46,15 @@ from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
 from paper_radar.ingest import url_guard
+from paper_radar.ingest.urls import norm_doi
 
-_ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
+# New-style ids ("1706.03762") and pre-2007 ones ("hep-th/9901001", "math.AG/0309136").
+_ARXIV_RE = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5}|[a-z][a-z\-]*(?:\.[a-z]{2})?/\d{7})(?:v\d+)?",
+    re.IGNORECASE,
+)
+# arXiv's own DataCite DOI, "10.48550/arXiv.<id>".
+_ARXIV_DOI_RE = re.compile(r"^10\.48550/arxiv\.(?P<id>.+)$", re.IGNORECASE)
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"'<>]+)", re.IGNORECASE)
 _NATURE_RE = re.compile(r"nature\.com/articles/(?P<id>[a-z0-9.\-]+)", re.IGNORECASE)
 _PMID_RE = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(?P<pmid>\d+)", re.IGNORECASE)
@@ -340,15 +347,15 @@ def _fetch_arxiv(arxiv_id: str, url: str) -> PaperMetadata | None:
         # The journal DOI the authors recorded on arXiv. It is also still the
         # row's `doi` for now; giving arXiv rows their own DOI comes with the
         # ingest changes (docs/preprint-dedup-plan.md, PR 2).
-        published_doi=doi.lower() if doi else None,
+        published_doi=norm_doi(doi),
     )
 
 
 def _relation_dois(msg: dict, kind: str) -> list[str]:
-    """The DOIs a Crossref record lists under ``relation[kind]``, lowercased."""
+    """The DOIs a Crossref record lists under ``relation[kind]``, as ``norm_doi`` keys."""
     related = (msg.get("relation") or {}).get(kind) or []
     return [
-        r["id"].strip().lower()
+        norm_doi(r["id"])
         for r in related
         if isinstance(r, dict) and r.get("id-type") == "doi" and r.get("id")
     ]
@@ -685,7 +692,18 @@ def _merge(base: PaperMetadata, extra: PaperMetadata) -> PaperMetadata:
 
 # DOI prefixes of the preprint servers whose own API reports publication:
 # bioRxiv and medRxiv (Cold Spring Harbor's 10.1101, and openRxiv's 10.64898).
-_RXIV_PREFIXES = ("10.1101/", "10.64898/")
+RXIV_DOI_PREFIXES = ("10.1101/", "10.64898/")
+# Every preprint server's DOI prefix: the above, Research Square, SSRN, arXiv,
+# Preprints.org, OSF, Authorea.
+PREPRINT_DOI_PREFIXES = (
+    *RXIV_DOI_PREFIXES,
+    "10.21203/",
+    "10.2139/",
+    "10.48550/",
+    "10.20944/",
+    "10.31219/",
+    "10.22541/",
+)
 
 
 def parse_biorxiv_pubs(payload: bytes | dict) -> str | None:
@@ -697,7 +715,7 @@ def parse_biorxiv_pubs(payload: bytes | dict) -> str | None:
     for item in (data or {}).get("collection") or []:
         doi = (item or {}).get("published_doi")
         if doi and doi.strip().upper() != "NA":
-            return doi.strip().lower()
+            return norm_doi(doi)
     return None
 
 
@@ -707,6 +725,14 @@ def _fetch_biorxiv_published(doi: str) -> str | None:
         if raw is not None and (published := parse_biorxiv_pubs(raw)):
             return published
     return None
+
+
+def arxiv_id_for(doi: str | None, url: str | None) -> str | None:
+    """The arXiv id of a paper, from its URL or its 10.48550/arXiv DOI."""
+    if url and (found := _arxiv_id(url)):
+        return found
+    m = _ARXIV_DOI_RE.match(norm_doi(doi) or "")
+    return m.group("id") if m else None
 
 
 def published_version(doi: str | None = None, url: str | None = None) -> tuple[str, str] | None:
@@ -720,22 +746,22 @@ def published_version(doi: str | None = None, url: str | None = None) -> tuple[s
     * ``biorxiv``: bioRxiv/medRxiv's own publication API, which often has the
       link before Crossref does.
     * ``arxiv``: the journal DOI the authors recorded on arXiv. Asked whenever
-      ``url`` is an arXiv link, whatever ``doi`` says: an arXiv row can hold the
-      journal DOI already (see ``_fetch_arxiv``).
+      the paper has an arXiv id, whatever ``doi`` says: an arXiv row can hold
+      the journal DOI already (see ``_fetch_arxiv``).
     """
-    arxiv_id = _arxiv_id(url) if url else None
+    arxiv_id = arxiv_id_for(doi, url)
     if arxiv_id:
         meta = _fetch_arxiv(arxiv_id, f"https://arxiv.org/abs/{arxiv_id}")
         if meta and meta.published_doi:
             return meta.published_doi, "arxiv"
         return None
+    doi = norm_doi(doi)
     if not doi:
         return None
-    doi = doi.strip().lower()
     meta = _fetch_crossref(doi, f"https://doi.org/{doi}")
     if meta and meta.published_doi:
         return meta.published_doi, "crossref"
-    if doi.startswith(_RXIV_PREFIXES) and (published := _fetch_biorxiv_published(doi)):
+    if doi.startswith(RXIV_DOI_PREFIXES) and (published := _fetch_biorxiv_published(doi)):
         return published, "biorxiv"
     return None
 

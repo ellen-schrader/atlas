@@ -535,3 +535,27 @@ def test_published_version_reads_the_journal_doi_from_arxiv(monkeypatch):
         "10.5555/3295222.3295349",
         "arxiv",
     )
+
+
+def test_arxiv_id_from_an_old_style_url_or_the_arxiv_doi():
+    assert (
+        metadata_module.arxiv_id_for(None, "https://arxiv.org/abs/hep-th/9901001v2")
+        == "hep-th/9901001"
+    )
+    assert (
+        metadata_module.arxiv_id_for(None, "https://arxiv.org/pdf/math.AG/0309136")
+        == "math.AG/0309136"
+    )
+    assert (
+        metadata_module.arxiv_id_for("10.48550/arXiv.1706.03762", "https://doi.org/x")
+        == "1706.03762"
+    )
+    assert metadata_module.arxiv_id_for("10.1038/x", "https://www.nature.com/x") is None
+
+
+def test_relation_dois_are_normalised():
+    msg = {
+        **_PREPRINT_MSG,
+        "relation": {"is-preprint-of": [{"id-type": "doi", "id": "https://doi.org/10.1038/ABC"}]},
+    }
+    assert parse_crossref(msg, "https://x").published_doi == "10.1038/abc"
