@@ -146,7 +146,7 @@ def world():
                     "id": paper_id,
                     "url": f"https://example.test/{marker}",
                     "url_norm": marker.lower(),
-                    "title": f"{marker} study",
+                    "title": f"{marker} tumor microenvironment study",
                     "abstract": f"Abstract {marker}.",
                     "authors": ["A One", "B Two"],
                     "embedding": "[" + ",".join(map(str, _vec())) + "]",
@@ -215,11 +215,17 @@ def test_every_read_tool_still_works_with_a_connector_token(world):
             "novelty": papers.novelty_check(text="a study"),
             "related": papers.draft_related_work(topic="study"),
             "get": papers.get_paper(world["paper_id"]),
+            # UK spelling of a US-spelt title: search_papers expands it by reading
+            # spelling_variants as the caller, which the lockdown must leave readable.
+            "spelling": papers.search_lab_papers("tumour"),
         }
     for label, text in out.items():
         assert not text.startswith("Error:"), f"{label}: {text}"
-    for label in ("list_labs", "search", "semantic", "recent", "digest", "get"):
-        assert world["marker"] in out[label], f"{label} returned no lab data:\n{out[label]}"
+    # The paper's id (in its deep link) only appears when the paper itself came back;
+    # the lab name — which an empty "No papers in …" reply also contains — wouldn't do.
+    assert world["team_id"] in out["list_labs"], out["list_labs"]
+    for label in ("search", "semantic", "recent", "digest", "get", "spelling"):
+        assert world["paper_id"] in out[label], f"{label} returned no paper:\n{out[label]}"
     # And each call was audited (the gate lets the audit insert through).
     logged = httpx.get(
         f"{REST}/mcp_tool_calls?team_id=eq.{world['team_id']}&select=tool",

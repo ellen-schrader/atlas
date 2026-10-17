@@ -5,7 +5,7 @@
 -- claim (and a `session_id`) directly, the same way rls_isolation_test.sql sets `sub`.
 
 begin;
-select plan(20);
+select plan(23);
 
 -- === seed ====================================================================
 
@@ -35,8 +35,7 @@ select is(
     (select coalesce(string_agg(c.relname, ', ' order by c.relname), '')
        from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public' and c.relkind = 'r'
-        and c.relname not in ('teams', 'team_members', 'mcp_access', 'paper_posts', 'papers',
-                              'paper_status', 'reactions', 'comments', 'mentions', 'mcp_tool_calls')
+        and c.relname <> all (public.connector_readable_tables() || array['mcp_tool_calls'])
         and not exists (select 1 from pg_policies p
                          where p.schemaname = 'public' and p.tablename = c.relname
                            and p.policyname = 'connector_no_read' and p.permissive = 'RESTRICTIVE')),
@@ -118,6 +117,12 @@ set local request.jwt.claims to
 select throws_ok('select public.connector_request_guard()', 'PGRST', null,
     'a connector token without a session is refused');
 
+set local request.jwt.claims to
+    '{"sub":"0c000000-0000-0000-0000-00000000000a","role":"authenticated",'
+    '"client_id":"claude","session_id":"------------------------------------"}';
+select throws_ok('select public.connector_request_guard()', 'PGRST', null,
+    'a malformed session id is a clean refusal, not a cast error');
+
 -- The web app's own session is untouched, whatever it asks for.
 set local request.jwt.claims to
     '{"sub":"0c000000-0000-0000-0000-00000000000a","role":"authenticated"}';
@@ -134,6 +139,10 @@ select is((select count(*)::int from public.paper_posts), 1,
     'connector still sees its lab''s posts (RLS as usual)');
 select is((select count(*)::int from public.team_visits), 0,
     'connector reads nothing from a closed table, even its own rows');
+select ok((select count(*) from public.spelling_variants) > 0,
+    'connector can read spelling_variants, which keyword search uses for UK/US spellings');
+select ok(public.prefix_tsquery('tumour')::text like '%tumor%',
+    'so its searches still match both spellings');
 
 set local request.jwt.claims to
     '{"sub":"0c000000-0000-0000-0000-00000000000a","role":"authenticated"}';

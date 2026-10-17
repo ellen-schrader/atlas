@@ -194,8 +194,10 @@ them open. Without the gate, a connector token really did create a lab in testin
 
 What landed (`20261017150000_connector_lockdown.sql`):
 1. **PostgREST pre-request gate, default-deny** (`public.connector_request_guard`, set
-   via `pgrst.db_pre_request`). A connector token may only GET the 9 tables the paper
-   tools read and POST the 3 search RPCs plus the audit-log insert. Every other table,
+   via `pgrst.db_pre_request`). A connector token may only GET the tables in
+   `public.connector_readable_tables()` (the paper tools' 9, plus `spelling_variants`,
+   which keyword search reads as the caller for UK/US spellings) and POST the 3 search
+   RPCs plus the audit-log insert. Every other table,
    RPC (including the definer ones), GraphQL, and anything added later gets a 403.
    It also refuses a token whose session is gone (401), so **revoking takes effect
    immediately** rather than up to an hour later.
@@ -233,6 +235,23 @@ Tests:
   unaffected, and revocation stops the live token. Mutation-checked: with the gate
   switched off, 14 of 18 tests fail.
 - Offline: API refusal tests, and the gate-error translation test.
+
+Code review (high) fixes, same PR:
+- **Web sign-out is now local** (`signOut({ scope: "local" })`). Supabase's default
+  global sign-out deletes every session, including a connected Claude's (refresh fails
+  too, not just the gate). Trade-off: signing out of Atlas on one device no longer signs
+  out the others.
+- **The reset page** turns `current_password_required` (opened bare while signed in) into
+  its existing "use Settings" screen.
+- **`config.toml` keeps `secure_password_change = false`.** CLI 2.108 maps it to the old
+  24h re-authentication rule, which doesn't stop a fresh connector token and would break
+  Settings for older sessions. The real setting is the dashboard toggle below.
+- Policies use `(select public.is_connector())`, so it's evaluated once per statement.
+- Strict UUID check on `session_id`. `require_access` passes gate refusals through
+  cleanly.
+- The integration tests' "own data came back" checks now look for paper ids. The lab
+  name, which an empty reply also contains, made them vacuous. Mutation-checked: closing
+  `spelling_variants` again now fails the spelling search check.
 
 **Production steps, in this order:**
 1. Merge (deploys the migration and the Settings form).

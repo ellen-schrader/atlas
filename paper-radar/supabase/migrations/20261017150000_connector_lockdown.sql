@@ -21,9 +21,10 @@
 --      behind the gate.
 --
 -- Ordinary web sessions carry no `client_id` and are untouched by all three.
--- Adding a table? It's closed to connectors automatically at layer 1; add it to
--- layer 2 with public.close_to_connectors() — supabase/tests/connector_lockdown_test.sql
--- fails until you do.
+-- Adding a table? It's closed to connectors automatically at layer 1; close it at
+-- layer 2 too with public.close_to_connectors() — supabase/tests/connector_lockdown_test.sql
+-- fails until you do. Letting connectors read one? Add it to
+-- public.connector_readable_tables(), the one list all three use.
 
 -- Is this request authenticated with a connector (OAuth-client) token?
 create or replace function public.is_connector()
@@ -37,6 +38,23 @@ $$;
 
 comment on function public.is_connector() is
     'True when the request uses a token issued to an OAuth client (the Claude connector).';
+
+
+-- The tables a connector may read: what the read-only paper tools query
+-- (atlas_mcp/lab.py), plus spelling_variants, which search_papers reads *as the
+-- caller* to match UK/US spellings. One list, used by the gate, layer 2 and the tests.
+create or replace function public.connector_readable_tables()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+    select array[
+        'teams', 'team_members', 'mcp_access',
+        'paper_posts', 'papers', 'paper_status', 'reactions', 'comments', 'mentions',
+        'spelling_variants'
+    ];
+$$;
 
 
 -- Layer 1. Runs before every PostgREST request, as the request's role.
@@ -61,7 +79,7 @@ begin
     -- working until it expires.
     session := claims ->> 'session_id';
     if session is null
-       or session !~ '^[0-9a-fA-F-]{36}$'
+       or session !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
        or not exists (select 1 from auth.sessions s where s.id = session::uuid) then
         raise sqlstate 'PGRST' using
             message = json_build_object(
@@ -71,10 +89,8 @@ begin
     end if;
 
     -- What the read-only paper tools use (atlas_mcp/lab.py), and nothing else.
-    if (method in ('GET', 'HEAD') and path in (
-            '/teams', '/team_members', '/mcp_access',
-            '/paper_posts', '/papers', '/paper_status', '/reactions',
-            '/comments', '/mentions'))
+    if (method in ('GET', 'HEAD')
+        and ltrim(path, '/') = any (public.connector_readable_tables()))
        or (method = 'POST' and path in (
             '/rpc/search_papers', '/rpc/match_papers', '/rpc/recommend_papers',
             '/mcp_tool_calls'))  -- the lab's audit log of what Claude did
@@ -97,8 +113,9 @@ alter role authenticator set pgrst.db_pre_request = 'public.connector_request_gu
 notify pgrst, 'reload config';
 
 
--- Layer 2. Tables a connector may read (layer 1's GET list) plus the audit log,
--- whose insert returns the row it wrote.
+-- Layer 2. Every table except the readable ones and the audit log (whose insert
+-- returns the row it wrote). `(select …)` evaluates the check once per statement,
+-- not once per row: these policies sit on every web query too.
 create or replace function public.close_to_connectors(t regclass)
 returns void
 language plpgsql
@@ -107,7 +124,7 @@ as $$
 begin
     execute format(
         'create policy connector_no_read on %s as restrictive for select '
-        'to authenticated using (not public.is_connector())',
+        'to authenticated using (not (select public.is_connector()))',
         t
     );
 end;
@@ -125,9 +142,7 @@ begin
         join pg_namespace n on n.oid = c.relnamespace
         where n.nspname = 'public'
           and c.relkind = 'r'
-          and c.relname not in (
-              'teams', 'team_members', 'mcp_access', 'paper_posts', 'papers',
-              'paper_status', 'reactions', 'comments', 'mentions', 'mcp_tool_calls')
+          and c.relname <> all (public.connector_readable_tables() || array['mcp_tool_calls'])
     loop
         perform public.close_to_connectors(t);
     end loop;
@@ -138,5 +153,5 @@ $$;
 -- Layer 3. Storage (figures, uploads) is off limits to connectors entirely.
 create policy connector_no_storage on storage.objects
     as restrictive for all to authenticated
-    using (not public.is_connector())
-    with check (not public.is_connector());
+    using (not (select public.is_connector()))
+    with check (not (select public.is_connector()));

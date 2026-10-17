@@ -197,9 +197,11 @@ def _assert_isolated(me: Lab, other: Lab, out: dict[str, str], check_own: bool =
             assert s not in text, f"{me.tag} saw {other.tag}'s {s!r} via {label}:\n{text}"
     if not check_own:
         return
-    # And the tools really did return this lab's own data (not just errors).
+    # And the tools really did return this lab's own papers (not just errors). Their
+    # ids appear in the deep links; the lab name — which an empty "No papers in …"
+    # reply also contains — wouldn't prove anything.
+    assert me.team_id in out["list_labs"], f"list_labs didn't list {me.tag}:\n{out['list_labs']}"
     for label in (
-        "list_labs",
         "search keyword",
         "search semantic",
         "recent",
@@ -209,7 +211,9 @@ def _assert_isolated(me: Lab, other: Lab, out: dict[str, str], check_own: bool =
         "related work",
         "get own",
     ):
-        assert me.marker in out[label], f"{label} returned no {me.tag} data:\n{out[label]}"
+        assert any(pid in out[label] for pid in me.paper_ids), (
+            f"{label} returned no {me.tag} paper:\n{out[label]}"
+        )
     for label in REACHING:
         assert out[label].startswith("Error:"), f"{label} wasn't refused:\n{out[label]}"
 

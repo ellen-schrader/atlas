@@ -224,6 +224,8 @@ def require_access(team: dict) -> None:
     try:
         rows = client.table("mcp_access").select("enabled").eq("team_id", team["id"]).execute().data
     except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "code", None) in _CONNECTOR_REFUSALS:
+            raise LabError(getattr(exc, "message", None) or str(exc)) from exc
         raise LabError(f"Could not check Claude access for {team['name']}: {exc}") from exc
 
     if not (rows and rows[0].get("enabled")):

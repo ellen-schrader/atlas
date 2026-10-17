@@ -77,7 +77,15 @@ export default function ResetPassword({
     setBusy(true);
     try {
       const { error: err } = await supabase.auth.updateUser({ password });
-      if (err) throw err;
+      if (err) {
+        // Not a recovery session (the page opened bare while signed in): Auth wants
+        // the current password, which is what Settings asks for.
+        if (isAuthApiError(err) && err.code === "current_password_required") {
+          setStep("dead");
+          return;
+        }
+        throw err;
+      }
       setStep("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
