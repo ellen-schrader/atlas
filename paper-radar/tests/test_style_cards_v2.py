@@ -398,10 +398,10 @@ def test_sequential_and_diverging_heatmaps_both_render():
 def test_cvd_checks_each_named_palette_but_not_the_heatmap_ramp():
     pytest.importorskip("mcp")
     pytest.importorskip("supabase")
-    from atlas_mcp import server
+    from atlas_mcp import figures
 
     norm = card_spec.validate_spec(COMPOSITE)
-    safe, verdict = server._spec_cvd(norm)
+    safe, verdict = figures._spec_cvd(norm)
     assert "region" in verdict  # the categorical palette IS checked
     assert "expr" not in verdict  # the heatmap's ramp is not a categorical set
     assert isinstance(safe, bool)
@@ -413,7 +413,7 @@ def test_cvd_checks_inline_palettes_too():
     panel must not be stamped safe just because it has no name."""
     pytest.importorskip("mcp")
     pytest.importorskip("supabase")
-    from atlas_mcp import server
+    from atlas_mcp import figures
 
     norm = card_spec.validate_spec(
         {
@@ -428,7 +428,7 @@ def test_cvd_checks_inline_palettes_too():
             ],
         }
     )
-    safe, verdict = server._spec_cvd(norm)
+    safe, verdict = figures._spec_cvd(norm)
     assert safe is False, "four near-identical blues are not colourblind-safe"
     assert "no categorical palette" not in verdict
 
@@ -436,7 +436,7 @@ def test_cvd_checks_inline_palettes_too():
 def test_cvd_still_checks_a_palette_used_as_both_ramp_and_categories():
     pytest.importorskip("mcp")
     pytest.importorskip("supabase")
-    from atlas_mcp import server
+    from atlas_mcp import figures
 
     norm = card_spec.validate_spec(
         {
@@ -450,7 +450,7 @@ def test_cvd_still_checks_a_palette_used_as_both_ramp_and_categories():
             ],
         }
     )
-    safe, verdict = server._spec_cvd(norm)
+    safe, verdict = figures._spec_cvd(norm)
     assert "main" in verdict, "its categorical USE must still be checked"
     assert safe is False
 
@@ -463,8 +463,8 @@ def test_confirm_preview_surfaces_every_stored_string():
     pytest.importorskip("supabase")
     import asyncio
 
+    from atlas_mcp import figures
     from atlas_mcp import lab as L
-    from atlas_mcp import server
 
     spec = {
         "spec_version": 2,
@@ -477,7 +477,7 @@ def test_confirm_preview_surfaces_every_stored_string():
             }
         ],
     }
-    fn = getattr(server.add_plot_to_moodboard, "fn", server.add_plot_to_moodboard)
+    fn = figures.add_plot_to_moodboard
     orig = L.resolve_team
     L.resolve_team = lambda tid: {"id": "t", "name": "Lab A"}
     try:
@@ -492,7 +492,7 @@ def test_confirm_preview_surfaces_every_stored_string():
 def test_spec_summary_describes_a_composite():
     pytest.importorskip("mcp")
     pytest.importorskip("supabase")
-    from atlas_mcp import server
+    from atlas_mcp import figures
 
-    text = server._spec_summary(card_spec.validate_spec(COMPOSITE))
+    text = figures._spec_summary(card_spec.validate_spec(COMPOSITE))
     assert "composite" in text and "4 panels" in text and "phenotype" in text

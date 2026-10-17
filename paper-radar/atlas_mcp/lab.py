@@ -1,11 +1,19 @@
 """Data layer for the Atlas MCP server.
 
 Acts as a specific Atlas user against Supabase so RLS scopes every read to the
-labs that user belongs to — the same security model as ``api/supa.py``. The
-user is chosen by environment:
+labs that user belongs to — the same security model as ``api/supa.py``. Who that
+user is depends on the transport:
 
-  * ``ATLAS_TOKEN``                     — a Supabase access token (JWT), or
-  * ``ATLAS_EMAIL`` + ``ATLAS_PASSWORD`` — email/password we sign in with.
+  * **Hosted (HTTP):** whoever sent the request. The server binds the caller's
+    verified token with ``act_as`` for the duration of that request only.
+  * **Local (stdio):** one user for the whole process, from the environment —
+    ``ATLAS_TOKEN`` (a Supabase access token), or ``ATLAS_EMAIL`` +
+    ``ATLAS_PASSWORD`` (signed in with). Only once ``allow_env_session`` is called,
+    which the stdio entry point does.
+
+With neither, every call fails: a hosted request that somehow reached a tool
+without a bound user must never fall back to the environment's credentials and
+read someone else's lab.
 
 Optional: ``ATLAS_TEAM_ID`` (default lab when the user is in more than one) and
 ``ATLAS_WEB_URL`` (base for the ``?paper=`` deep links; defaults to the hosted
@@ -16,12 +24,14 @@ from __future__ import annotations
 
 import json
 import logging
-import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
 
 from api import embeddings
 from api.config import get_api_settings
+from api.ratelimit import PerUserRateLimiter
 from paper_radar.ingest import url_guard
 from supabase import Client, ClientOptions, create_client
 
@@ -46,13 +56,67 @@ class LabError(RuntimeError):
     """A user-facing problem (bad auth, unknown lab, no results scope)."""
 
 
-@lru_cache
-def _session() -> tuple[Client, str | None]:
-    """An authenticated Supabase client acting as the configured user, cached.
+# The user the in-flight request acts as (hosted server), bound by `act_as`.
+_request_session: ContextVar[tuple[Client, str] | None] = ContextVar(
+    "atlas_request_session", default=None
+)
+# Whether a call with no bound user may act as the environment's user (stdio only).
+# A contextvar, not a module flag: it's set in the stdio entry point's own context
+# (which every task and worker thread of that server inherits), so nothing else
+# sharing the process can switch it on for requests it didn't start.
+_env_session_allowed: ContextVar[bool] = ContextVar("atlas_env_session_allowed", default=False)
 
-    The user's token is applied to *all* sub-clients (postgrest for RLS reads,
-    storage for figure-image downloads) by baking it into the client headers.
+
+def allow_env_session() -> None:
+    """Let calls in this context act as the user configured in the environment.
+    Stdio entry point only."""
+    _env_session_allowed.set(True)
+
+
+def _user_client(token: str) -> Client:
+    """A Supabase client that sends `token` on every request, so RLS sees that user.
+
+    The token is applied to *all* sub-clients (postgrest for RLS reads, storage for
+    figure-image downloads) by baking it into the client headers.
     """
+    s = get_api_settings()
+    if not (s.supabase_url and s.supabase_anon_key):
+        raise LabError("Supabase is not configured — check api/.env.")
+    return create_client(
+        s.supabase_url,
+        s.supabase_anon_key,
+        options=ClientOptions(headers={"Authorization": f"Bearer {token}"}),
+    )
+
+
+@contextmanager
+def act_as(token: str, user_id: str) -> Iterator[None]:
+    """Run the enclosed tool call as the user who owns `token`.
+
+    The caller (the hosted server's auth layer) must already have verified the token
+    and taken `user_id` from it. The binding lives in a contextvar, so concurrent
+    requests — each in its own task — never see each other's user.
+    """
+    reset = _request_session.set((_user_client(token), user_id))
+    try:
+        yield
+    finally:
+        _request_session.reset(reset)
+
+
+def _session() -> tuple[Client, str | None]:
+    """The Supabase client and user id the current call acts as."""
+    bound = _request_session.get()
+    if bound is not None:
+        return bound
+    if not _env_session_allowed.get():
+        raise LabError("Not signed in to Atlas.")
+    return _env_session()
+
+
+@lru_cache
+def _env_session() -> tuple[Client, str | None]:
+    """The stdio user from ``api/.env``, signed in once and cached."""
     s = get_api_settings()
     if not (s.supabase_url and s.supabase_anon_key):
         raise LabError("Supabase is not configured — check api/.env.")
@@ -81,12 +145,7 @@ def _session() -> tuple[Client, str | None]:
             "(in api/.env or the environment), so the MCP server can act as a lab member."
         )
 
-    client = create_client(
-        s.supabase_url,
-        s.supabase_anon_key,
-        options=ClientOptions(headers={"Authorization": f"Bearer {token}"}),
-    )
-    return client, uid
+    return _user_client(token), uid
 
 
 def get_client() -> Client:
@@ -113,11 +172,13 @@ def _is_auth_error(exc: Exception) -> bool:
 
 
 def with_refresh(fn):
-    """On an expired-session error, drop the cached session and retry once.
+    """On an expired-session error, drop the cached stdio session and retry once.
 
     The cached client bakes in a bearer token that expires (~1h); a long-running
     stdio server would otherwise 401 until restarted. Clean `LabError`s (bad
-    input, no such lab) are never retried.
+    input, no such lab) are never retried, and neither is a hosted request: its
+    token is the client's, so the client refreshes it, and signing in again here
+    could only ever mean signing in as somebody else.
     """
 
     @wraps(fn)
@@ -127,10 +188,16 @@ def with_refresh(fn):
         except LabError:
             raise
         except Exception as exc:  # noqa: BLE001
-            if _is_auth_error(exc):
-                _session.cache_clear()
-                return fn(*args, **kwargs)
-            raise
+            if not _is_auth_error(exc):
+                raise
+            if _request_session.get() is not None:
+                # Tools only catch LabError; a raw PostgREST 401 would reach the
+                # client as an internal error instead of something actionable.
+                raise LabError(
+                    "Your Atlas sign-in has expired — reconnect Atlas in Claude."
+                ) from exc
+            _env_session.cache_clear()
+            return fn(*args, **kwargs)
 
     return wrapper
 
@@ -248,7 +315,8 @@ def _pick_team(team_id: str | None) -> dict:
             if t["id"] == team_id:
                 return t
         raise LabError(f"You are not a member of lab {team_id}.")
-    env_team = get_atlas_settings().atlas_team_id
+    # ATLAS_TEAM_ID is the stdio user's own setting; it means nothing to a hosted caller.
+    env_team = get_atlas_settings().atlas_team_id if _request_session.get() is None else ""
     if env_team:
         for t in teams:
             if t["id"] == env_team:
@@ -592,24 +660,18 @@ def validate_share_url(url: str) -> str:
         raise LabError(str(exc).replace("fetched", "shared")) from exc
 
 
-class _RateLimiter:
-    """A simple per-process sliding-window cap. The MCP process is one user, so
-    this is effectively a per-user write quota that bounds injection-driven spam."""
-
-    def __init__(self, max_events: int, window_seconds: float) -> None:
-        self.max_events = max_events
-        self.window = window_seconds
-        self._events: list[float] = []
-
-    def check(self, now: float | None = None) -> None:
-        now = time.monotonic() if now is None else now
-        self._events = [t for t in self._events if now - t < self.window]
-        if len(self._events) >= self.max_events:
-            raise LabError(
-                "Too many shares in a short time — pausing to avoid flooding the lab. "
-                "Try again shortly."
-            )
-        self._events.append(now)
+def _RateLimiter(max_events: int, window_seconds: float) -> PerUserRateLimiter:
+    """A per-user cap bounding injection-driven spam. Per user because the hosted
+    server is one process serving everyone: a single shared window would let one
+    user's burst lock out every other lab."""
+    return PerUserRateLimiter(
+        max_events,
+        window_seconds,
+        lambda: LabError(
+            "Too many shares in a short time — pausing to avoid flooding the lab. "
+            "Try again shortly."
+        ),
+    )
 
 
 # Writes and outbound metadata fetches are capped separately: the fetch limiter
@@ -674,7 +736,7 @@ def resolve_metadata(url: str) -> dict:
     from paper_radar.ingest.metadata import fetch_metadata
     from paper_radar.ingest.urls import _clean_url, _normalize_key
 
-    _fetch_limiter.check()
+    _fetch_limiter.check(current_user_id() or "")
     # validate_share_url now covers the DNS check too (it's inside validate_public_url),
     # so the separate _reject_private_dns call it used to need is gone.
     safe = validate_share_url(url)
@@ -715,7 +777,7 @@ def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
     @with_refresh so an expired JWT is refreshed + retried, like the read path."""
     from api.app import _upsert_paper  # global-corpus dedup (service role, contained)
 
-    _post_limiter.check()
+    _post_limiter.check(current_user_id() or "")
     meta, clean_url, url_norm = resolved["meta"], resolved["clean_url"], resolved["url_norm"]
     preprint = resolved.get("preprint")
     paper_id, _needs_embedding = _upsert_paper(
