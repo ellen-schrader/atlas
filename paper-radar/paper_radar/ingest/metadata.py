@@ -116,6 +116,12 @@ class PaperMetadata:
     keywords: list[str] = field(default_factory=list)
     # "arxiv" | "crossref" | "pubmed" | "europepmc" | "citation_meta" | "unknown"
     source: str = "unknown"
+    # Preprint links. A preprint record names the DOI it was published as
+    # (Crossref's is-preprint-of; arXiv's journal DOI); a published record can
+    # name its preprints (has-preprint). See docs/preprint-dedup-plan.md.
+    is_preprint: bool = False
+    published_doi: str | None = None
+    preprint_dois: list[str] = field(default_factory=list)
 
 
 def _get(url: str, *, browser: bool = False) -> bytes | None:
@@ -330,7 +336,22 @@ def _fetch_arxiv(arxiv_id: str, url: str) -> PaperMetadata | None:
         abstract=abstract,
         keywords=keywords,
         source="arxiv",
+        is_preprint=True,
+        # The journal DOI the authors recorded on arXiv. It is also still the
+        # row's `doi` for now; giving arXiv rows their own DOI comes with the
+        # ingest changes (docs/preprint-dedup-plan.md, PR 2).
+        published_doi=doi.lower() if doi else None,
     )
+
+
+def _relation_dois(msg: dict, kind: str) -> list[str]:
+    """The DOIs a Crossref record lists under ``relation[kind]``, lowercased."""
+    related = (msg.get("relation") or {}).get(kind) or []
+    return [
+        r["id"].strip().lower()
+        for r in related
+        if isinstance(r, dict) and r.get("id-type") == "doi" and r.get("id")
+    ]
 
 
 def parse_crossref(msg: dict, url: str) -> PaperMetadata:
@@ -340,6 +361,9 @@ def parse_crossref(msg: dict, url: str) -> PaperMetadata:
         " ".join(p for p in (a.get("given"), a.get("family")) if p) for a in msg.get("author", [])
     ]
     venue = (msg.get("container-title") or [None])[0]
+    # Preprint servers register their records as "posted-content".
+    is_preprint = msg.get("type") == "posted-content"
+    published = _relation_dois(msg, "is-preprint-of")
     year = None
     for key in ("published-print", "published-online", "issued", "created"):
         parts = (msg.get(key) or {}).get("date-parts") or [[None]]
@@ -356,6 +380,9 @@ def parse_crossref(msg: dict, url: str) -> PaperMetadata:
         abstract=_clean_text(msg.get("abstract")),
         keywords=[s for s in (msg.get("subject") or []) if s],
         source="crossref",
+        is_preprint=is_preprint or bool(published),
+        published_doi=published[0] if published else None,
+        preprint_dois=_relation_dois(msg, "has-preprint"),
     )
 
 
@@ -652,6 +679,65 @@ def _merge(base: PaperMetadata, extra: PaperMetadata) -> PaperMetadata:
     if not base.keywords and extra.keywords:
         base.keywords = extra.keywords
     return base
+
+
+# --- preprint -> published version ------------------------------------------
+
+# DOI prefixes of the preprint servers whose own API reports publication:
+# bioRxiv and medRxiv (Cold Spring Harbor's 10.1101, and openRxiv's 10.64898).
+_RXIV_PREFIXES = ("10.1101/", "10.64898/")
+
+
+def parse_biorxiv_pubs(payload: bytes | dict) -> str | None:
+    """The published DOI in a bioRxiv/medRxiv ``/pubs`` API reply, or None."""
+    try:
+        data = json.loads(payload) if isinstance(payload, bytes | str) else payload
+    except ValueError:
+        return None
+    for item in (data or {}).get("collection") or []:
+        doi = (item or {}).get("published_doi")
+        if doi and doi.strip().upper() != "NA":
+            return doi.strip().lower()
+    return None
+
+
+def _fetch_biorxiv_published(doi: str) -> str | None:
+    for server in ("biorxiv", "medrxiv"):
+        raw = _get(f"https://api.biorxiv.org/pubs/{server}/{urllib.request.quote(doi)}")
+        if raw is not None and (published := parse_biorxiv_pubs(raw)):
+            return published
+    return None
+
+
+def published_version(doi: str | None = None, url: str | None = None) -> tuple[str, str] | None:
+    """``(published DOI, reason)`` for a preprint that has been published, else None.
+
+    Only sources that state the link outright -- no title matching here:
+
+    * ``crossref``: the preprint's Crossref record lists ``is-preprint-of``.
+      bioRxiv, medRxiv, Research Square and SSRN deposit it, but sometimes weeks
+      after the journal publishes.
+    * ``biorxiv``: bioRxiv/medRxiv's own publication API, which often has the
+      link before Crossref does.
+    * ``arxiv``: the journal DOI the authors recorded on arXiv. Asked whenever
+      ``url`` is an arXiv link, whatever ``doi`` says: an arXiv row can hold the
+      journal DOI already (see ``_fetch_arxiv``).
+    """
+    arxiv_id = _arxiv_id(url) if url else None
+    if arxiv_id:
+        meta = _fetch_arxiv(arxiv_id, f"https://arxiv.org/abs/{arxiv_id}")
+        if meta and meta.published_doi:
+            return meta.published_doi, "arxiv"
+        return None
+    if not doi:
+        return None
+    doi = doi.strip().lower()
+    meta = _fetch_crossref(doi, f"https://doi.org/{doi}")
+    if meta and meta.published_doi:
+        return meta.published_doi, "crossref"
+    if doi.startswith(_RXIV_PREFIXES) and (published := _fetch_biorxiv_published(doi)):
+        return published, "biorxiv"
+    return None
 
 
 # --- public entrypoint -------------------------------------------------------

@@ -16,10 +16,12 @@ from paper_radar.ingest.metadata import (
     _preprint_doi,
     _url_doi,
     fetch_metadata,
+    parse_biorxiv_pubs,
     parse_citation_html,
     parse_crossref,
     parse_europepmc,
     parse_pubmed_efetch,
+    published_version,
 )
 
 
@@ -415,3 +417,121 @@ def test_parse_jsonld_fallback():
 
 def test_parse_returns_none_when_empty():
     assert parse_citation_html("<html><head></head><body>hi</body></html>", "u") is None
+
+
+# --- preprint -> published version ------------------------------------------
+
+_PREPRINT_MSG = {
+    "title": ["A spatial atlas of breast tissue"],
+    "type": "posted-content",
+    "subtype": "preprint",
+    "institution": [{"name": "bioRxiv"}],
+    "DOI": "10.1101/2025.01.01.000001",
+    "relation": {
+        "is-preprint-of": [
+            {"id-type": "doi", "id": "10.1038/S41586-025-00001-X", "asserted-by": "subject"}
+        ]
+    },
+}
+
+
+def test_parse_crossref_reads_the_published_version_of_a_preprint():
+    m = parse_crossref(_PREPRINT_MSG, "https://x")
+    assert m.is_preprint
+    assert m.published_doi == "10.1038/s41586-025-00001-x"
+    # The venue is left as Crossref has it: a venue-less paper exports as @misc.
+    assert m.venue is None
+
+
+def test_parse_crossref_marks_an_unpublished_preprint():
+    msg = {**_PREPRINT_MSG, "relation": {}}
+    m = parse_crossref(msg, "https://x")
+    assert m.is_preprint
+    assert m.published_doi is None
+
+
+def test_parse_crossref_reads_the_preprints_of_a_published_paper():
+    msg = {
+        "title": ["A spatial atlas of breast tissue"],
+        "type": "journal-article",
+        "container-title": ["Nature"],
+        "DOI": "10.1038/s41586-025-00001-x",
+        "relation": {
+            "has-preprint": [{"id-type": "doi", "id": "10.1101/2025.01.01.000001"}],
+            "is-referenced-by": [{"id-type": "uri", "id": "https://example.org"}],
+        },
+    }
+    m = parse_crossref(msg, "https://x")
+    assert not m.is_preprint
+    assert m.published_doi is None
+    assert m.preprint_dois == ["10.1101/2025.01.01.000001"]
+
+
+def test_parse_biorxiv_pubs():
+    published = {
+        "messages": [{"status": "ok"}],
+        "collection": [
+            {
+                "biorxiv_doi": "10.1101/2025.01.01.000001",
+                "published_doi": "10.1016/J.CELL.2025.01.001",
+            }
+        ],
+    }
+    assert parse_biorxiv_pubs(json.dumps(published).encode()) == "10.1016/j.cell.2025.01.001"
+    assert (
+        parse_biorxiv_pubs({"messages": [{"status": "no posts found"}], "collection": []}) is None
+    )
+    assert parse_biorxiv_pubs({"collection": [{"published_doi": "NA"}]}) is None
+    assert parse_biorxiv_pubs(b"<html>rate limited</html>") is None
+
+
+def test_published_version_prefers_crossref(monkeypatch):
+    calls = []
+
+    def fake_get(url, browser=False):
+        calls.append(url)
+        return json.dumps({"message": _PREPRINT_MSG}).encode()
+
+    monkeypatch.setattr(metadata_module, "_get", fake_get)
+    assert published_version("10.1101/2025.01.01.000001") == (
+        "10.1038/s41586-025-00001-x",
+        "crossref",
+    )
+    assert len(calls) == 1
+
+
+def test_published_version_falls_back_to_the_biorxiv_api(monkeypatch):
+    # Crossref has the preprint but not the link yet; medRxiv has it.
+    def fake_get(url, browser=False):
+        if "api.crossref.org" in url:
+            return json.dumps({"message": {**_PREPRINT_MSG, "relation": {}}}).encode()
+        if "/pubs/medrxiv/" in url:
+            return json.dumps({"collection": [{"published_doi": "10.1056/NEJMoa2500001"}]}).encode()
+        return json.dumps({"collection": []}).encode()
+
+    monkeypatch.setattr(metadata_module, "_get", fake_get)
+    assert published_version("10.1101/2025.01.01.000001") == ("10.1056/nejmoa2500001", "biorxiv")
+
+
+def test_published_version_does_not_ask_biorxiv_about_other_servers(monkeypatch):
+    asked = []
+
+    def fake_get(url, browser=False):
+        asked.append(url)
+        return None
+
+    monkeypatch.setattr(metadata_module, "_get", fake_get)
+    assert published_version("10.21203/rs.3.rs-1234567/v1") is None
+    assert not any("biorxiv" in u for u in asked)
+
+
+def test_published_version_reads_the_journal_doi_from_arxiv(monkeypatch):
+    atom = b"""<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+      <entry><title>Attention</title><published>2017-06-12T00:00:00Z</published>
+      <author><name>A. Vaswani</name></author>
+      <arxiv:doi>10.5555/3295222.3295349</arxiv:doi></entry></feed>"""
+    monkeypatch.setattr(metadata_module, "_get", lambda url, browser=False: atom)
+    assert published_version(None, "https://arxiv.org/abs/1706.03762v7") == (
+        "10.5555/3295222.3295349",
+        "arxiv",
+    )
