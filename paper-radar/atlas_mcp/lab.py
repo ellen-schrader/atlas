@@ -623,8 +623,8 @@ def novelty(
 @with_refresh
 def digest(team: dict, days: int, offset: int = 0) -> dict:
     """Lab activity in the last `days`: new posts (hydrated, one page of them from
-    `offset`), new-comment count, and the papers the caller was @-mentioned on. All
-    RLS-scoped to the lab."""
+    `offset`), plus — on the first page only — the new-comment count and the papers
+    the caller was @-mentioned on. All RLS-scoped to the lab."""
     from datetime import datetime, timedelta, timezone
 
     client = get_client()
@@ -658,8 +658,22 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
             raise
         posts_resp = recent_posts("id").limit(1).execute()
         posts_resp.data = []
-    new_papers = _hydrate(client, posts_resp.data or [])
-    n_papers = posts_resp.count if posts_resp.count is not None else len(new_papers)
+    posts = posts_resp.data or []
+    new_papers = _hydrate(client, posts)
+    n_papers = posts_resp.count if posts_resp.count is not None else offset + len(posts)
+    page = {
+        "days": days,
+        "new_papers": new_papers,
+        "n_papers": n_papers,
+        # Counted in posts, not hydrated papers: a post whose paper can't be read
+        # would otherwise shift every later page.
+        "n_fetched": len(posts),
+        "n_comments": None,
+        "mentions": None,
+    }
+    if offset:
+        # Comments and mentions aren't paged; the first page already reported them.
+        return page
 
     comments = (
         client.table("comments")
@@ -688,14 +702,7 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
             by_id = {p["id"]: p.get("title") for p in papers}
             my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
 
-    return {
-        "days": days,
-        "new_papers": new_papers,
-        "n_papers": n_papers,
-        "offset": offset,
-        "n_comments": n_comments,
-        "mentions": my_mentions,
-    }
+    return {**page, "n_comments": n_comments, "mentions": my_mentions}
 
 
 @with_refresh

@@ -464,43 +464,61 @@ def test_digest_hit_shows_note_and_abstract(monkeypatch):
     assert len(long) < 1200
     assert 'get_paper("p2")' in long
 
+    # A pasted essay of a note is capped too, so the page stays the size it was budgeted.
+    chatty = tools._format_digest_hit(_digest_hit("p4", "Short.", "note\n\n" * 200))
+    assert len(chatty) < 600 and "\n\n" not in chatty
+    assert 'get_paper("p4")' in chatty
+
     # A missing abstract says so, so Claude doesn't summarise from the title as if it had one.
     assert "Abstract: (no abstract stored)" in tools._format_digest_hit(_digest_hit("p3"))
 
 
-def _drive_digest(monkeypatch, *, n_papers: int, offset: int, page: int) -> str:
+def _drive_digest(
+    monkeypatch, *, n_papers: int, offset: int, page: int, unreadable: int = 0
+) -> str:
+    """Run lab_digest over a stubbed lab.digest. `unreadable` posts on the page were
+    fetched but their papers didn't hydrate."""
     pytest.importorskip("mcp")
     from atlas_mcp import lab as L
     from atlas_mcp import papers
 
-    monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t", "name": "Lab A"})
+    monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t1", "name": "Lab A"})
     monkeypatch.setattr(L, "paper_link", lambda pid: f"http://x/{pid}")
     hits = [_digest_hit(f"p{i}", "An abstract.") for i in range(offset, offset + page)]
+    first_page = offset == 0
     monkeypatch.setattr(
         L,
         "digest",
         lambda team, days, off: {
             "days": days,
-            "new_papers": hits,
+            "new_papers": hits[unreadable:],
             "n_papers": n_papers,
-            "offset": off,
-            "n_comments": 0,
-            "mentions": [],
+            "n_fetched": len(hits),
+            "n_comments": 4 if first_page else None,
+            "mentions": [] if first_page else None,
         },
     )
     return papers.lab_digest(days=10, offset=offset)
 
 
-def test_digest_points_to_the_next_page(monkeypatch):
+def test_digest_points_to_the_next_page_in_the_same_lab(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20)
     assert "35 new paper(s), showing 1–20" in out
-    assert "15 more: call lab_digest(days=10, offset=20)" in out
+    assert '15 more: call lab_digest(days=10, offset=20, team_id="t1")' in out
+    assert "4 new comment(s)" in out
 
 
-def test_digest_last_page_has_no_pointer(monkeypatch):
+def test_digest_last_page_has_no_pointer_or_repeated_comments(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=35, offset=20, page=15)
     assert "showing 21–35" in out
     assert "more:" not in out
+    assert "comment" not in out
+
+
+def test_digest_next_offset_counts_posts_not_readable_papers(monkeypatch):
+    # Two of the page's posts have no readable paper; the next page still starts at 20.
+    out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20, unreadable=2)
+    assert "offset=20," in out
 
 
 def test_digest_single_page_and_past_the_end(monkeypatch):

@@ -173,6 +173,8 @@ def _format_hit(h: dict) -> str:
 # An abstract excerpt in the digest: long enough to summarise from, short enough
 # that a full page of papers stays a reasonable tool result.
 _EXCERPT_CHARS = 900
+# A lab note is a teammate's aside, but nothing stops one pasting a whole abstract.
+_NOTE_CHARS = 300
 
 
 def _excerpt(text: str, limit: int = _EXCERPT_CHARS) -> tuple[str, bool]:
@@ -190,16 +192,17 @@ def _format_digest_hit(h: dict) -> str:
     abstract excerpt — enough to summarise the lab's reading without a get_paper
     call per paper."""
     lines = [_format_hit(h)]
-    if h.get("note"):
-        lines.append(f"Lab note: “{h['note']}”")
-    abstract = (h["paper"].get("abstract") or "").strip()
-    if abstract:
-        text, cut = _excerpt(abstract)
-        lines.append(f"Abstract: {text}")
-        if cut:
-            lines.append(f'(abstract shortened — get_paper("{h["paper"]["id"]}") for all of it)')
+    note_cut = abstract_cut = False
+    if (h.get("note") or "").strip():
+        note, note_cut = _excerpt(h["note"], _NOTE_CHARS)
+        lines.append(f"Lab note: “{note}”")
+    if (h["paper"].get("abstract") or "").strip():
+        abstract, abstract_cut = _excerpt(h["paper"]["abstract"])
+        lines.append(f"Abstract: {abstract}")
     else:
         lines.append("Abstract: (no abstract stored)")
+    if note_cut or abstract_cut:
+        lines.append(f'(shortened — get_paper("{h["paper"]["id"]}") has the full text)')
     return "\n".join(lines)
 
 

@@ -158,7 +158,8 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
         team_id: Which lab, if you belong to more than one.
     """
     days = max(1, min(int(days), 90))
-    offset = max(0, int(offset))
+    # Capped so a wild offset can't overflow PostgREST's range header.
+    offset = max(0, min(int(offset), 10_000))
     try:
         team = lab.resolve_team(team_id)
         d = lab.digest(team, days, offset)
@@ -167,23 +168,27 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
     papers = d["new_papers"]
     n_papers = d["n_papers"]
     parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
-    if papers:
-        first, last = offset + 1, offset + len(papers)
+    if d["n_fetched"]:
+        first, last = offset + 1, offset + d["n_fetched"]
         if first == 1 and last >= n_papers:
             parts.append(f"{n_papers} new paper(s):")
         else:
             parts.append(f"{n_papers} new paper(s), showing {first}–{last}, newest first:")
         parts.append("\n\n".join(_format_digest_hit(h) for h in papers))
         if last < n_papers:
+            # Name the lab: following the hint without it could page through another one.
             parts.append("")
             parts.append(
-                f"{n_papers - last} more: call lab_digest(days={days}, offset={last}) "
-                "for the next page."
+                f"{n_papers - last} more: call lab_digest(days={days}, offset={last}, "
+                f'team_id="{team["id"]}") for the next page.'
             )
     elif n_papers:
         parts.append(f"{n_papers} new paper(s); none left from offset {offset}.")
     else:
         parts.append("No new papers.")
+    if d["n_comments"] is None:
+        # A later page: comments and mentions were reported with the first one.
+        return _untrusted("lab activity", "\n".join(parts))
     parts.append("")
     parts.append(f"{d['n_comments']} new comment(s) across the lab.")
     if d["mentions"]:
