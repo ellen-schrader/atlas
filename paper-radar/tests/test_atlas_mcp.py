@@ -429,3 +429,82 @@ def test_citation_key_surname_initial_format():
     # a real two-letter surname is not mistaken for an initial
     assert tools._citation_key({"authors": ["Li B"], "year": 2023}) == "Li, 2023"
     assert tools._citation_key({"authors": ["Bo Li", "Wu X"], "year": 2023}) == "Li et al., 2023"
+
+
+# --- lab_digest: abstract excerpts, notes and paging ------------------------
+
+
+def _digest_hit(pid: str, abstract: str | None = None, note: str | None = None) -> dict:
+    return {
+        "note": note,
+        "paper": {"id": pid, "title": f"Paper {pid}", "authors": [], "abstract": abstract},
+    }
+
+
+def test_excerpt_cuts_at_a_word_boundary():
+    pytest.importorskip("mcp")
+    from atlas_mcp import tools
+
+    assert tools._excerpt("  short\n abstract ") == ("short abstract", False)
+    text, cut = tools._excerpt("alpha beta gamma, delta", limit=18)
+    assert cut and text == "alpha beta gamma…"
+
+
+def test_digest_hit_shows_note_and_abstract(monkeypatch):
+    pytest.importorskip("mcp")
+    from atlas_mcp import tools
+
+    monkeypatch.setattr(lab, "paper_link", lambda pid: f"http://x/{pid}")
+    out = tools._format_digest_hit(_digest_hit("p1", "We map tumours.", "For the FFPE project"))
+    assert "Lab note: “For the FFPE project”" in out
+    assert "Abstract: We map tumours." in out
+    assert "shortened" not in out
+
+    long = tools._format_digest_hit(_digest_hit("p2", "word " * 400))
+    assert len(long) < 1200
+    assert 'get_paper("p2")' in long
+
+    # A missing abstract says so, so Claude doesn't summarise from the title as if it had one.
+    assert "Abstract: (no abstract stored)" in tools._format_digest_hit(_digest_hit("p3"))
+
+
+def _drive_digest(monkeypatch, *, n_papers: int, offset: int, page: int) -> str:
+    pytest.importorskip("mcp")
+    from atlas_mcp import lab as L
+    from atlas_mcp import papers
+
+    monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t", "name": "Lab A"})
+    monkeypatch.setattr(L, "paper_link", lambda pid: f"http://x/{pid}")
+    hits = [_digest_hit(f"p{i}", "An abstract.") for i in range(offset, offset + page)]
+    monkeypatch.setattr(
+        L,
+        "digest",
+        lambda team, days, off: {
+            "days": days,
+            "new_papers": hits,
+            "n_papers": n_papers,
+            "offset": off,
+            "n_comments": 0,
+            "mentions": [],
+        },
+    )
+    return papers.lab_digest(days=10, offset=offset)
+
+
+def test_digest_points_to_the_next_page(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20)
+    assert "35 new paper(s), showing 1–20" in out
+    assert "15 more: call lab_digest(days=10, offset=20)" in out
+
+
+def test_digest_last_page_has_no_pointer(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=35, offset=20, page=15)
+    assert "showing 21–35" in out
+    assert "more:" not in out
+
+
+def test_digest_single_page_and_past_the_end(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3)
+    assert "3 new paper(s):" in out and "showing" not in out
+    out = _drive_digest(monkeypatch, n_papers=3, offset=40, page=0)
+    assert "none left from offset 40" in out

@@ -170,6 +170,39 @@ def _format_hit(h: dict) -> str:
     return "\n".join(lines)
 
 
+# An abstract excerpt in the digest: long enough to summarise from, short enough
+# that a full page of papers stays a reasonable tool result.
+_EXCERPT_CHARS = 900
+
+
+def _excerpt(text: str, limit: int = _EXCERPT_CHARS) -> tuple[str, bool]:
+    """`text` with whitespace collapsed, cut at a word boundary to at most `limit`
+    characters. Returns (excerpt, was_cut)."""
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat, False
+    cut = flat[:limit].rsplit(" ", 1)[0] or flat[:limit]
+    return cut.rstrip(" ,;:") + "…", True
+
+
+def _format_digest_hit(h: dict) -> str:
+    """One paper for the digest: the citation block, the poster's note, and an
+    abstract excerpt — enough to summarise the lab's reading without a get_paper
+    call per paper."""
+    lines = [_format_hit(h)]
+    if h.get("note"):
+        lines.append(f"Lab note: “{h['note']}”")
+    abstract = (h["paper"].get("abstract") or "").strip()
+    if abstract:
+        text, cut = _excerpt(abstract)
+        lines.append(f"Abstract: {text}")
+        if cut:
+            lines.append(f'(abstract shortened — get_paper("{h["paper"]["id"]}") for all of it)')
+    else:
+        lines.append("Abstract: (no abstract stored)")
+    return "\n".join(lines)
+
+
 # An initials run: "A", "AB", "A.B.", "X-Y". Requires every letter to be capital,
 # so a genuine two-letter surname ("Li", "Ng", "Wu") is never mistaken for one.
 _INITIALS_RE = re.compile(r"^[A-Z](?:[.\-]?[A-Z]){0,2}\.?$")

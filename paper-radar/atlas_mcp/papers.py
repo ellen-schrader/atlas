@@ -15,6 +15,7 @@ from .tools import (
     _citation_key,
     _clamp,
     _elicit_confirm,
+    _format_digest_hit,
     _format_hit,
     _papers_result,
     _render,
@@ -146,25 +147,41 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
 
 
 @audited
-def lab_digest(days: int = 7, team_id: str | None = None) -> str:
-    """Summarise recent activity in your lab: new papers, comments, and mentions.
+def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> str:
+    """Summarise recent activity in your lab: new papers (with each poster's note and
+    an abstract excerpt), comments, and mentions. Papers come newest first, a page
+    at a time; when there are more, the result says which offset fetches the next page.
 
     Args:
         days: How many days back to look (1-90).
+        offset: How many of the newest papers to skip, to fetch the next page (0 = start).
         team_id: Which lab, if you belong to more than one.
     """
+    days = max(1, min(int(days), 90))
+    offset = max(0, int(offset))
     try:
         team = lab.resolve_team(team_id)
-        d = lab.digest(team, max(1, min(int(days), 90)))
+        d = lab.digest(team, days, offset)
     except lab.LabError as exc:
         return f"Error: {exc}"
     papers = d["new_papers"]
     n_papers = d["n_papers"]
     parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
-    if n_papers:
-        shown = f" (showing the {len(papers)} most recent)" if n_papers > len(papers) else ""
-        parts.append(f"{n_papers} new paper(s){shown}:")
-        parts.append(_render(papers, ""))
+    if papers:
+        first, last = offset + 1, offset + len(papers)
+        if first == 1 and last >= n_papers:
+            parts.append(f"{n_papers} new paper(s):")
+        else:
+            parts.append(f"{n_papers} new paper(s), showing {first}–{last}, newest first:")
+        parts.append("\n\n".join(_format_digest_hit(h) for h in papers))
+        if last < n_papers:
+            parts.append("")
+            parts.append(
+                f"{n_papers - last} more: call lab_digest(days={days}, offset={last}) "
+                "for the next page."
+            )
+    elif n_papers:
+        parts.append(f"{n_papers} new paper(s); none left from offset {offset}.")
     else:
         parts.append("No new papers.")
     parts.append("")

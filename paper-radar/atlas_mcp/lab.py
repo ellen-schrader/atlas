@@ -46,6 +46,8 @@ PAPER_COLUMNS = (
     "id, url, doi, title, authors, abstract, venue, year, keywords, tags, code_url, data_url"
 )
 POST_COLUMNS = "id, team_id, paper_id, posted_at, note, posted_by_label, tags"
+# Papers per lab_digest page. Each carries an abstract excerpt, so keep it modest.
+DIGEST_PAGE = 20
 
 
 # The lab the in-flight tool call is acting on. Set by resolve_team so the audit
@@ -619,9 +621,10 @@ def novelty(
 
 
 @with_refresh
-def digest(team: dict, days: int) -> dict:
-    """Lab activity in the last `days`: new posts (hydrated), new-comment count, and
-    the papers the caller was @-mentioned on. All RLS-scoped to the lab."""
+def digest(team: dict, days: int, offset: int = 0) -> dict:
+    """Lab activity in the last `days`: new posts (hydrated, one page of them from
+    `offset`), new-comment count, and the papers the caller was @-mentioned on. All
+    RLS-scoped to the lab."""
     from datetime import datetime, timedelta, timezone
 
     client = get_client()
@@ -629,18 +632,32 @@ def digest(team: dict, days: int) -> dict:
     uid = current_user_id()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    # Cap the rendered list so an active lab can't dump hundreds of papers into one
-    # tool result; the exact-count header still reports the true total.
-    post_cap = 20
-    posts_resp = (
-        client.table("paper_posts")
-        .select(POST_COLUMNS + ", posted_by", count="exact")
-        .eq("team_id", tid)
-        .gte("posted_at", cutoff)
-        .order("posted_at", desc=True)
-        .limit(post_cap)
-        .execute()
-    )
+    # Page the rendered list so an active lab can't dump hundreds of papers into one
+    # tool result; the exact-count header still reports the true total. The id
+    # tie-break keeps pages stable when several posts share a timestamp.
+    def recent_posts(columns: str):
+        return (
+            client.table("paper_posts")
+            .select(columns, count="exact")
+            .eq("team_id", tid)
+            .gte("posted_at", cutoff)
+        )
+
+    try:
+        posts_resp = (
+            recent_posts(POST_COLUMNS + ", posted_by")
+            .order("posted_at", desc=True)
+            .order("id")
+            .range(offset, offset + DIGEST_PAGE - 1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        # PostgREST answers an offset past the last row with 416 rather than an
+        # empty page; report the true count with no papers instead.
+        if getattr(exc, "code", None) != "PGRST103":
+            raise
+        posts_resp = recent_posts("id").limit(1).execute()
+        posts_resp.data = []
     new_papers = _hydrate(client, posts_resp.data or [])
     n_papers = posts_resp.count if posts_resp.count is not None else len(new_papers)
 
@@ -675,6 +692,7 @@ def digest(team: dict, days: int) -> dict:
         "days": days,
         "new_papers": new_papers,
         "n_papers": n_papers,
+        "offset": offset,
         "n_comments": n_comments,
         "mentions": my_mentions,
     }

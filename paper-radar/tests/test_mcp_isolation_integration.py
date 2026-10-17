@@ -309,3 +309,12 @@ def test_rpcs_refuse_another_labs_id_directly(labs):
     for name, query in probes.items():
         rows = query.execute().data or []
         assert rows == [], f"{name} returned lab B rows to lab A: {rows}"
+
+
+def test_digest_past_the_last_page_is_not_an_error(labs):
+    """PostgREST answers an out-of-range page with 416; the digest reports the count."""
+    a, _ = labs
+    with lab.act_as(a.token, a.user_id):
+        out = papers.lab_digest(days=7, offset=10_000)
+    assert "Error" not in out
+    assert "none left from offset 10000" in out
