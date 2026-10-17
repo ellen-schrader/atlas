@@ -1,0 +1,61 @@
+# Daily check for preprints that have been published (api/preprint_watch.py):
+# merge or promote them, notify the people who held them, and record likely
+# duplicate pairs for the labs to answer. docs/preprint-dedup-plan.md, PR 4.
+#
+# Runs here rather than on Fly: the API machine stops when idle, and nothing
+# about this needs the web server. Free: a public repo's standard runners cost
+# nothing, and a run is a few hundred Crossref/bioRxiv lookups.
+#
+# Its secrets live in the `preprint-watch` environment, which only `main` may
+# use, so a workflow pushed on any other branch cannot read them. (Not
+# "production": environment names ignore case, and Vercel's "Production" is
+# another environment, with no branch restriction.)
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — the hosted project (service role)
+#   ANTHROPIC_API_KEY, VOYAGE_API_KEY        — re-tag and re-embed what changed;
+#                                              keys of their own, with low limits
+# Without them the job fails at the first database call and nothing is written.
+name: preprint-watch
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only, write nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One run at a time: two would race to merge the same preprint.
+concurrency:
+  group: preprint-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: preprint-watch
+    defaults:
+      run:
+        working-directory: paper-radar
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      # Deep links on the Teams cards. Not a secret.
+      ATLAS_WEB_URL: https://labatlas.app
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: paper-radar/uv.lock
+      - run: uv sync --frozen --extra api
+      # A scheduled run has no inputs, so it writes; a manual one defaults to a dry run.
+      - run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}

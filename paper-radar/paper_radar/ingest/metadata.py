@@ -816,12 +816,19 @@ def published_record(meta: PaperMetadata) -> tuple[PaperMetadata, str] | None:
         published, reason = _fetch_biorxiv_published(doi), "biorxiv"
     if not published:
         return None
-    record = _fetch_crossref(published, f"https://doi.org/{published}")
+    record = crossref_record(published)
+    return (record, reason) if record else None
+
+
+def crossref_record(doi: str) -> PaperMetadata | None:
+    """The Crossref record for a DOI, its abstract filled from Europe PMC if
+    missing, at its doi.org URL. None if Crossref has no titled record."""
+    record = _fetch_crossref(doi, f"https://doi.org/{doi}")
     if record is None or not record.title:
         return None
-    if not record.abstract and (extra := _fetch_europepmc(published, record.url)):
+    if not record.abstract and (extra := _fetch_europepmc(doi, record.url)):
         _merge(record, extra)
-    return record, reason
+    return record
 
 
 def crossref_venue(doi: str) -> str | None:

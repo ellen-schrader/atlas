@@ -16,6 +16,7 @@ import { AddPaperDialog } from "@/components/AddPaperDialog";
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { EngagementSummary } from "@/components/EngagementSummary";
 import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
+import { MergeSuggestionsButton } from "@/components/MergeSuggestions";
 import { PaperCard } from "@/components/PaperCard";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { PreprintVersionLink } from "@/components/PreprintBadge";
@@ -257,9 +258,12 @@ export default function Papers() {
             Everything shared in {team.name} — search, filter, and open to discuss.
           </p>
         </div>
-        <Button onClick={() => setAdding(true)} className="shrink-0">
-          <Plus size={15} /> Add paper
-        </Button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <MergeSuggestionsButton teamId={team.id} />
+          <Button onClick={() => setAdding(true)} className="shrink-0">
+            <Plus size={15} /> Add paper
+          </Button>
+        </div>
       </div>
 
       {/* One toolbar row: search, filters, sort, view. Everything that was a

@@ -485,6 +485,37 @@ def notify_paper_posted(
         log.warning("Teams notification for team %s failed: %s", team_id, exc)
 
 
+def notify_preprint_published(
+    team_id: str,
+    *,
+    paper_id: str,
+    url: str,
+    title: str | None = None,
+    authors: list[str] | None = None,
+    venue: str | None = None,
+    year: int | None = None,
+    preprint_venue: str | None = None,
+) -> None:
+    """Tell a lab's Teams channel that a preprint it shared has been published.
+    The same card, webhook checks and failure handling as a new post
+    (api/preprint_watch.py)."""
+    where = f" in {venue}" if venue else ""
+    server = f" on {preprint_venue}" if preprint_venue else ""
+    notify_paper_posted(
+        team_id,
+        url=url,
+        paper_id=paper_id,
+        title=title,
+        authors=authors,
+        venue=venue,
+        year=year,
+        note=(
+            f"📰 Now published{where}. Your lab shared it as a preprint{server}; "
+            "Atlas has the published version."
+        ),
+    )
+
+
 # === inbound: Teams channel → Atlas (M2, papers) ===========================
 #
 # A Teams *Outgoing Webhook* (registered per team, owner-only, no Graph) POSTs a
@@ -781,6 +812,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
     # Deferred import: app imports this module, so importing app at module load
     # would be circular. These helpers carry the tested dedup + embed logic.
     from .app import _embed_and_store, _enrich_and_store, _upsert_paper
+    from .merge_suggestions import suggest_for_post
     from .paper_identity import swap_to_published
 
     try:
@@ -835,6 +867,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             _embed_and_store(paper_id, meta.title, meta.abstract)
         if needs_embedding:
             _enrich_and_store(paper_id, meta.title, meta.abstract)
+        suggest_for_post(team_id, paper_id)
         return paper_id
     except Exception as exc:
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
