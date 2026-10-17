@@ -171,6 +171,10 @@ def _is_auth_error(exc: Exception) -> bool:
     )
 
 
+# Error codes raised by public.connector_request_guard (the database's connector gate).
+_CONNECTOR_REFUSALS = ("ATLAS_CONNECTOR_REVOKED", "ATLAS_CONNECTOR_FORBIDDEN")
+
+
 def with_refresh(fn):
     """On an expired-session error, drop the cached stdio session and retry once.
 
@@ -188,6 +192,10 @@ def with_refresh(fn):
         except LabError:
             raise
         except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "code", None) in _CONNECTOR_REFUSALS:
+                # The database's connector gate said no (connection revoked, or a read
+                # outside its allowlist). Its message is written for the user.
+                raise LabError(getattr(exc, "message", None) or str(exc)) from exc
             if not _is_auth_error(exc):
                 raise
             if _request_session.get() is not None:
@@ -216,6 +224,8 @@ def require_access(team: dict) -> None:
     try:
         rows = client.table("mcp_access").select("enabled").eq("team_id", team["id"]).execute().data
     except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "code", None) in _CONNECTOR_REFUSALS:
+            raise LabError(getattr(exc, "message", None) or str(exc)) from exc
         raise LabError(f"Could not check Claude access for {team['name']}: {exc}") from exc
 
     if not (rows and rows[0].get("enabled")):

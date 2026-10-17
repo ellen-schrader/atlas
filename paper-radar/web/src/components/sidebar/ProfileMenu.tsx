@@ -305,7 +305,9 @@ export function ProfileMenu({
                 className={ITEM}
                 onClick={() => {
                   close(false);
-                  void supabase.auth.signOut();
+                  // This browser only. The default ("global") deletes every session
+                  // the user has, including a connected Claude's, cutting it off.
+                  void supabase.auth.signOut({ scope: "local" });
                 }}
               >
                 <MenuIcon>

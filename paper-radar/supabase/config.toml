@@ -226,6 +226,11 @@ double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
+# Left off: this CLI (2.108) maps it to that 24h re-authentication rule, which neither
+# stops a fresh Claude-connector token nor suits the Settings form. What prod uses
+# instead is the Auth dashboard toggle "Require current password when updating"
+# (GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD), which this config can't
+# express yet — see docs/CLAUDE_CONNECTOR_PLAN.md, M2. Settings sends current_password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"

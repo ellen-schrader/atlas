@@ -1061,3 +1061,58 @@ def test_discover_sources_only_for_signals_the_caller_has():
     assert set(_discover_sources(uc, "team-1", {"engagement_q": [1.0]}, 12)) == {"engagement"}
     # Follows with no vector at all is the cold start's job, but still searchable.
     assert set(_discover_sources(uc, "team-1", {"follows": ["x"]}, 12)) == {"tags"}
+
+
+# --- connector (Claude OAuth) tokens are refused -----------------------------
+
+
+def _jwt(claims: dict) -> str:
+    """An unsigned JWT-shaped token; require_token only reads the claims."""
+    import base64
+    import json
+
+    def b64(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    return f"{b64({'alg': 'ES256'})}.{b64(claims)}.sig"
+
+
+CONNECTOR = _jwt({"sub": "user-1", "role": "authenticated", "client_id": "claude"})
+WEB = _jwt({"sub": "user-1", "role": "authenticated"})
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("post", "/resolve", {"url": "https://arxiv.org/abs/2401.01234"}),
+        ("post", "/posts", {"url": "https://arxiv.org/abs/2401.01234", "team_id": "x"}),
+        ("get", "/overview?team_id=x", None),
+        ("post", "/search/semantic", {"team_id": "x", "q": "tumour"}),
+    ],
+)
+def test_connector_tokens_are_refused_even_when_valid(signed_in, method, path, body):
+    """A connector token is a real, valid user token (signed_in accepts anything) —
+    it must still be refused before the endpoint runs."""
+    kwargs = {"headers": {"Authorization": f"Bearer {CONNECTOR}"}}
+    if body is not None:
+        kwargs["json"] = body
+    resp = getattr(client, method)(path, **kwargs)
+    assert resp.status_code == 403
+    assert "Claude" in resp.json()["detail"]
+
+
+def test_web_tokens_still_get_through(signed_in):
+    resp = client.post(
+        "/resolve",
+        json={"url": "https://arxiv.org/abs/2401.01234"},
+        headers={"Authorization": f"Bearer {WEB}"},
+    )
+    assert resp.status_code != 403
+
+
+def test_unreadable_tokens_are_left_to_supabase():
+    from api.deps import _is_connector_token
+
+    assert _is_connector_token("not-a-jwt") is False
+    assert _is_connector_token("a.!!!.c") is False
+    assert _is_connector_token(_jwt({"client_id": None})) is False
