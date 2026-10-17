@@ -1,6 +1,9 @@
+import { PreprintBadge } from "@/components/PreprintBadge";
+import { isPreprintVenue } from "@/lib/preprint";
 import { cn } from "@/lib/utils";
 
-/** Uppercase source eyebrow, e.g. "NATURE · 2023". Renders nothing if empty. */
+/** Uppercase source eyebrow, e.g. "NATURE · 2023", or "BIORXIV · 2025 [PREPRINT]".
+ *  Renders nothing if empty. */
 export function SourceLabel({
   venue,
   year,
@@ -20,6 +23,7 @@ export function SourceLabel({
       )}
     >
       {parts.join(" · ")}
+      {isPreprintVenue(venue) && <PreprintBadge className="ml-1.5 align-[1px]" />}
     </span>
   );
 }

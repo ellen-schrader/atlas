@@ -670,6 +670,7 @@ def resolve_metadata(url: str) -> dict:
     by the fetch rate limiter (so dry-run previews can't be looped for free) and, in
     `fetch_metadata` itself, a guard that rejects internal addresses — including ones
     reached by redirect."""
+    from api.paper_identity import swap_to_published
     from paper_radar.ingest.metadata import fetch_metadata
     from paper_radar.ingest.urls import _clean_url, _normalize_key
 
@@ -678,8 +679,15 @@ def resolve_metadata(url: str) -> dict:
     # so the separate _reject_private_dns call it used to need is gone.
     safe = validate_share_url(url)
     clean = _clean_url(safe)
-    meta = fetch_metadata(clean)
-    return {"clean_url": clean, "url_norm": _normalize_key(clean), "meta": meta}
+    # A preprint that has been published is shared as its published version;
+    # `preprint` is what was asked for, so the tool can say so.
+    meta, clean, preprint = swap_to_published(fetch_metadata(clean), clean)
+    return {
+        "clean_url": clean,
+        "url_norm": _normalize_key(clean),
+        "meta": meta,
+        "preprint": preprint,
+    }
 
 
 @with_refresh
@@ -709,7 +717,10 @@ def post_paper(team: dict, resolved: dict) -> tuple[str, str, bool]:
 
     _post_limiter.check()
     meta, clean_url, url_norm = resolved["meta"], resolved["clean_url"], resolved["url_norm"]
-    paper_id, _needs_embedding = _upsert_paper(meta, clean_url, url_norm)
+    preprint = resolved.get("preprint")
+    paper_id, _needs_embedding = _upsert_paper(
+        meta, clean_url, url_norm, [preprint] if preprint else []
+    )
 
     existing = find_existing_post(team, paper_id)
     if existing:

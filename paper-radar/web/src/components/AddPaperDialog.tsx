@@ -1,7 +1,17 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Check, FileUp, Link as LinkIcon, Loader2, Search, Wand2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  BookOpenCheck,
+  Check,
+  FileUp,
+  Link as LinkIcon,
+  Loader2,
+  Search,
+  Wand2,
+} from "lucide-react";
 
 import { BibtexImportDone, BibtexImportPanel } from "@/components/BibtexImportPanel";
 import { Button } from "@/components/ui/button";
@@ -9,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
-import { type PaperFields, postPaper, resolvePaper } from "@/lib/api";
+import { type PaperFields, postPaper, type ReplacedPreprint, resolvePaper } from "@/lib/api";
 import {
   bareDoi,
   doiUrl,
@@ -20,7 +30,7 @@ import {
   pubmedUrl,
   SOURCE_LABEL,
 } from "@/lib/paperLookup";
-import { cn } from "@/lib/utils";
+import { cn, safeHref } from "@/lib/utils";
 
 const EMPTY: PaperFields = {
   title: "",
@@ -104,6 +114,8 @@ export function AddPaperDialog({
   const [note, setNote] = useState("");
   /** metaKey() of what the resolver returned; null when nothing was resolved. */
   const [baseline, setBaseline] = useState<string | null>(null);
+  /** The pasted preprint, when the resolver swapped in its published version. */
+  const [replacedPreprint, setReplacedPreprint] = useState<ReplacedPreprint | null>(null);
 
   const [looking, setLooking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -133,6 +145,7 @@ export function AddPaperDialog({
     setAuthorsText("");
     setNote("");
     setBaseline(null);
+    setReplacedPreprint(null);
     setError(null);
     setDuplicate(null);
     setAdded(null);
@@ -168,6 +181,10 @@ export function AddPaperDialog({
     setAuthorsText(authors);
     // Remember exactly what the resolver said, so an edit downstream can be detected.
     setBaseline(metaKey(toPayload(next, authors)));
+    // A published preprint comes back as its published version: add that, under
+    // its own link, and keep the preprint to record against it.
+    setReplacedPreprint(resolved.replaced_preprint ?? null);
+    if (resolved.replaced_preprint) setUrl(resolved.url);
     setStep("review");
   }
 
@@ -250,6 +267,7 @@ export function AddPaperDialog({
     setFields({ ...EMPTY, doi: bareDoi(doi) ?? "", source: "manual" });
     setAuthorsText("");
     setBaseline(null);
+    setReplacedPreprint(null);
     setError(null);
     setStep("review");
   }
@@ -267,7 +285,7 @@ export function AddPaperDialog({
     try {
       // The review step lets the link be typed by hand, so it can still be a bare
       // DOI or scheme-less — normalise it the same way the lookup path does.
-      const r = await postPaper(fetchableUrl(url), teamId, payload, note);
+      const r = await postPaper(fetchableUrl(url), teamId, payload, note, replacedPreprint);
       await invalidateAfterPost(qc, teamId);
       // Hand-entered links skip the pre-check above, so the server is the only one
       // that knows this was already here. Don't claim we added it if we didn't.
@@ -464,6 +482,27 @@ export function AddPaperDialog({
 
         {step === "review" && (
           <form id="add-paper-form" onSubmit={save} className="flex flex-col gap-4">
+            {replacedPreprint && (
+              <Banner tone="ok" icon={<BookOpenCheck size={15} />}>
+                <strong className="font-semibold">This preprint has been published</strong>
+                {fields.venue ? <> in {fields.venue}</> : null}
+                {fields.year ? <> ({fields.year})</> : null}. Atlas adds the published version —
+                that’s the one to read. The{" "}
+                {safeHref(replacedPreprint.url) ? (
+                  <a
+                    href={safeHref(replacedPreprint.url)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    {replacedPreprint.venue ?? ""} preprint
+                  </a>
+                ) : (
+                  <>{replacedPreprint.venue ?? ""} preprint</>
+                )}{" "}
+                stays linked from it, for anything the journal version left out.
+              </Banner>
+            )}
             {autofilled ? (
               <Banner tone="ok" icon={<Wand2 size={15} />}>
                 Autofilled from{" "}

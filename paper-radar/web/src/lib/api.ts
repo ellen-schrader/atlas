@@ -58,10 +58,22 @@ export interface PaperFields {
   source: string;
 }
 
+/** A preprint whose published version Atlas stores instead. */
+export interface ReplacedPreprint {
+  doi: string | null;
+  url: string | null;
+  /** The server: "bioRxiv", "arXiv", … */
+  venue: string | null;
+  reason: "crossref" | "biorxiv" | "arxiv";
+}
+
 export interface ResolvedPaper extends PaperFields {
   url: string;
   /** Normalized dedup key — what `papers.url_norm` is matched on. */
   url_norm: string;
+  /** Set when the pasted link was a preprint that has since been published: the
+   *  rest of this record is then the published version, which is what gets added. */
+  replaced_preprint?: ReplacedPreprint | null;
 }
 
 /** Look a URL up without writing anything: the autofill behind the Add-paper
@@ -94,6 +106,7 @@ export function postPaper(
   teamId: string,
   fields?: PaperFields,
   note?: string,
+  replacedPreprint?: ReplacedPreprint | null,
 ): Promise<PostResult> {
   return authedRequest<PostResult>("/posts", {
     method: "POST",
@@ -102,6 +115,7 @@ export function postPaper(
       team_id: teamId,
       fields: fields ?? null,
       note: note?.trim() || null,
+      replaced_preprint: replacedPreprint ?? null,
     }),
   });
 }

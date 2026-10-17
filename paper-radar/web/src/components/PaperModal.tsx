@@ -1,9 +1,10 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { PaperDetail } from "@/components/PaperDetail";
 import { Modal } from "@/components/ui/modal";
+import { useMergedInto } from "@/hooks/usePreprintLinks";
 import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
 import type { PaperPost } from "@/lib/types";
@@ -68,6 +69,21 @@ export function PaperModalProvider({
       return (data as unknown as PaperPost) ?? null;
     },
   });
+
+  // An id merged into another (a preprint into its published version) opens
+  // the paper it became.
+  const { data: mergedInto } = useMergedInto(paperId, post === null);
+  useEffect(() => {
+    if (!mergedInto) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("paper", mergedInto);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [mergedInto, setSearchParams]);
 
   return (
     <PaperModalContext.Provider value={{ openPaper }}>

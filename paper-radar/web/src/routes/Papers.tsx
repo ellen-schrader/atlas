@@ -18,12 +18,15 @@ import { EngagementSummary } from "@/components/EngagementSummary";
 import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
 import { PaperCard } from "@/components/PaperCard";
 import { SearchableSelect } from "@/components/SearchableSelect";
+import { PreprintVersionLink } from "@/components/PreprintBadge";
 import { SourceLabel } from "@/components/SourceLabel";
 import { usePaperModal } from "@/components/PaperModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { usePreprintLinks } from "@/hooks/usePreprintLinks";
+import type { PreprintLink } from "@/lib/preprint";
 import { useSelection } from "@/hooks/useSelection";
 import {
   activeFilterCount,
@@ -151,6 +154,7 @@ export default function Papers() {
     team.id,
     posts.map((p) => p.papers.id),
   );
+  const { data: preprints } = usePreprintLinks(posts.map((p) => p.papers.id));
   const { data: reading } = useReadingList(userId, team.id);
   const { data: readIds } = useReadPapers(userId, team.id);
   const bookmarked = new Set((reading ?? []).map((r) => r.paper_id));
@@ -440,6 +444,7 @@ export default function Papers() {
               selecting={selection.selecting}
               selected={selection.isSelected(post.papers.id)}
               onToggleSelect={() => selection.toggle(post.papers.id)}
+              preprint={preprints?.[post.papers.id]}
             />
           ))}
         </div>
@@ -447,6 +452,7 @@ export default function Papers() {
         <PaperTable
           posts={posts}
           counts={counts}
+          preprints={preprints}
           readIds={readIds}
           teamId={team.id}
           userId={userId}
@@ -807,6 +813,7 @@ function ViewButton({
 function PaperTable({
   posts,
   counts,
+  preprints,
   readIds,
   teamId,
   userId,
@@ -818,6 +825,7 @@ function PaperTable({
 }: {
   posts: PaperPost[];
   counts?: Record<string, { reactions: number; comments: number }>;
+  preprints?: Record<string, PreprintLink>;
   readIds?: Set<string>;
   onOpen: (paperId: string) => void;
   teamId: string;
@@ -906,7 +914,12 @@ function PaperTable({
                       >
                         {p.title ?? p.url}
                       </button>
-                      <SourceLabel venue={p.venue} year={p.year} className="mt-0.5 block" />
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2">
+                        <SourceLabel venue={p.venue} year={p.year} />
+                        {preprints?.[p.id] && !selecting && (
+                          <PreprintVersionLink preprint={preprints[p.id]} />
+                        )}
+                      </div>
                     </div>
                   </div>
                 </td>

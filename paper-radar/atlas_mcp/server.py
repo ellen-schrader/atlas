@@ -1112,6 +1112,12 @@ async def post_paper(
         f"About to share into {team['name']}:",
         _untrusted("paper", "\n".join(x for x in [title, cite] if x)),
     ]
+    if preprint := resolved.get("preprint"):
+        lines.append(
+            f"That link is a {preprint.venue or 'preprint'} preprint which has since been "
+            "published; Atlas shares the published version above, with the preprint linked "
+            "from it. Tell the user, so they can read the published version."
+        )
     if note:
         lines.append("Comment: " + _untrusted("note", note))
     if member:
@@ -1137,6 +1143,8 @@ async def post_paper(
     head = f"Already in {team['name']}" if already else f"Shared to {team['name']}"
     tail = f" — tagged @{member['display_name']}" if member else ""
     body = f"{head}: {title}{tail}\n{lab.paper_link(paper_id)}"
+    if preprint:
+        body += "\n(The published version of the preprint you linked.)"
     return f"{body}\n{warn}" if warn else body
 
 

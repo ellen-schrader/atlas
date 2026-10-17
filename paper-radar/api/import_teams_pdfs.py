@@ -36,6 +36,7 @@ from paper_radar.ingest.urls import _clean_url, _normalize_key, is_skip_host, no
 from supabase import Client, create_client
 
 from .config import get_api_settings
+from .paper_identity import find_paper
 
 
 def window_date(filename: str, base_year: int) -> datetime | None:
@@ -65,17 +66,13 @@ def _team_id(svc: Client, slug: str) -> str:
 
 
 def _upsert_paper(svc: Client, meta, url: str, url_norm: str) -> str:
-    """Find the canonical paper (by url_norm, then DOI) or insert it. Returns its id."""
-    found = svc.table("papers").select("id").eq("url_norm", url_norm).limit(1).execute()
-    if found.data:
-        return found.data[0]["id"]
+    """Find the canonical paper (url_norm, DOI, then alias) or insert it. Returns its id."""
     # Fold the DOI like every other papers.doi writer (norm_doi), or a
     # mixed-case source DOI is stored verbatim and no later lookup matches it.
     doi = norm_doi(meta.doi)
-    if doi:
-        by_doi = svc.table("papers").select("id").eq("doi", doi).limit(1).execute()
-        if by_doi.data:
-            return by_doi.data[0]["id"]
+    found = find_paper(svc, url_norm, doi)
+    if found:
+        return found["id"]
     row = {
         "url": url,
         "url_norm": url_norm,

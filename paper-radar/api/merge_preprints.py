@@ -1,6 +1,7 @@
 """Merge preprints into their published papers, and DOI-case duplicates (service role).
 
-Three passes over ``papers``, each folding a row into the one it duplicates with
+Three passes over ``papers`` (after naming the server on bioRxiv/medRxiv rows
+that have no venue), each folding a row into the one it duplicates with
 the ``merge_papers`` SQL function (supabase/migrations/20261017120000_paper_aliases.sql),
 which moves posts, comments, reactions and reading status across and leaves a
 ``paper_aliases`` row behind:
@@ -34,25 +35,18 @@ import time
 import unicodedata
 from collections import defaultdict
 
-from paper_radar.ingest.metadata import PREPRINT_DOI_PREFIXES, arxiv_id_for, published_version
+from paper_radar.ingest.metadata import (
+    RXIV_DOI_PREFIXES,
+    arxiv_id_for,
+    crossref_venue,
+    looks_like_preprint,
+    published_version,
+)
 from paper_radar.ingest.urls import norm_doi
 
 from .supa import service_client
 
 _PAGE = 500
-
-_PREPRINT_VENUES = {
-    "biorxiv",
-    "medrxiv",
-    "arxiv",
-    "research square",
-    "ssrn",
-    "ssrn electronic journal",
-    "preprints",
-    "osf preprints",
-    "authorea",
-}
-_PREPRINT_HOSTS = re.compile(r"(?:bio|med)rxiv\.org|arxiv\.org|researchsquare\.com|ssrn\.com", re.I)
 
 
 def _fetch_papers(svc) -> list[dict]:
@@ -62,7 +56,7 @@ def _fetch_papers(svc) -> list[dict]:
     while True:
         page = (
             svc.table("papers")
-            .select("id, doi, url, title, authors, venue, created_at")
+            .select("id, doi, url, title, authors, venue, edited_fields, created_at")
             # created_at alone ties (a Teams import inserts a batch with one now()),
             # and offset paging over ties can repeat one row and skip another.
             .order("created_at")
@@ -81,12 +75,7 @@ def _fetch_papers(svc) -> list[dict]:
 
 def is_preprint_row(row: dict) -> bool:
     """True if the stored row looks like a preprint: by DOI, venue or host."""
-    doi = (row.get("doi") or "").lower()
-    if doi.startswith(PREPRINT_DOI_PREFIXES):
-        return True
-    if (row.get("venue") or "").strip().lower() in _PREPRINT_VENUES:
-        return True
-    return bool(_PREPRINT_HOSTS.search(row.get("url") or ""))
+    return looks_like_preprint(row.get("doi"), row.get("url"), row.get("venue"))
 
 
 def plan_case_merges(rows: list[dict]) -> list[tuple[str, str]]:
@@ -196,6 +185,33 @@ def main(argv: list[str] | None = None) -> None:
     by_id = {r["id"]: r for r in rows}
     failed = 0
 
+    # 0. bioRxiv/medRxiv rows without a venue: they share DOI prefixes, so the
+    #    migration that named the other servers (20261017130000) left these for
+    #    Crossref, which names the server.
+    unnamed = [
+        r
+        for r in rows
+        if not (r.get("venue") or "").strip()
+        and (r.get("doi") or "").lower().startswith(RXIV_DOI_PREFIXES)
+        and "venue" not in (r.get("edited_fields") or [])
+    ]
+    if args.limit:
+        unnamed = unnamed[: args.limit]
+    named = 0
+    print(f"0. bioRxiv/medRxiv preprints without a venue: {len(unnamed)}")
+    for row in unnamed:
+        venue = crossref_venue(row["doi"])
+        time.sleep(args.delay)
+        if not venue:
+            continue
+        if args.apply:
+            svc.table("papers").update({"venue": venue}).eq("id", row["id"]).is_(
+                "venue", "null"
+            ).execute()
+        row["venue"] = venue
+        named += 1
+    print(f"  {'named' if args.apply else 'would name'} {named}")
+
     # 1. DOI-case duplicates first, so pass 2's lowercase lookups find the kept rows.
     case_merges = plan_case_merges(rows)
     print(f"1. DOI-case duplicates: {len(case_merges)}")
@@ -251,7 +267,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {_label(pre)}\n      and {_label(pub)}")
 
     print(
-        f"Done. case-duplicates {verb}={len(merged_away)} preprints {verb}={merged} "
+        f"Done. venues-named={named} case-duplicates {verb}={len(merged_away)} "
+        f"preprints {verb}={merged} "
         f"failed={failed} published-not-in-atlas={not_in_atlas} "
         f"arxiv-holding-journal-doi={holds_journal_doi} title-pairs-to-review={len(pairs)}"
     )

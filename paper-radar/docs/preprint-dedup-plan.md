@@ -1,7 +1,8 @@
 # Merging a preprint into its published paper — plan
 
 Status: PR 1 built (migration `20261017120000_paper_aliases.sql`,
-`api/merge_preprints.py`). PRs 2–4 to follow.
+`api/merge_preprints.py`, #129). PR 2 built (ingest, `api/paper_identity.py`,
+preprint venues and labels). PRs 3–4 to follow.
 
 ## Why
 
@@ -68,6 +69,25 @@ built if a bad merge ever happens.
 3. No undo for now.
 4. DOI-case duplicates use the same machinery; the unique `lower(doi)` index
    follows once prod has none left.
+5. Preprints carry their server as the venue (bioRxiv, arXiv, …) and are
+   marked "Preprint" wherever Atlas shows a venue.
+
+## Preprint venues and the label
+
+Crossref files a preprint as `posted-content` with the server under
+`institution`, which the resolver ignored, so most preprints had no venue and
+showed as a bare year. The resolver now names the server (Crossref's
+institution, else `preprint_server()` from the URL host or DOI prefix);
+migration `20261017130000_preprint_venues.sql` does the same for stored rows,
+and `merge_preprints.py` asks Crossref for bioRxiv/medRxiv rows, whose shared
+DOI prefix can't tell the two apart.
+
+The label is derived from the venue (`web/src/lib/preprint.ts`, mirroring
+`metadata._PREPRINT_VENUE_RE`) rather than stored in an `is_preprint` column:
+every surface that shows a venue already has it, where a column would have
+meant widening every search RPC's return type. Exports use the same test: a
+preprint is BibTeX `@misc` with `howpublished = {bioRxiv}`, RIS `GEN` with the
+server as `PB`.
 
 ## PRs
 
@@ -76,16 +96,25 @@ built if a bad merge ever happens.
    preprints with a stated published version already in Atlas, then lists
    title pairs. Run it on prod after merge, then the embedding and enrichment
    backfills.
-2. **Ingest.** `_upsert_paper` (and `import_teams_pdfs`) looks up url_norm →
-   DOI → `paper_aliases` → the published DOI. A preprint whose published version
-   exists is stored as the published paper with an alias, and the response
-   (web dialog, MCP `post_paper`, Teams reply) says so. A published paper whose
-   preprint is in Atlas (`has-preprint`) is merged straight away. arXiv rows get
-   their own DOI (`10.48550/arxiv.<id>`), the journal DOI becoming
-   `published_doi`; the script then handles arXiv rows still holding a journal
-   DOI. Old ids redirect; cards and the paper page show the preprint link.
+2. **Ingest** (built). Every path finds a paper by url_norm → DOI →
+   `paper_aliases` (`api/paper_identity.find_paper`; the BibTeX preflight and
+   the Teams fast path do the same lookups). A preprint whose published version
+   exists is stored as the published paper (`swap_to_published`) with the
+   preprint recorded as an alias; the web dialog says so before posting, and
+   MCP `post_paper` says so in its preview and result. Teams answers before the
+   lookup runs, so its reply cannot; the card's preprint link is what the lab
+   sees there. A published record naming its preprints (`has-preprint`)
+   records them, merging any Atlas holds as a paper. arXiv rows get arXiv's own
+   DOI (`10.48550/arxiv.<id>`), the journal DOI becoming `published_doi`. Old
+   ids redirect (paper page and modal); cards, the table and the paper page
+   link the preprint. The alias the web dialog posts back is trusted as far as
+   the fields it posts with are: both come from /resolve, and a member could
+   already store any title under any link.
 3. **`create unique index on papers (lower(doi))`**, after the PR 1 script has
    run on prod (a migration would fail while duplicates remain).
 4. **"Your preprint has been published" alerts.** A scheduled run (GitHub
    Actions cron, free) of the check, notifying everyone in a lab who posted or
-   saved the preprint, in-app and in Teams.
+   saved the preprint, in-app and in Teams. The same run should turn a stored
+   preprint whose published version is *not* in Atlas into that version in
+   place (with an alias), and do the same for old arXiv rows that hold their
+   journal DOI — the two cases `merge_preprints.py` only reports today.
