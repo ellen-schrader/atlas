@@ -198,3 +198,28 @@ def test_threaded_tools_keep_their_schema():
     tool = mcp._tool_manager.get_tool("search_lab_papers")
     assert tool.is_async
     assert list(tool.parameters["properties"]) == ["query", "mode", "limit", "team_id"]
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("ATLAS_CONNECTOR_REVOKED", "This Claude connection has been revoked."),
+        ("ATLAS_CONNECTOR_FORBIDDEN", "Claude connections can only read papers."),
+    ],
+)
+def test_connector_gate_refusals_reach_the_user_cleanly(code, message):
+    """The database gate's refusals arrive as PostgREST errors; tools only catch
+    LabError, so they must be translated — with the gate's own wording."""
+
+    class GateError(Exception):
+        def __init__(self) -> None:
+            super().__init__(message)
+            self.code, self.message = code, message
+
+    @lab.with_refresh
+    def read():
+        raise GateError()
+
+    with lab.act_as("tok-a", "user-a"):
+        with pytest.raises(lab.LabError, match=message):
+            read()

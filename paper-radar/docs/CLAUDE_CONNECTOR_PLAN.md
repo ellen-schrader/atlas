@@ -185,11 +185,62 @@ Original M1 plan:
   user's only lab → error listing the labs). Every user is in one lab today (decision 4).
 - **Cross-lab isolation tests** (security item 1) run in CI.
 
-### M2 — Lock down the token (before anything is public)
-Everything under security items 2–3: FastAPI rejects OAuth tokens; restrictive RLS and
-Storage policies for OAuth tokens; RPC audit; redirect-URI allowlist (enforced in M4's
-consent page, tested here). Migration tests: with an OAuth-style token, a `delete` on
-papers, a membership change and a Storage read are all refused.
+### M2 — Lock down the token (before anything is public) ✅ (branch `connector-m2`)
+
+The RPC audit changed the design. 12 `SECURITY DEFINER` functions (`create_team`,
+`set_member_role`, `set_mcp_access`, `remove_member`, `regenerate_team_code`, …) bypass
+RLS and are callable by any signed-in user, so per-table policies alone would have left
+them open. Without the gate, a connector token really did create a lab in testing.
+
+What landed (`20261017150000_connector_lockdown.sql`):
+1. **PostgREST pre-request gate, default-deny** (`public.connector_request_guard`, set
+   via `pgrst.db_pre_request`). A connector token may only GET the 9 tables the paper
+   tools read and POST the 3 search RPCs plus the audit-log insert. Every other table,
+   RPC (including the definer ones), GraphQL, and anything added later gets a 403.
+   It also refuses a token whose session is gone (401), so **revoking takes effect
+   immediately** rather than up to an hour later.
+2. **Restrictive SELECT policies** (`connector_no_read`) on every other table, so an
+   embed (`teams?select=*,team_visits(*)`) can't read past the gate.
+   `public.close_to_connectors()` is there for new tables, and a pgTAP coverage test
+   fails if one is missed.
+3. **Storage:** a restrictive `connector_no_storage` policy on `storage.objects`.
+4. **Atlas web API:** `deps.require_token` returns 403 for any token with `client_id`
+   (all 26 token endpoints go through it).
+5. **MCP:** `lab.with_refresh` turns the gate's refusals into `LabError` with the gate's
+   wording ("connection revoked — reconnect").
+
+**Account-takeover finding (Auth API, outside the database).** A real connector token
+could `PUT /auth/v1/user` and **change the password**: in testing, the new password
+worked and the old one failed. It could also start an email change and edit user
+metadata. A custom-access-token hook that changes `aud` does **not** help, because the
+Auth API ignores `aud`. The fix is the free Auth setting **"Require current password
+when updating"** (`GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD`). It was
+verified against GoTrue v2.191: the connector token gets `current_password_required`,
+emailed password resets still work (recovery sessions are exempt), and the Settings form
+now asks for the current password and offers "Email me a reset link" instead.
+
+What remains at the Auth API, and is acceptable: an email change still needs both
+inboxes to confirm (`double_confirm_changes`), so it can't complete from a token alone.
+A token can also edit `user_metadata` (the app reads names from `profiles`), sign the
+user out globally, and list or revoke OAuth grants. That's a nuisance, not a takeover.
+
+Tests:
+- `supabase/tests/connector_lockdown_test.sql` (pgTAP): the gate, revocation, embeds,
+  Storage, and the coverage check.
+- `tests/test_connector_lockdown_integration.py` (opt-in): a **real** OAuth token through
+  real PostgREST, Storage and GraphQL. All read tools still work. 13 kinds of write, RPC
+  and read are refused, embeds come back empty, Storage is refused, the web session is
+  unaffected, and revocation stops the live token. Mutation-checked: with the gate
+  switched off, 14 of 18 tests fail.
+- Offline: API refusal tests, and the gate-error translation test.
+
+**Production steps, in this order:**
+1. Merge (deploys the migration and the Settings form).
+2. *Then* switch on Auth → **"Require current password when updating"** in the
+   dashboard. Doing it before the web deploy would break the old Settings form.
+3. Check that "Secure email change" (double confirm) is on.
+
+Redirect-URI allowlist: moved to M4 (the consent page), where it's enforced.
 
 ### M3 — Host it ($0)
 - `FastMCP(token_verifier=SupabaseTokenVerifier(), auth=AuthSettings(...))`, mounted at

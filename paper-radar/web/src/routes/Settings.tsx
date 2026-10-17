@@ -12,7 +12,7 @@ import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useProfile } from "@/hooks/useProfile";
 import { useTeamTags } from "@/hooks/useTeamTags";
 import { updateProfile } from "@/lib/api";
-import { useLinkError } from "@/lib/authLinks";
+import { RESET_PATH, useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import { cn, normaliseTag } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -142,6 +142,7 @@ function AccountPanel({
   const [emailNote, setEmailNote] = useState<Note>(null);
   useEffect(() => setEmail(currentEmail), [currentEmail]);
 
+  const [currentPw, setCurrentPw] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -154,7 +155,7 @@ function AccountPanel({
       ? {
           ok: false,
           text: linkError.reset
-            ? `${linkError.message} You're signed in as ${currentEmail}, so you can set a new password for that account here.`
+            ? `${linkError.message} You're signed in as ${currentEmail}: change that account's password below, or email yourself a fresh reset link if you don't know the current one.`
             : linkError.message,
         }
       : null,
@@ -199,14 +200,32 @@ function AccountPanel({
       return;
     }
     setPwBusy(true);
-    const { error } = await supabase.auth.updateUser({ password: pw });
+    // The current password is required (Auth: "require current password when
+    // updating"), so a stolen session token alone can't take over the account.
+    const { error } = await supabase.auth.updateUser({ password: pw, current_password: currentPw });
     setPwBusy(false);
     if (error) setPwNote({ ok: false, text: error.message });
     else {
       setPwNote({ ok: true, text: "Password updated." });
+      setCurrentPw("");
       setPw("");
       setPw2("");
     }
+  }
+
+  // Forgot the current one: the emailed reset link doesn't need it.
+  async function emailResetLink() {
+    setPwNote(null);
+    setPwBusy(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(currentEmail, {
+      redirectTo: `${window.location.origin}${RESET_PATH}`,
+    });
+    setPwBusy(false);
+    setPwNote(
+      error
+        ? { ok: false, text: error.message }
+        : { ok: true, text: `Check ${currentEmail} for a link to set a new password.` },
+    );
   }
 
   return (
@@ -258,7 +277,20 @@ function AccountPanel({
         </form>
 
         <form onSubmit={savePassword} className="flex flex-col gap-1.5">
-          <Label htmlFor="acct-pw">New password</Label>
+          <Label htmlFor="acct-pw-current">Current password</Label>
+          <Input
+            id="acct-pw-current"
+            type="password"
+            value={currentPw}
+            onChange={(e) => {
+              setCurrentPw(e.target.value);
+              setPwNote(null);
+            }}
+            autoComplete="current-password"
+          />
+          <Label htmlFor="acct-pw" className="mt-1.5">
+            New password
+          </Label>
           <Input
             id="acct-pw"
             type="password"
@@ -283,10 +315,18 @@ function AccountPanel({
             }}
             autoComplete="new-password"
           />
-          <div className="mt-2">
-            <Button type="submit" size="sm" disabled={pwBusy || !pw || !pw2}>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Button type="submit" size="sm" disabled={pwBusy || !currentPw || !pw || !pw2}>
               {pwBusy ? "…" : "Update password"}
             </Button>
+            <button
+              type="button"
+              onClick={emailResetLink}
+              disabled={pwBusy}
+              className="text-xs text-muted underline-offset-2 hover:text-fg hover:underline disabled:opacity-50"
+            >
+              Forgot it? Email me a reset link
+            </button>
           </div>
           <FieldNote note={pwNote} />
         </form>
