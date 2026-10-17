@@ -120,8 +120,8 @@ server as `PB`.
    no DOI another paper or alias holds.
 4. **"Your preprint has been published" alerts and "same paper?" suggestions**
    (built). `api/preprint_watch.py` runs daily
-   (`.github/workflows/preprint-watch.yml`, secrets in the `production`
-   environment). For each preprint with a stated published version: merge into
+   (`.github/workflows/preprint-watch.yml`, secrets in the
+   `preprint-watch` environment). For each preprint with a stated published version: merge into
    it if Atlas holds it, otherwise `promote_to_published` turns the preprint
    into it in place (same id; the preprint becomes an alias) — which also
    covers old arXiv rows holding their journal DOI. Whoever posted the

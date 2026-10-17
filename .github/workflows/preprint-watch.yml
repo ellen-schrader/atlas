@@ -6,8 +6,10 @@
 # about this needs the web server. Free: a public repo's standard runners cost
 # nothing, and a run is a few hundred Crossref/bioRxiv lookups.
 #
-# Its secrets live in the `production` environment, which only `main` may use,
-# so a workflow pushed on any other branch cannot read them:
+# Its secrets live in the `preprint-watch` environment, which only `main` may
+# use, so a workflow pushed on any other branch cannot read them. (Not
+# "production": environment names ignore case, and Vercel's "Production" is
+# another environment, with no branch restriction.)
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — the hosted project (service role)
 #   ANTHROPIC_API_KEY, VOYAGE_API_KEY        — re-tag and re-embed what changed;
 #                                              keys of their own, with low limits
@@ -36,7 +38,7 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
+    environment: preprint-watch
     defaults:
       run:
         working-directory: paper-radar
