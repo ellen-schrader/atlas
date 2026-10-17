@@ -649,6 +649,13 @@ def test_repair_untitled_fills_a_blank_but_never_overwrites(monkeypatch):
     assert app_mod._repair_untitled({"id": "p2", "title": "Real title"}, typed) is False
     assert len(patches) == 1
 
+    # The DOI is stored folded: papers.doi refuses anything else (papers_doi_lowercase).
+    resolved = PaperMetadata(
+        url="u", title="T", doi="10.1158/2159-8290.CD-25-1745", source="crossref"
+    )
+    assert app_mod._repair_untitled({"id": "p3", "title": None}, resolved) is True
+    assert patches[1]["doi"] == "10.1158/2159-8290.cd-25-1745"
+
 
 def test_norm_doi_casefolds_and_strips_resolver_prefix():
     """DOIs are case-insensitive (ISO 26324) — the dedup key must fold case.

@@ -349,7 +349,8 @@ def _repair_untitled(row: dict, meta: PaperMetadata) -> bool:
     for key in ("venue", "year", "doi", "abstract"):
         value = getattr(meta, key)
         if value is not None:
-            patch[key] = value
+            # papers.doi holds only the folded form (20261017140000_doi_lowercase.sql).
+            patch[key] = _norm_doi(value) if key == "doi" else value
     # A row can be untitled and still have hand-corrected fields (the API allows
     # editing venue or year without a title); those are not the resolver's to fill.
     for key in row.get("edited_fields") or []:
