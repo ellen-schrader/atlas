@@ -372,6 +372,18 @@ client standing in for Claude):
 5. The Connect page lists the connections, and Disconnect → Claude's next call says
    "revoked".
 
+Code review (high) fixes, same PR (no security holes found; the allowlist held):
+- The consent request is cached per user, so after "Not you? Sign out" the next
+  account looks it up as itself.
+- "Turn on" failures are shown; the consent page uses the shared `useSetMcpAccess`.
+- The deny-on-unknown-redirect effect fires once, not on every re-render.
+- A redirect that fails the check *after* approval says so ("Connected, but not sent
+  back", and to remove it under Connected apps) instead of "nothing was shared".
+- A failed access lookup shows an error with Retry, instead of reading as "access off".
+- The Connect page's Disconnect hint only appears when there are connected apps, and
+  load errors are shown. One `Segmented` picker replaces two copies.
+- The browser end-to-end test was rerun after the fixes: all 8 steps pass.
+
 **Production steps, in this order (yours):**
 1. Merge (Vercel deploys the web app; nothing else changes).
 2. In the Supabase dashboard, **Authentication → OAuth Server**: enable it, allow

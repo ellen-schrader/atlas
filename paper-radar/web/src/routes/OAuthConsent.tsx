@@ -6,6 +6,7 @@ import { Check, ShieldAlert, X } from "lucide-react";
 import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
+import { useSetMcpAccess } from "@/hooks/useMcpAccess";
 import { redirectTarget } from "@/lib/oauthRedirects";
 import { supabase } from "@/lib/supabase";
 import type { Membership } from "@/lib/types";
@@ -23,17 +24,23 @@ import { cn } from "@/lib/utils";
  */
 export default function OAuthConsent({
   memberships,
+  userId,
   email,
 }: {
   memberships: Membership[];
+  userId: string;
   email: string;
 }) {
   const [params] = useSearchParams();
   const authorizationId = params.get("authorization_id");
-  const [outcome, setOutcome] = useState<"leaving" | "denied" | "refused" | null>(null);
+  const [outcome, setOutcome] = useState<
+    "leaving" | "denied" | "refused" | "approved-elsewhere" | null
+  >(null);
 
   const details = useQuery({
-    queryKey: ["oauth-authorization", authorizationId],
+    // Per user: after "Not you? Sign out" the next account must look the request up
+    // as itself, not reuse what the first one was shown.
+    queryKey: ["oauth-authorization", authorizationId, userId],
     enabled: !!authorizationId,
     retry: false,
     staleTime: Infinity, // one request, one answer: don't refetch it on focus
@@ -61,29 +68,33 @@ export default function OAuthConsent({
   const request = details.data && "authorization_id" in details.data ? details.data : null;
   const target = request ? redirectTarget(request.redirect_uri) : null;
 
-  // Leave for an allowed redirect only; anything else ends here, on our page.
-  function leave(url: string | undefined) {
+  // Leave for an allowed redirect only; anything else ends here, on our page. After an
+  // approval, consent is already stored — say so, rather than "nothing was shared".
+  function leave(url: string | undefined, approved: boolean) {
     if (url && redirectTarget(url).allowed) {
       setOutcome("leaving");
       window.location.assign(url);
     } else {
-      setOutcome("refused");
+      setOutcome(approved ? "approved-elsewhere" : "refused");
     }
   }
 
   // Already approved before: Supabase returns the redirect straight away.
   useEffect(() => {
-    if (details.data && !("authorization_id" in details.data)) leave(details.data.redirect_url);
+    if (details.data && !("authorization_id" in details.data)) {
+      leave(details.data.redirect_url, true);
+    }
   }, [details.data]);
 
   // An unknown destination: spend the request so it can't be retried, and stay here.
+  // Keyed on the request and the verdict, not the objects, so it fires once.
+  const requestId = request?.authorization_id;
+  const refuseRequest = target ? !target.allowed : false;
   useEffect(() => {
-    if (request && target && !target.allowed) {
-      void supabase.auth.oauth.denyAuthorization(request.authorization_id, {
-        skipBrowserRedirect: true,
-      });
+    if (requestId && refuseRequest) {
+      void supabase.auth.oauth.denyAuthorization(requestId, { skipBrowserRedirect: true });
     }
-  }, [request, target]);
+  }, [requestId, refuseRequest]);
 
   const decide = useMutation({
     mutationFn: async (approve: boolean) => {
@@ -96,7 +107,7 @@ export default function OAuthConsent({
     },
     onSuccess: ({ approve, url }) => {
       if (!approve && !url) setOutcome("denied");
-      else leave(url);
+      else leave(url, approve);
     },
   });
 
@@ -117,6 +128,16 @@ export default function OAuthConsent({
     body = <p className="text-sm text-muted">Returning you to Claude…</p>;
   } else if (outcome === "denied") {
     body = <Problem title="Not connected">You can close this tab.</Problem>;
+  } else if (outcome === "approved-elsewhere") {
+    body = (
+      <Problem title="Connected, but not sent back" danger>
+        <p>
+          Atlas recorded your approval, but the address it was to return you to isn’t Claude’s, so
+          Atlas didn’t go there. To be safe, remove this connection in Atlas → Connect Claude →
+          Your connected apps.
+        </p>
+      </Problem>
+    );
   } else if (outcome === "refused" || (target && !target.allowed)) {
     body = (
       <Problem title="Atlas didn’t recognise this app" danger>
@@ -149,7 +170,18 @@ export default function OAuthConsent({
           <Can no>post, edit or delete anything, or see other labs</Can>
         </ul>
 
-        {labs.length === 0 ? (
+        {access.error ? (
+          <div className="mb-5 rounded-control border border-danger/40 bg-danger/5 p-3 text-sm text-muted">
+            Couldn’t check your labs’ Claude access.{" "}
+            <button
+              type="button"
+              className="font-medium text-fg underline-offset-2 hover:underline"
+              onClick={() => void access.refetch()}
+            >
+              Try again
+            </button>
+          </div>
+        ) : labs.length === 0 ? (
           <p className="mb-5 rounded-control border border-border bg-surface-2 p-3 text-sm text-muted">
             You’re not in a lab yet, so Claude would have nothing to read. Join or create a lab in
             Atlas first.
@@ -229,13 +261,7 @@ function LabRow({
   loading: boolean;
   onChanged: () => void;
 }) {
-  const enable = useMutation({
-    mutationFn: async () => {
-      const { error } = await supabase.rpc("set_mcp_access", { p_team: id, p_enabled: true });
-      if (error) throw error;
-    },
-    onSuccess: onChanged,
-  });
+  const enable = useSetMcpAccess(id);
 
   return (
     <div
@@ -255,9 +281,20 @@ function LabRow({
                 ? "Claude access is off — it’s a lab-wide setting"
                 : "Claude access is off — ask a lab owner to turn it on"}
         </div>
+        {enable.error && (
+          <div className="mt-1 text-xs text-danger">
+            Couldn’t turn it on —{" "}
+            {enable.error instanceof Error ? enable.error.message : String(enable.error)}
+          </div>
+        )}
       </div>
       {!loading && !on && owner && (
-        <Button size="sm" variant="secondary" onClick={() => enable.mutate()} disabled={enable.isPending}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => enable.mutate(true, { onSuccess: onChanged })}
+          disabled={enable.isPending}
+        >
           Turn on
         </Button>
       )}

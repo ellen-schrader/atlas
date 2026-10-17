@@ -155,24 +155,7 @@ ${webLine}`;
         </p>
         <div className="flex flex-col gap-6">
       {/* client picker — the config differs per surface */}
-      <div className="flex gap-1.5">
-        {CLIENTS.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            aria-pressed={client === c.id}
-            onClick={() => setClient(c.id)}
-            className={cn(
-              "rounded-control border px-3 py-1.5 text-sm font-medium transition",
-              client === c.id
-                ? "border-accent bg-accent-weak text-accent"
-                : "border-border text-muted hover:text-fg",
-            )}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
+      <Segmented options={CLIENTS} value={client} onChange={setClient} />
 
       <Step n={1} title="Check you have uv">
         <p className="mb-2.5 text-sm text-muted">
@@ -329,23 +312,8 @@ function ConnectorSetup() {
       <p className="mb-3 mt-1 text-sm text-muted">This is the connector’s address:</p>
       <CopyBlock value={MCP_URL} label="Copy URL" />
 
-      <div className="mb-3 mt-4 flex gap-1.5">
-        {APPS.map((a) => (
-          <button
-            key={a.id}
-            type="button"
-            aria-pressed={app === a.id}
-            onClick={() => setApp(a.id)}
-            className={cn(
-              "rounded-control border px-3 py-1.5 text-sm font-medium transition",
-              app === a.id
-                ? "border-accent bg-accent-weak text-accent"
-                : "border-border text-muted hover:text-fg",
-            )}
-          >
-            {a.label}
-          </button>
-        ))}
+      <div className="mb-3 mt-4">
+        <Segmented options={APPS} value={app} onChange={setApp} />
       </div>
 
       {app === "claude" ? (
@@ -386,6 +354,20 @@ function ConnectorSetup() {
 function ConnectedApps() {
   const grants = useOAuthGrants();
   const revoke = useRevokeGrant();
+  if (grants.error) {
+    return (
+      <section className="rounded-card border border-danger/40 bg-danger/5 p-5 text-sm text-muted">
+        Couldn’t load your connected apps.{" "}
+        <button
+          type="button"
+          className="font-medium text-fg underline-offset-2 hover:underline"
+          onClick={() => void grants.refetch()}
+        >
+          Try again
+        </button>
+      </section>
+    );
+  }
   if (grants.isLoading || !grants.data?.length) return null;
 
   return (
@@ -427,7 +409,9 @@ function ConnectionStatus() {
   const { team, userId } = useAppContext();
   const { data: enabled } = useMcpAccess(team.id);
   const { data: connection } = useClaudeConnection(team.id, userId, !!enabled);
+  const grants = useOAuthGrants();
   if (!enabled || !connection) return null;
+  const viaConnector = (grants.data?.length ?? 0) > 0;
 
   return (
     <section className="flex gap-3 rounded-card border border-border bg-surface p-5">
@@ -440,9 +424,14 @@ function ConnectionStatus() {
           another machine.
         </p>
         <p className="mt-2 text-xs text-muted">
-          To disconnect, use <b className="text-fg">Disconnect</b> under “Your connected apps”
-          below. With the local setup, remove the <code className="font-mono">atlas</code> server
-          from your Claude config instead.
+          {viaConnector ? (
+            <>
+              To disconnect, use <b className="text-fg">Disconnect</b> under “Your connected apps”
+              below.{" "}
+            </>
+          ) : null}
+          With the local setup, remove the <code className="font-mono">atlas</code> server from
+          your Claude config to disconnect.
         </p>
       </div>
     </section>
@@ -586,6 +575,38 @@ function Capabilities({ teamName }: { teamName: string }) {
         connector reads; it never writes.
       </p>
     </section>
+  );
+}
+
+/** A row of mutually exclusive buttons (the app pickers). */
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <div className="flex gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          aria-pressed={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            "rounded-control border px-3 py-1.5 text-sm font-medium transition",
+            value === o.id
+              ? "border-accent bg-accent-weak text-accent"
+              : "border-border text-muted hover:text-fg",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

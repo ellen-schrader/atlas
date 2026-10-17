@@ -179,7 +179,9 @@ function AuthedApp({ session }: { session: Session }) {
 
   // Claude's consent screen stands apart from the app shell, and must not be lost to
   // onboarding: someone with no lab yet still gets a clear answer there.
-  const consent = <OAuthConsent memberships={teams} email={session.user.email ?? ""} />;
+  const consent = (
+    <OAuthConsent memberships={teams} userId={session.user.id} email={session.user.email ?? ""} />
+  );
 
   if (!team) {
     return (
