@@ -30,6 +30,11 @@ jobs:
     defaults:
       run:
         working-directory: paper-radar
+    env:
+      # Use uv's own current CPython (the version in .python-version), not the
+      # runner's system one: prod's python:3.12-slim tracks the latest 3.12 patch,
+      # and Ubuntu's 3.12.3 predates security fixes our tests rely on (CVE-2024-4032).
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
