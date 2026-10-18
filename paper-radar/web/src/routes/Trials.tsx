@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { FlaskConical, LayoutGrid, List, Loader2, Plus, X } from "lucide-react";
 
 import { AddTrialDialog } from "@/components/trials/AddTrialDialog";
+import { EMPTY_COLLECTION, NewCollectionDialog } from "@/components/trials/CollectionForm";
 import {
   FilterMenu,
   type FilterOption,
@@ -14,6 +15,7 @@ import {
   Unclassified,
 } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
+import { sameSettingAndGroup, sharedTags } from "@/lib/collections";
 import {
   type LabTrial,
   PATIENT_GROUPS,
@@ -66,9 +68,14 @@ export default function Trials() {
 }
 
 function AllTrials() {
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const [params, setParams] = useSearchParams();
   const [adding, setAdding] = useState(false);
+  // Trials picked for a new collection (the mock-up's tray).
+  const [picked, setPicked] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const pick = (id: string) =>
+    setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   const { data: trials, isLoading, error } = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
@@ -266,20 +273,38 @@ function AllTrials() {
             <>
               {/* A six-column table doesn't fit a phone: cards there. */}
               <div className="hidden sm:block">
-                <TrialTable trials={shown} />
+                <TrialTable trials={shown} picked={picked} onPick={pick} />
               </div>
               <div className="sm:hidden">
-                <TrialGrid trials={shown} />
+                <TrialGrid trials={shown} picked={picked} onPick={pick} />
               </div>
             </>
           ) : (
-            <TrialGrid trials={shown} />
+            <TrialGrid trials={shown} picked={picked} onPick={pick} />
           )}
         </>
       )}
 
       <TrialsDisclaimer />
       <AddTrialDialog open={adding} onClose={() => setAdding(false)} teamId={team.id} />
+      <PickTray
+        trials={picked.map((id) => all.find((t) => t.id === id)).filter(Boolean) as LabTrial[]}
+        onRemove={pick}
+        onClear={() => setPicked([])}
+        onSave={() => setSaving(true)}
+      />
+      <NewCollectionDialog
+        open={saving}
+        onClose={() => setSaving(false)}
+        teamId={team.id}
+        userId={userId}
+        trialIds={picked}
+        initial={{ ...EMPTY_COLLECTION, ...sharedTags(all.filter((t) => picked.includes(t.id))) }}
+        note={`With ${all
+          .filter((t) => picked.includes(t.id))
+          .map((t) => t.name)
+          .join(", ")}.`}
+      />
     </div>
   );
 }
@@ -307,13 +332,34 @@ function PaperCount({ t }: { t: LabTrial }) {
   );
 }
 
-function TrialTable({ trials }: { trials: LabTrial[] }) {
+interface Pickable {
+  picked: string[];
+  onPick: (id: string) => void;
+}
+
+function PickBox({ t, picked, onPick }: { t: LabTrial } & Pickable) {
+  const on = picked.includes(t.id);
+  return (
+    <input
+      type="checkbox"
+      checked={on}
+      onChange={() => onPick(t.id)}
+      aria-label={`Select ${t.name} for a collection`}
+      className="h-4 w-4 accent-[var(--accent)]"
+    />
+  );
+}
+
+function TrialTable({ trials, picked, onPick }: { trials: LabTrial[] } & Pickable) {
   return (
     <div className="overflow-x-auto rounded-card border border-border bg-surface">
       <table className="w-full min-w-[760px] text-left text-sm">
         <thead className="border-b border-border text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
           <tr>
-            <th className="px-4 py-3 font-semibold">Trial</th>
+            <th className="w-10 py-3 pl-4">
+              <span className="sr-only">Select</span>
+            </th>
+            <th className="px-3 py-3 font-semibold">Trial</th>
             <th className="px-3 py-3 font-semibold">Setting</th>
             <th className="px-3 py-3 font-semibold">Therapy</th>
             <th className="px-3 py-3 font-semibold">Patient group</th>
@@ -324,7 +370,10 @@ function TrialTable({ trials }: { trials: LabTrial[] }) {
         <tbody className="divide-y divide-border">
           {trials.map((t) => (
             <tr key={t.id} className="align-top transition hover:bg-surface-2/60">
-              <td className="px-4 py-3">
+              <td className="py-3.5 pl-4">
+                <PickBox t={t} picked={picked} onPick={onPick} />
+              </td>
+              <td className="px-3 py-3">
                 <Link
                   to={`/trials/${t.nct_id}`}
                   className="font-semibold text-fg hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -358,16 +407,17 @@ function TrialTable({ trials }: { trials: LabTrial[] }) {
   );
 }
 
-function TrialGrid({ trials }: { trials: LabTrial[] }) {
+function TrialGrid({ trials, picked, onPick }: { trials: LabTrial[] } & Pickable) {
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {trials.map((t) => {
         const therapies = t.facts?.therapy_classes ?? [];
         return (
-          <Link
+          // The title's link stretches over the card (after:inset-0); the
+          // checkbox sits above it, so ticking doesn't open the trial.
+          <div
             key={t.id}
-            to={`/trials/${t.nct_id}`}
-            className="relative flex flex-col gap-2 overflow-hidden rounded-card border border-border bg-surface p-4 pl-5 transition hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="relative flex flex-col gap-2 overflow-hidden rounded-card border border-border bg-surface p-4 pl-5 transition focus-within:ring-2 focus-within:ring-accent hover:border-border-strong"
           >
             {/* The leading therapy's colour, as the mock-up's card edge. */}
             {therapies[0] && (
@@ -379,7 +429,17 @@ function TrialGrid({ trials }: { trials: LabTrial[] }) {
               <Classified t={t}>{list(t, "settings", SETTINGS)}</Classified> ·{" "}
               {phaseLabel(t.phases)}
             </div>
-            <div className="text-card font-semibold text-fg">{t.name}</div>
+            <div className="flex items-start justify-between gap-2">
+              <Link
+                to={`/trials/${t.nct_id}`}
+                className="text-card font-semibold text-fg after:absolute after:inset-0 focus-visible:outline-none"
+              >
+                {t.name}
+              </Link>
+              <span className="relative z-10 -m-2 p-2">
+                <PickBox t={t} picked={picked} onPick={onPick} />
+              </span>
+            </div>
             <p className="line-clamp-2 text-sm text-muted">{t.title}</p>
             <div className="text-sm text-fg">
               <Classified t={t}>
@@ -392,9 +452,59 @@ function TrialGrid({ trials }: { trials: LabTrial[] }) {
               </span>
               <PaperCount t={t} />
             </div>
-          </Link>
+          </div>
         );
       })}
+    </div>
+  );
+}
+
+function PickTray({
+  trials,
+  onRemove,
+  onClear,
+  onSave,
+}: {
+  trials: LabTrial[];
+  onRemove: (id: string) => void;
+  onClear: () => void;
+  onSave: () => void;
+}) {
+  if (trials.length === 0) return null;
+  const mixed = !sameSettingAndGroup(trials);
+  return (
+    <div
+      role="region"
+      aria-label="Selected trials"
+      className="sticky bottom-4 z-20 flex flex-wrap items-center gap-3 rounded-card border border-border-strong bg-surface p-3 shadow-lg"
+    >
+      <ul className="flex flex-1 flex-wrap gap-1.5">
+        {trials.map((t) => (
+          <li key={t.id}>
+            <button
+              type="button"
+              onClick={() => onRemove(t.id)}
+              aria-label={`Remove ${t.name}`}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2.5 py-0.5 text-meta text-fg hover:border-border-strong"
+            >
+              {t.name} <X size={12} aria-hidden />
+            </button>
+          </li>
+        ))}
+      </ul>
+      {mixed && (
+        <p className="w-full text-meta text-muted sm:order-last">
+          These trials don’t share setting and patient group, so they answer different questions.
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button variant="ghost" size="sm" onClick={onClear}>
+          Clear
+        </Button>
+        <Button size="sm" onClick={onSave}>
+          Save as collection
+        </Button>
+      </div>
     </div>
   );
 }
