@@ -59,6 +59,8 @@ The hard part is the last group. Atlas doesn't store full text today, so extract
 (b) a lab member uploads the PDF and the supplement for that trial (always works).
 I recommend doing (a) when it's available and falling back to (b). Each extracted number keeps its source (paper, table or figure, page), so the "Table 1 · not yet verified · suggest a correction" pattern in the mock-up works for real.
 
+**Decided 18 Oct:** extraction uses **Claude Opus 5.5**; uploaded and fetched PDFs are **kept**, private to the lab, so every value's source can be opened; open-access full text is **fetched automatically** from Europe PMC (fixed hosts only, size-capped, checked to be a PDF, never executed, and treated as untrusted data by Claude, which has no tools), with upload as the fallback.
+
 ## 3. Data model (new migrations)
 
 Trials are global, like `papers`, and visibility goes through a per-lab posts table, like `paper_posts`. Anything a lab adds or edits stays lab-scoped, following the cross-lab-leaks work (#133).

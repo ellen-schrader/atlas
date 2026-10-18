@@ -20,8 +20,9 @@ from pydantic import BaseModel, Field
 
 from paper_radar.trials import FEATURE, ctgov
 
-from . import trial_links
+from . import trial_extract, trial_links
 from .deps import require_token
+from .ratelimit import PerUserRateLimiter
 from .supa import get_user_id, service_client, user_client
 
 log = logging.getLogger(__name__)
@@ -167,3 +168,74 @@ def add_trial(
     if not already:
         background.add_task(trial_links.link_lab, req.team_id)
     return AddedTrial(trial=trial, already_in_lab=already)
+
+
+# --- sources and extraction (PR 4) -------------------------------------------------
+
+# Both reach outside and the second costs money: their own caps, per person.
+_open_access_limiter = PerUserRateLimiter(
+    20, 3600.0, lambda: HTTPException(status_code=429, detail="Too many lookups. Try again later.")
+)
+_extract_limiter = PerUserRateLimiter(
+    6, 3600.0, lambda: HTTPException(status_code=429, detail="Six extractions an hour at most.")
+)
+
+
+class TeamOnly(BaseModel):
+    team_id: str
+
+
+def _require_lab_trial(token: str, team_id: str, trial_id: str) -> str:
+    """The caller's id, or 404 unless the feature is on and the trial is on the
+    lab's list (asked as the caller, so RLS answers)."""
+    user_id = _require_feature(token, team_id)
+    rows = (
+        user_client(token)
+        .table("trial_posts")
+        .select("trial_id")
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .execute()
+        .data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    return user_id
+
+
+class OpenAccessResult(BaseModel):
+    fetched: list[str]
+    closed: list[str]
+    have: list[str]
+
+
+@router.post("/{trial_id}/open-access", response_model=OpenAccessResult)
+def fetch_open_access(
+    trial_id: str, req: TeamOnly, token: str = Depends(require_token)
+) -> OpenAccessResult:
+    """Fetch the open-access full text of the lab papers linked to this trial
+    from Europe PMC and keep it as the trial's sources."""
+    user_id = _require_lab_trial(token, req.team_id, trial_id)
+    _open_access_limiter.check(user_id)
+    return OpenAccessResult(**trial_extract.fetch_open_access(req.team_id, trial_id))
+
+
+class ExtractStarted(BaseModel):
+    status: str
+
+
+@router.post("/{trial_id}/extract", response_model=ExtractStarted, status_code=202)
+def start_extraction(
+    trial_id: str,
+    req: TeamOnly,
+    background: BackgroundTasks,
+    token: str = Depends(require_token),
+) -> ExtractStarted:
+    """Have Claude extract the trial's data from its sources. Runs in the
+    background; the trial page follows trial_facts.extraction_status."""
+    user_id = _require_lab_trial(token, req.team_id, trial_id)
+    _extract_limiter.check(user_id)
+    if not trial_extract.claim(req.team_id, trial_id):
+        raise HTTPException(status_code=409, detail="An extraction is already running.")
+    background.add_task(trial_extract.run, req.team_id, trial_id)
+    return ExtractStarted(status="running")

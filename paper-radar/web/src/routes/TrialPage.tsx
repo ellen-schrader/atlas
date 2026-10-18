@@ -6,7 +6,10 @@ import { ArrowLeft, Check, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
+import { ExtractionView } from "@/components/trials/ExtractionView";
+import { TrialSources } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
+import { fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,6 +17,7 @@ import {
   PATIENT_GROUPS,
   SETTINGS,
   THERAPY_CLASSES,
+  THERAPY_COLOR,
   type TrialDetail,
   type TrialLink,
   classification,
@@ -44,7 +48,9 @@ function Trial() {
     queryKey: ["trial", team.id, nct],
     queryFn: () => fetchTrialDetail(team.id, nct),
     refetchInterval: (q) =>
-      q.state.data && classification(q.state.data.facts, q.state.data.added_at) === "pending"
+      q.state.data &&
+      (classification(q.state.data.facts, q.state.data.added_at) === "pending" ||
+        q.state.data.facts?.extraction_status === "running")
         ? 5000
         : false,
   });
@@ -85,6 +91,12 @@ function TrialBody({ d }: { d: TrialDetail }) {
   const toast = useToast();
   const t = d.trial;
   const reg = t.registry ?? {};
+  // The numbered documents the extraction's sources refer to (same order as
+  // the extraction read them: papers, then supplements, oldest first).
+  const sources = useQuery({
+    queryKey: ["trial-sources", team.id, t.id],
+    queryFn: () => fetchSources(team.id, t.id),
+  });
   const name = trialName(t, d.facts);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["trial", team.id, t.nct_id] });
@@ -151,6 +163,27 @@ function TrialBody({ d }: { d: TrialDetail }) {
       <Section title="Papers in Atlas">
         <Papers d={d} onChange={refresh} />
       </Section>
+
+      <Section title="Data from the papers">
+        <TrialSources trialId={t.id} facts={d.facts} onExtractionChange={refresh} />
+      </Section>
+
+      {d.facts?.extraction && (
+        <ExtractionView
+          trialId={t.id}
+          extraction={d.facts.extraction}
+          sources={(d.facts.extraction_sources ?? []).map(
+            (id) => (sources.data ?? []).find((s) => s.id === id) ?? null,
+          )}
+          colours={{
+            exp:
+              THERAPY_COLOR[
+                d.facts.therapy_classes.find((c) => c !== "chemotherapy") ?? "immunotherapy"
+              ],
+            ctrl: "var(--faint)",
+          }}
+        />
+      )}
 
       <Section
         title="From ClinicalTrials.gov"
