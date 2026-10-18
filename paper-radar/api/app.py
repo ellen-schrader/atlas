@@ -42,6 +42,8 @@ from . import (
     merge_suggestions,
     taste,
     teams_integration,
+    trial_links,
+    trials,
 )
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
@@ -116,6 +118,7 @@ if _mcp is not None:
 
 app.include_router(maps.router)
 app.include_router(integrations.router)
+app.include_router(trials.router)
 
 
 # --- schemas ---------------------------------------------------------------
@@ -653,6 +656,8 @@ def create_post(
         # A preprint and its published version the lab now holds both of, that
         # nothing links: ask the lab (api/merge_suggestions.py).
         background.add_task(merge_suggestions.suggest_for_post, req.team_id, paper_id)
+        # Trials the paper names (no-op unless the lab has clinical trials on).
+        background.add_task(trial_links.link_paper, req.team_id, paper_id)
 
     # Mirror new web posts to the lab's Teams channel (no-op for unmapped labs;
     # failures are logged inside, never surfaced). Loop guard: only source='web'
@@ -2244,6 +2249,7 @@ def bibtex_import(
     if imported:
         # One pass over the whole lab, not one per imported paper.
         background.add_task(merge_suggestions.suggest_for_post, req.team_id, None)
+        background.add_task(trial_links.link_lab, req.team_id)
 
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
 

@@ -66,3 +66,7 @@ jobs:
       # Still runs if the abstract step failed on a paper or two.
       - if: ${{ !cancelled() }}
         run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}
+      # Link lab papers to the clinical trials they name (only for labs with the
+      # feature on; a no-op otherwise). Writes, so a manual dry run skips it.
+      - if: ${{ !cancelled() && !inputs.dry_run }}
+        run: uv run --frozen python -m api.trial_links
