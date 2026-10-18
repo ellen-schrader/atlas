@@ -11,7 +11,7 @@
 -- every other lab) can't read a byte. Never public: the app signs short URLs.
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('trial-sources', 'trial-sources', false, 41943040,  -- 40 MB
+values ('trial-sources', 'trial-sources', false, 25165824,  -- 24 MB: base64 in a 32 MB request
         array['application/pdf', 'application/xml'])
 on conflict (id) do nothing;
 

@@ -26,19 +26,14 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError
 
 from paper_radar.config import get_settings
-from paper_radar.trials.extraction import (
-    CONTEXT_LABELS,
-    DIMENSIONS,
-    PARTS,
-    Extraction,
-    combine,
-)
+from paper_radar.trials.extraction import CONTEXT_LABELS, DIMENSIONS, Extraction
 
 from .supa import service_client
 from .trial_classify import registry_digest
@@ -49,7 +44,7 @@ MODEL = "claude-opus-5-5"
 # Opus 5.5, per million tokens (for the cost shown on the trial page).
 _PRICE_IN, _PRICE_OUT = 4.0, 20.0
 BUCKET = "trial-sources"
-MAX_REQUEST_BYTES = 30_000_000  # the API takes 32 MB per request
+MAX_REQUEST_BYTES = 30_000_000  # the API takes 32 MB per request (as sent)
 STALE_RUN = timedelta(minutes=30)  # a "running" older than this crashed
 
 # --- Europe PMC ----------------------------------------------------------------
@@ -59,6 +54,7 @@ _UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
 _PMCID = re.compile(r"^PMC\d{1,10}$")
 _DOI = re.compile(r"^10\.\d{4,9}/\S{1,200}$")
 _MAX_XML = 15_000_000
+MAX_OPEN_ACCESS = 10  # linked papers looked up per click
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -118,7 +114,8 @@ def full_text_xml(pmcid: str) -> bytes | None:
 
 def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
     """Store the open-access full text of each paper the lab links to this
-    trial. Returns titles: {"fetched": [...], "closed": [...], "have": [...]}."""
+    trial, unless the lab already has a source for that paper (an uploaded PDF
+    counts). Returns titles: {"fetched": [...], "closed": [...], "have": [...]}."""
     svc = service_client()
     links = (
         svc.table("paper_trials")
@@ -136,22 +133,31 @@ def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
         .select("paper_id")
         .eq("team_id", team_id)
         .eq("trial_id", trial_id)
-        .eq("kind", "paper")
         .execute()
         .data
         or []
         if r.get("paper_id")
     }
     out: dict[str, list[str]] = {"fetched": [], "closed": [], "have": []}
+    todo = []
     for link in links:
         paper = link.get("papers") or {}
-        title = paper.get("title") or "Untitled paper"
-        if paper.get("id") in have:
-            out["have"].append(title)
-            continue
+        if paper.get("id") in have:  # uploaded or fetched already
+            out["have"].append(paper.get("title") or "Untitled paper")
+        elif paper.get("id"):
+            todo.append(paper)
+    todo = todo[:MAX_OPEN_ACCESS]
+
+    def lookup(paper: dict[str, Any]) -> tuple[dict[str, Any], str | None, bytes | None]:
         pmcid = open_access_pmcid((paper.get("doi") or "").lower())
-        xml = full_text_xml(pmcid) if pmcid else None
-        if not xml:
+        return paper, pmcid, full_text_xml(pmcid) if pmcid else None
+
+    # In parallel: each paper is two requests that can each take seconds.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        found = list(pool.map(lookup, todo))
+    for paper, pmcid, xml in found:
+        title = paper.get("title") or "Untitled paper"
+        if not (pmcid and xml):
             out["closed"].append(title)
             continue
         path = f"{team_id}/{trial_id}/{pmcid}.xml"
@@ -214,11 +220,11 @@ def _documents(svc, sources: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     total = 0
     for i, s in enumerate(sources, start=1):
         data = svc.storage.from_(BUCKET).download(s["storage_path"])
-        total += len(data)
+        # What it weighs in the request: PDFs go base64-encoded (4/3 larger).
+        total += -(-len(data) // 3) * 4 if s["media_type"] == "application/pdf" else len(data)
         if total > MAX_REQUEST_BYTES:
             raise ExtractionError(
-                "The sources are too large to read together (over 30 MB). Remove a supplement "
-                "and try again."
+                "The sources are too large to read together. Remove a supplement and try again."
             )
         title = f"Document {i}: {s['filename']} ({s['kind']})"
         listing.append(title)
@@ -244,8 +250,22 @@ class ExtractionError(Exception):
     """A reason to show on the trial page."""
 
 
-def _ask(client, prefix: list[dict[str, Any]], what: str, part: type) -> tuple[Any, Any, str]:
-    """One part of the extraction: (parsed part, usage, model that answered)."""
+TOOL = "record_extraction"
+
+
+def _tool() -> dict[str, Any]:
+    # Not strict: a strict tool (or output_format) is compiled into a grammar, and
+    # the whole Extraction is over the API's limit for one. The answer is
+    # validated against the same schema instead, with one retry.
+    return {
+        "name": TOOL,
+        "description": "Record everything extracted from the trial's documents, in one call.",
+        "input_schema": Extraction.model_json_schema(),
+    }
+
+
+def _ask(client, messages: list[dict[str, Any]]):
+    """One request; the final message. Raises ExtractionError."""
     import anthropic
 
     try:
@@ -258,26 +278,21 @@ def _ask(client, prefix: list[dict[str, Any]], what: str, part: type) -> tuple[A
             betas=["server-side-fallback-2026-06-01"],
             fallbacks=[{"model": "claude-opus-4-8"}],
             system=SYSTEM,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [*prefix, {"type": "text", "text": f"Extract {what}."}],
-                }
-            ],
-            output_format=part,
+            tools=[_tool()],
+            # Opus 5.5 can't be forced to a tool; the prompt asks for it.
+            tool_choice={"type": "auto"},
+            messages=messages,
         ) as stream:
             msg = stream.get_final_message()
-    except ValidationError as exc:
-        raise ExtractionError("Claude's answer didn't fit the expected shape. Try again.") from exc
     except anthropic.BadRequestError as exc:
         raise ExtractionError(f"The API refused the request: {exc.message}") from exc
     except anthropic.APIError as exc:
         raise ExtractionError("The Claude API failed. Try again in a while.") from exc
     if msg.stop_reason == "refusal":
         raise ExtractionError("Claude declined to read these documents.")
-    if msg.stop_reason == "max_tokens" or msg.parsed_output is None:
+    if msg.stop_reason == "max_tokens":
         raise ExtractionError("Claude's answer was cut off. Try again with fewer documents.")
-    return msg.parsed_output, msg.usage, msg.model
+    return msg
 
 
 def extract(
@@ -291,36 +306,78 @@ def extract(
     import anthropic
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    # The documents and the registry record, identical in all three requests:
-    # cached after the first, so the next two read them at a tenth of the price.
-    prefix = [
-        *blocks,
+    messages: list[dict[str, Any]] = [
         {
-            "type": "text",
-            "text": (
-                "Documents:\n"
-                + "\n".join(listing)
-                + f"\n\n<registry_record>\n{registry_digest(registry)}\n</registry_record>"
-            ),
-            "cache_control": {"type": "ephemeral"},
-        },
+            "role": "user",
+            "content": [
+                *blocks,
+                {
+                    "type": "text",
+                    "text": (
+                        "Documents:\n"
+                        + "\n".join(listing)
+                        + f"\n\n<registry_record>\n{registry_digest(registry)}\n"
+                        "</registry_record>"
+                    ),
+                    # A retry reads the documents from cache.
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": f"Extract this trial's data and record it with {TOOL}."},
+            ],
+        }
     ]
-    answers = []
     cost = 0.0
-    model = MODEL
-    for what, part in PARTS:
-        answer, usage, model = _ask(client, prefix, what, part)
-        answers.append(answer)
-        cost += _cost(usage)
-    return combine(*answers), round(cost, 4), model
+    for attempt in range(2):
+        msg = _ask(client, messages)
+        cost += _cost(msg.usage)
+        _log_usage(msg.usage, attempt)
+        call = next((b for b in msg.content if b.type == "tool_use" and b.name == TOOL), None)
+        if call is None:
+            raise ExtractionError("Claude didn't record an extraction. Try again.")
+        try:
+            return Extraction.model_validate(call.input), round(cost, 4), msg.model
+        except ValidationError as exc:
+            if attempt == 1:
+                raise ExtractionError(
+                    "Claude's answer didn't fit the expected shape. Try again."
+                ) from exc
+            # Same conversation, so the documents come from cache: tell Claude
+            # what was wrong and let it record again.
+            messages += [
+                {"role": "assistant", "content": msg.content},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call.id,
+                            "is_error": True,
+                            "content": f"That didn't match the schema:\n{exc}\nRecord it again.",
+                        }
+                    ],
+                },
+            ]
+    raise AssertionError("unreachable")
+
+
+def _log_usage(usage: Any, attempt: int) -> None:
+    log.info(
+        "extraction attempt %d: in %s, cache write %s, cache read %s, out %s",
+        attempt + 1,
+        usage.input_tokens,
+        getattr(usage, "cache_creation_input_tokens", None),
+        getattr(usage, "cache_read_input_tokens", None),
+        usage.output_tokens,
+    )
 
 
 def _cost(usage: Any) -> float:
-    """Dollars for one response: cache writes cost 1.25×, cache reads 0.1×."""
+    """Dollars for one response at Opus 5.5 prices: cache writes cost 1.25×,
+    cache reads 0.05×."""
     fresh = usage.input_tokens or 0
     written = getattr(usage, "cache_creation_input_tokens", 0) or 0
     read = getattr(usage, "cache_read_input_tokens", 0) or 0
-    tokens_in = fresh + 1.25 * written + 0.1 * read
+    tokens_in = fresh + 1.25 * written + 0.05 * read
     return round(tokens_in / 1e6 * _PRICE_IN + (usage.output_tokens or 0) / 1e6 * _PRICE_OUT, 4)
 
 
@@ -386,6 +443,11 @@ def run(team_id: str, trial_id: str) -> None:
         )[0].get("registry") or {}
         blocks, listing = _documents(svc, sources)
         result, cost, model = extract(registry, blocks, listing)
+        # A new extraction replaces the values people checked: clear the checks
+        # first, so no moment shows old "verified" marks on new values.
+        svc.table("trial_fact_reviews").delete().eq("team_id", team_id).eq(
+            "trial_id", trial_id
+        ).execute()
         finish(
             {
                 "extraction": result.model_dump(mode="json"),
@@ -397,10 +459,6 @@ def run(team_id: str, trial_id: str) -> None:
                 "extraction_sources": [src["id"] for src in sources],
             }
         )
-        # A new extraction replaces the values people checked.
-        svc.table("trial_fact_reviews").delete().eq("team_id", team_id).eq(
-            "trial_id", trial_id
-        ).execute()
     except ExtractionError as exc:
         finish({"extraction_status": "failed", "extraction_error": str(exc)})
     except Exception as exc:  # noqa: BLE001 — a background task must end the run

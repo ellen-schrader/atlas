@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError, fetchOpenAccess, startExtraction } from "@/lib/api";
 import {
   type TrialSource,
+  extractionRunning,
   fetchSources,
   removeSource,
   sourceUrl,
@@ -25,23 +26,35 @@ const MODEL_NAMES: Record<string, string> = {
 export function TrialSources({
   trialId,
   facts,
+  papers,
   onExtractionChange,
 }: {
   trialId: string;
   facts: TrialFacts | null;
+  /** The lab papers linked to the trial: an uploaded PDF can say which it is. */
+  papers: { id: string; title: string }[];
   onExtractionChange: () => void;
 }) {
   const { team, userId } = useAppContext();
   const qc = useQueryClient();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [kind, setKind] = useState<"paper" | "supplement">("paper");
+  // "supplement", or the paper the PDF is ("" for a paper not in the list).
+  const [what, setWhat] = useState<string>(papers[0]?.id ?? "");
   const key = ["trial-sources", team.id, trialId];
   const sources = useQuery({ queryKey: key, queryFn: () => fetchSources(team.id, trialId) });
   const refresh = () => qc.invalidateQueries({ queryKey: key });
 
   const upload = useMutation({
-    mutationFn: (file: File) => uploadSource(team.id, trialId, userId, file, kind),
+    mutationFn: (file: File) =>
+      uploadSource(
+        team.id,
+        trialId,
+        userId,
+        file,
+        what === "supplement" ? "supplement" : "paper",
+        what && what !== "supplement" ? what : null,
+      ),
     onSuccess: refresh,
     onError: (e) => toast({ message: e instanceof Error ? e.message : "Upload failed." }),
   });
@@ -81,7 +94,13 @@ export function TrialSources({
     }
   };
 
-  const running = facts?.extraction_status === "running";
+  const running = extractionRunning(
+    facts?.extraction_status ?? null,
+    facts?.extraction_started_at ?? null,
+  );
+  const stalled = facts?.extraction_status === "running" && !running;
+  // Numbered as the extraction read them ("Doc 2"); files added since are new.
+  const readOrder = facts?.extraction_sources ?? [];
   const list = sources.data ?? [];
 
   return (
@@ -94,9 +113,14 @@ export function TrialSources({
 
       {list.length > 0 && (
         <ul className="divide-y divide-border rounded-control border border-border">
-          {list.map((s, i) => (
+          {list.map((s) => (
             <li key={s.id} className="flex items-center gap-3 px-3 py-2">
-              <span className="w-6 shrink-0 font-mono text-meta text-faint">{i + 1}</span>
+              <span
+                className="w-12 shrink-0 font-mono text-meta text-faint"
+                title={readOrder.includes(s.id) ? "Its number in the extraction" : "Added since the last extraction"}
+              >
+                {readOrder.includes(s.id) ? `Doc ${readOrder.indexOf(s.id) + 1}` : "new"}
+              </span>
               {s.origin === "europepmc" ? (
                 <Globe size={15} aria-hidden className="shrink-0 text-muted" />
               ) : (
@@ -142,14 +166,19 @@ export function TrialSources({
           )}
           Fetch open access
         </Button>
-        <label className="flex items-center gap-1.5 text-sm text-muted">
-          <span className="sr-only">Kind of file</span>
+        <label className="flex min-w-0 items-center gap-1.5 text-sm text-muted">
+          <span className="sr-only">What the PDF is</span>
           <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value as "paper" | "supplement")}
-            className="h-8 rounded-md border border-border bg-surface px-2 text-sm text-fg"
+            value={what}
+            onChange={(e) => setWhat(e.target.value)}
+            className="h-8 max-w-64 truncate rounded-md border border-border bg-surface px-2 text-sm text-fg"
           >
-            <option value="paper">Paper</option>
+            {papers.map((p) => (
+              <option key={p.id} value={p.id}>
+                Paper: {p.title}
+              </option>
+            ))}
+            <option value="">Another paper</option>
             <option value="supplement">Supplement</option>
           </select>
         </label>
@@ -196,7 +225,9 @@ export function TrialSources({
       <p className="text-meta text-faint" aria-live="polite">
         {running
           ? `Claude is reading ${list.length} ${list.length === 1 ? "document" : "documents"}… (started ${formatRelative(facts?.extraction_started_at ?? null)}; usually 1–3 minutes)`
-          : facts?.extraction_status === "failed"
+          : stalled
+            ? "The last extraction stopped without finishing. Start it again."
+            : facts?.extraction_status === "failed"
             ? `Extraction failed: ${facts.extraction_error ?? "unknown error"}`
             : facts?.extracted_at
               ? `Extracted by ${MODEL_NAMES[facts.extraction_model ?? ""] ?? facts.extraction_model} ${formatRelative(facts.extracted_at)}${

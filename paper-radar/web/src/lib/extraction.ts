@@ -141,7 +141,16 @@ export interface TrialSource {
 }
 
 const BUCKET = "trial-sources";
-export const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
+/** PDFs travel base64-encoded in a 32 MB request: 24 MB is the most one can be. */
+export const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+
+/** A run is "running" for 30 minutes at most: past that it crashed (a deploy,
+ *  a restart), and the API lets a new one start. Mirrors api/trial_extract.py. */
+export function extractionRunning(status: string | null, startedAt: string | null): boolean {
+  return (
+    status === "running" && !!startedAt && Date.now() - new Date(startedAt).getTime() < 30 * 60_000
+  );
+}
 
 export async function fetchSources(teamId: string, trialId: string): Promise<TrialSource[]> {
   const { data, error } = await supabase
@@ -162,10 +171,12 @@ export async function uploadSource(
   userId: string,
   file: File,
   kind: "paper" | "supplement",
+  /** The lab paper this PDF is, so open access doesn't fetch it again. */
+  paperId: string | null,
 ) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"))
     throw new Error("Only PDFs can be added.");
-  if (file.size > MAX_UPLOAD_BYTES) throw new Error("That PDF is over 40 MB.");
+  if (file.size > MAX_UPLOAD_BYTES) throw new Error("That PDF is over 24 MB, too large to read.");
   const path = `${teamId}/${trialId}/${crypto.randomUUID()}.pdf`;
   const up = await supabase.storage
     .from(BUCKET)
@@ -175,6 +186,7 @@ export async function uploadSource(
     team_id: teamId,
     trial_id: trialId,
     kind,
+    paper_id: paperId,
     origin: "upload",
     storage_path: path,
     filename: file.name.slice(0, 200),
@@ -249,12 +261,19 @@ export async function editFact(teamId: string, trialId: string, path: string, va
   if (error) throw error;
 }
 
-export async function countEdits(teamId: string, trialId: string): Promise<number> {
-  const { count, error } = await supabase
+/** How many values the lab has corrected in the current extraction. */
+export async function countEdits(
+  teamId: string,
+  trialId: string,
+  since: string | null,
+): Promise<number> {
+  let q = supabase
     .from("trial_fact_edits")
-    .select("id", { count: "exact", head: true })
+    .select("path")
     .eq("team_id", teamId)
     .eq("trial_id", trialId);
+  if (since) q = q.gte("edited_at", since);
+  const { data, error } = await q;
   if (error) throw error;
-  return count ?? 0;
+  return new Set((data as { path: string }[]).map((r) => r.path)).size;
 }

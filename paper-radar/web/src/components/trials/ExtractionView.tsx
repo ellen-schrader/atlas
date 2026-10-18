@@ -45,23 +45,26 @@ interface Ctx {
 export function ExtractionView({
   trialId,
   extraction: x,
+  extractedAt,
   sources,
   colours,
 }: {
   trialId: string;
   extraction: Extraction;
+  /** Keys the checks and corrections to this extraction: a new one refetches. */
+  extractedAt: string | null;
   sources: (TrialSource | null)[];
   colours: ArmColours;
 }) {
   const { team } = useAppContext();
   const qc = useQueryClient();
   const reviews = useQuery({
-    queryKey: ["trial-reviews", team.id, trialId],
+    queryKey: ["trial-reviews", team.id, trialId, extractedAt],
     queryFn: () => fetchReviews(team.id, trialId),
   });
   const edits = useQuery({
-    queryKey: ["trial-edits", team.id, trialId],
-    queryFn: () => countEdits(team.id, trialId),
+    queryKey: ["trial-edits", team.id, trialId, extractedAt],
+    queryFn: () => countEdits(team.id, trialId, extractedAt),
   });
   const onChange = () => {
     qc.invalidateQueries({ queryKey: ["trial-reviews", team.id, trialId] });

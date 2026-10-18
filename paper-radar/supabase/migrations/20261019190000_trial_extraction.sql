@@ -134,7 +134,8 @@ select public.close_to_connectors('public.trial_fact_edits');
 -- Sets one value in the lab's extraction and logs it, as the caller. The
 -- extraction column isn't writable by members directly, so this is the only
 -- way in: it checks the lab and the switch itself (security definer). A
--- corrected value is no longer "verified" (someone checked the old one).
+-- corrected value is no longer "verified" (someone checked the old one), and
+-- neither is any group that contains it.
 create function public.edit_trial_fact(p_team uuid, p_trial uuid, p_path text, p_value jsonb)
 returns void
 language plpgsql
@@ -174,6 +175,14 @@ begin
         raise exception 'No such value' using errcode = '22023';
     end if;
     old := doc #> keys;
+    -- Leaves only, and like for like: a number (or nothing) for a number, text
+    -- (or nothing) for text. One call can't replace a whole section.
+    if jsonb_typeof(old) in ('object', 'array')
+       or jsonb_typeof(p_value) in ('object', 'array', 'boolean')
+       or (jsonb_typeof(old) = 'number' and jsonb_typeof(p_value) not in ('number', 'null'))
+       or (jsonb_typeof(old) = 'string' and jsonb_typeof(p_value) not in ('string', 'null')) then
+        raise exception 'That value can''t be changed to this' using errcode = '22023';
+    end if;
     update public.trial_facts
        set extraction = jsonb_set(extraction, keys, coalesce(p_value, 'null'::jsonb), false),
            updated_by = auth.uid(),
@@ -181,8 +190,11 @@ begin
      where team_id = p_team and trial_id = p_trial;
     insert into public.trial_fact_edits (team_id, trial_id, path, old_value, new_value, edited_by)
     values (p_team, p_trial, p_path, old, p_value, auth.uid());
+    -- The value's own check and those of every group containing it
+    -- ("enrolment" covers "enrolment.n_randomised").
     delete from public.trial_fact_reviews
-     where team_id = p_team and trial_id = p_trial and path = p_path;
+     where team_id = p_team and trial_id = p_trial
+       and (path = p_path or p_path like path || '.%');
 end;
 $$;
 revoke execute on function public.edit_trial_fact(uuid, uuid, text, jsonb) from public, anon;

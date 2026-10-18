@@ -3,7 +3,7 @@
 -- logged, the files invisible to other labs. `f4…` ids.
 
 begin;
-select plan(16);
+select plan(18);
 
 insert into auth.users (id, email) values
     ('f4000000-0000-0000-0000-0000000000a1', 'te.ada@lab.test'),
@@ -30,7 +30,12 @@ insert into public.trial_facts (team_id, trial_id, extraction, extraction_status
      'done');
 insert into public.trial_fact_reviews (team_id, trial_id, path, verified_by) values
     ('f4000000-0000-0000-0000-0000000000b1', 'f4000000-0000-0000-0000-0000000000e1',
-     'endpoints.0.exp_value', 'f4000000-0000-0000-0000-0000000000a1');
+     'endpoints.0.exp_value', 'f4000000-0000-0000-0000-0000000000a1'),
+    -- The page verifies whole groups.
+    ('f4000000-0000-0000-0000-0000000000b1', 'f4000000-0000-0000-0000-0000000000e1',
+     'endpoints.0', 'f4000000-0000-0000-0000-0000000000a1'),
+    ('f4000000-0000-0000-0000-0000000000b1', 'f4000000-0000-0000-0000-0000000000e1',
+     'enrolment', 'f4000000-0000-0000-0000-0000000000a1');
 -- A file in Lab A's folder (the bytes don't matter to the policies).
 insert into storage.objects (bucket_id, name, owner) values
     ('trial-sources', 'f4000000-0000-0000-0000-0000000000b1/f4000000-0000-0000-0000-0000000000e1/a.pdf',
@@ -65,9 +70,16 @@ select is((select extraction #>> '{endpoints,0,exp_value}' from public.trial_fac
             where trial_id = 'f4000000-0000-0000-0000-0000000000e1'), '58.1', 'and is stored');
 select is((select old_value from public.trial_fact_edits where trial_id = 'f4000000-0000-0000-0000-0000000000e1'),
     '58'::jsonb, 'with the old value logged');
-select is_empty($$ select 1 from public.trial_fact_reviews where path = 'endpoints.0.exp_value'
-                    and trial_id = 'f4000000-0000-0000-0000-0000000000e1' $$,
-    'and its check cleared');
+select set_eq($$ select path from public.trial_fact_reviews
+                  where trial_id = 'f4000000-0000-0000-0000-0000000000e1' $$,
+    $$ values ('enrolment') $$,
+    'and its check cleared, with the check of the group holding it; other groups keep theirs');
+select throws_ok($$ select public.edit_trial_fact('f4000000-0000-0000-0000-0000000000b1',
+    'f4000000-0000-0000-0000-0000000000e1', 'endpoints', '"x"') $$, '22023', null,
+    'a whole section can''t be replaced');
+select throws_ok($$ select public.edit_trial_fact('f4000000-0000-0000-0000-0000000000b1',
+    'f4000000-0000-0000-0000-0000000000e1', 'endpoints.0.ctrl_value', '"forty"') $$, '22023', null,
+    'a number stays a number');
 select throws_ok($$ select public.edit_trial_fact('f4000000-0000-0000-0000-0000000000b1',
     'f4000000-0000-0000-0000-0000000000e1', 'endpoints.5.exp_value', '1') $$, '22023', null,
     'an edit never invents structure');
@@ -75,7 +87,7 @@ select throws_ok($$ select public.edit_trial_fact('f4000000-0000-0000-0000-00000
     'f4000000-0000-0000-0000-0000000000e1', 'endpoints.0.''x', '1') $$, '22023', null, 'paths are checked');
 select lives_ok($$ insert into public.trial_fact_reviews (team_id, trial_id, path, verified_by)
     values ('f4000000-0000-0000-0000-0000000000b1', 'f4000000-0000-0000-0000-0000000000e1',
-            'enrolment', 'f4000000-0000-0000-0000-0000000000a1') $$, 'Ada verifies a group');
+            'design', 'f4000000-0000-0000-0000-0000000000a1') $$, 'Ada verifies a group');
 
 -- === Bob, another lab ========================================================
 set local request.jwt.claims to '{"sub":"f4000000-0000-0000-0000-0000000000a2"}';

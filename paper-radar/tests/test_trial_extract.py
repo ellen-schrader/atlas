@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from api import trial_extract as te
-from paper_radar.trials.extraction import DesignPart, EnrolmentPart, ResultsPart
 
 # --- Europe PMC ------------------------------------------------------------------
 
@@ -136,37 +135,30 @@ def test_documents_refuse_more_than_the_api_takes(monkeypatch):
 
 # --- asking Claude -----------------------------------------------------------------
 
-
-def _part(cls):
-    """A minimal valid answer for one part."""
-    src = None
-    if cls is DesignPart:
-        return DesignPart(
-            pico={"population": "P", "intervention": "I", "comparator": "C", "outcome": "O"},
-            design={
-                "phase": "Phase III",
-                "randomisation_ratio": "1:1",
-                "blinding": "double-blind",
-                "analysis_population": None,
-                "data_cutoff": None,
-                "source": src,
-            },
-            arms=[],
-            schedule=[],
-            caveats="Design note.",
-        )
-    if cls is ResultsPart:
-        return ResultsPart(endpoints=[], adverse_events=[], context=[], caveats=None)
-    return EnrolmentPart(
-        enrolment={
-            "n_screened": 455,
-            "n_randomised": 333,
-            "n_analysed": 333,
-            "dimensions": [],
-            "source": src,
-        },
-        caveats="Enrolment note.",
-    )
+VALID = {
+    "pico": {"population": "P", "intervention": "I", "comparator": "C", "outcome": "O"},
+    "design": {
+        "phase": "Phase III",
+        "randomisation_ratio": "1:1",
+        "blinding": "double-blind",
+        "analysis_population": None,
+        "data_cutoff": None,
+        "source": None,
+    },
+    "arms": [],
+    "schedule": [],
+    "endpoints": [],
+    "adverse_events": [],
+    "enrolment": {
+        "n_screened": 455,
+        "n_randomised": 333,
+        "n_analysed": 333,
+        "dimensions": [],
+        "source": None,
+    },
+    "context": [],
+    "caveats": "A note.",
+}
 
 
 class _Stream:
@@ -184,26 +176,32 @@ class _Stream:
 
 
 class _Client:
-    def __init__(self, stop_reason="end_turn"):
+    """Answers each request with the next of `answers`: a dict is recorded as
+    the tool call, None means no tool call."""
+
+    def __init__(self, answers, stop_reason="end_turn"):
+        self.answers = list(answers)
         self.calls = []
         self.stop_reason = stop_reason
         self.beta = SimpleNamespace(messages=self)
 
     def stream(self, **kw):
         self.calls.append(kw)
+        answer = self.answers.pop(0)
+        content = (
+            [SimpleNamespace(type="tool_use", name=te.TOOL, id="tu1", input=answer)]
+            if answer is not None
+            else [SimpleNamespace(type="text", text="Here you go")]
+        )
         usage = SimpleNamespace(
             input_tokens=1000,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
             output_tokens=500,
         )
-        part = kw["output_format"]
         return _Stream(
             SimpleNamespace(
-                stop_reason=self.stop_reason,
-                parsed_output=_part(part) if self.stop_reason == "end_turn" else None,
-                usage=usage,
-                model="claude-opus-5-5",
+                stop_reason=self.stop_reason, content=content, usage=usage, model="claude-opus-5-5"
             )
         )
 
@@ -215,29 +213,54 @@ def _with_client(monkeypatch, client):
     monkeypatch.setattr(te, "get_settings", lambda: SimpleNamespace(anthropic_api_key="k"))
 
 
-def test_extract_asks_three_parts_over_one_cached_prefix(monkeypatch):
-    client = _Client()
+def test_extract_records_through_one_tool_call(monkeypatch):
+    client = _Client([VALID])
     _with_client(monkeypatch, client)
     blocks = [
         {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "x"}}
     ]
     result, cost, model = te.extract({}, blocks, ["Document 1: x (paper)"])
 
-    assert [c["output_format"] for c in client.calls] == [DesignPart, ResultsPart, EnrolmentPart]
-    prefixes = [c["messages"][0]["content"][:-1] for c in client.calls]
-    assert prefixes[0] == prefixes[1] == prefixes[2]  # same bytes: the cache hits
-    assert prefixes[0][-1]["cache_control"] == {"type": "ephemeral"}
-    assert all(c["model"] == "claude-opus-5-5" for c in client.calls)
-    assert all(c["fallbacks"] == [{"model": "claude-opus-4-8"}] for c in client.calls)
+    (call,) = client.calls
+    assert call["model"] == "claude-opus-5-5"
+    assert call["fallbacks"] == [{"model": "claude-opus-4-8"}]
+    assert call["tool_choice"] == {"type": "auto"}  # Opus 5.5 can't be forced
+    assert [t["name"] for t in call["tools"]] == [te.TOOL]
+    assert "strict" not in call["tools"][0]  # the grammar limit
+    assert call["messages"][0]["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert result.enrolment.n_randomised == 333
-    assert result.caveats == "Design note. Enrolment note."
     assert model == "claude-opus-5-5"
-    assert cost == pytest.approx(3 * (1000 / 1e6 * 4 + 500 / 1e6 * 20))
+    assert cost == pytest.approx(1000 / 1e6 * 4 + 500 / 1e6 * 20)
+
+
+def test_extract_retries_once_with_the_schema_error(monkeypatch):
+    bad = {**VALID, "design": {**VALID["design"], "blinding": "sort of"}}
+    client = _Client([bad, VALID])
+    _with_client(monkeypatch, client)
+    result, _cost, _model = te.extract({}, [], [])
+    assert result.design.blinding == "double-blind"
+    retry = client.calls[1]["messages"]
+    assert retry[-1]["content"][0]["type"] == "tool_result"
+    assert retry[-1]["content"][0]["is_error"] is True
+    assert "blinding" in retry[-1]["content"][0]["content"]
+
+
+def test_extract_gives_up_after_two_bad_answers(monkeypatch):
+    bad = {**VALID, "arms": "none"}
+    _with_client(monkeypatch, _Client([bad, bad]))
+    with pytest.raises(te.ExtractionError, match="didn't fit"):
+        te.extract({}, [], [])
+
+
+def test_extract_needs_the_tool_call(monkeypatch):
+    _with_client(monkeypatch, _Client([None]))
+    with pytest.raises(te.ExtractionError, match="didn't record"):
+        te.extract({}, [], [])
 
 
 @pytest.mark.parametrize(("stop", "message"), [("refusal", "declined"), ("max_tokens", "cut off")])
 def test_extract_reports_refusals_and_truncation(monkeypatch, stop, message):
-    _with_client(monkeypatch, _Client(stop_reason=stop))
+    _with_client(monkeypatch, _Client([VALID], stop_reason=stop))
     with pytest.raises(te.ExtractionError, match=message):
         te.extract({}, [], [])
 
@@ -249,7 +272,7 @@ def test_cost_counts_cache_reads_cheaply():
         cache_read_input_tokens=1_000_000,
         output_tokens=0,
     )
-    assert te._cost(usage) == pytest.approx(0.4)
+    assert te._cost(usage) == pytest.approx(0.2)  # 0.05 × $4
 
 
 # --- the background run ---------------------------------------------------------------
@@ -308,13 +331,14 @@ def test_run_stores_the_extraction_and_which_documents_it_read(monkeypatch):
         {"a.pdf": b"%PDF-1.7"},
     )
     monkeypatch.setattr(te, "service_client", lambda: svc)
-    _with_client(monkeypatch, _Client())
+    _with_client(monkeypatch, _Client([VALID]))
     te.run("lab", "t1")
     done = svc.updates[-1]
     assert done["extraction_status"] == "done"
     assert done["extraction_sources"] == ["s1"]
     assert done["extraction"]["enrolment"]["n_randomised"] == 333
     assert "trial_fact_reviews" in svc.deletes  # a new extraction replaces the checks
+    assert svc.updates.index(done) == len(svc.updates) - 1  # cleared before "done"
 
 
 # --- the API ---------------------------------------------------------------------------

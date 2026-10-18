@@ -9,7 +9,7 @@ import { useToast } from "@/components/Toast";
 import { ExtractionView } from "@/components/trials/ExtractionView";
 import { TrialSources } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
-import { fetchSources } from "@/lib/extraction";
+import { extractionRunning, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -50,7 +50,10 @@ function Trial() {
     refetchInterval: (q) =>
       q.state.data &&
       (classification(q.state.data.facts, q.state.data.added_at) === "pending" ||
-        q.state.data.facts?.extraction_status === "running")
+        extractionRunning(
+          q.state.data.facts?.extraction_status ?? null,
+          q.state.data.facts?.extraction_started_at ?? null,
+        ))
         ? 5000
         : false,
   });
@@ -165,13 +168,21 @@ function TrialBody({ d }: { d: TrialDetail }) {
       </Section>
 
       <Section title="Data from the papers">
-        <TrialSources trialId={t.id} facts={d.facts} onExtractionChange={refresh} />
+        <TrialSources
+          trialId={t.id}
+          facts={d.facts}
+          papers={d.links
+            .filter((l) => (l.status === "auto" || l.status === "confirmed") && l.papers)
+            .map((l) => ({ id: l.paper_id, title: l.papers?.title ?? "Untitled paper" }))}
+          onExtractionChange={refresh}
+        />
       </Section>
 
       {d.facts?.extraction && (
         <ExtractionView
           trialId={t.id}
           extraction={d.facts.extraction}
+          extractedAt={d.facts.extracted_at}
           sources={(d.facts.extraction_sources ?? []).map(
             (id) => (sources.data ?? []).find((s) => s.id === id) ?? null,
           )}
