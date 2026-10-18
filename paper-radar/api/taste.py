@@ -1,9 +1,9 @@
 """What a person in a lab likes to read: the recommendation signals, shared.
 
-The web app's Discover feed (api/app.py) and the Claude connector (atlas_mcp)
-rank papers the same way from this module, so Claude's "for you" and the app's
-agree. Plain Python on purpose: the MCP server runs without numpy, and the
-vectors involved are a few hundred at most.
+The web app's Discover feed (api/app.py) ranks from this module, and the
+Claude connector (atlas_mcp) is meant to as well, so Claude's "for you" and the
+app's agree. It runs without numpy, as the MCP server does; with numpy (the API)
+the vector maths uses it.
 
 The signals (docs/dashboard.md §3.4), each searched on its own and interleaved:
 
@@ -23,6 +23,11 @@ import re
 from datetime import UTC, datetime
 
 from .merge_suggestions import fold
+
+try:  # the API has numpy; the MCP server's lean install doesn't
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised by forcing np = None in tests
+    np = None
 
 # Engagement weights for the taste centroid. Not all engagement is endorsement:
 # an explicit save or a reaction is a strong "I want more like this"; a plain
@@ -72,7 +77,10 @@ def parse_vec(value: object) -> list[float] | None:
 
 
 def dot(a, b) -> float:
-    return float(sum(x * y for x, y in zip(a, b, strict=False)))
+    """The dot product; 0 for vectors of different lengths (different models)."""
+    if len(a) != len(b):
+        return 0.0
+    return float(sum(x * y for x, y in zip(a, b, strict=True)))
 
 
 def unit(v) -> list[float]:
@@ -119,33 +127,60 @@ def same_person(label: str | None, display_name: str | None) -> bool:
     return len(a) >= 2 and a == b
 
 
+_PAGE = 1000  # PostgREST's default max rows per request
+
+
+def _all_rows(query_for_range) -> list[dict]:
+    """Every row of a query, a page at a time (``query_for_range(start, end)``)."""
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = query_for_range(start, start + _PAGE - 1).execute().data or []
+        rows.extend(page)
+        if len(page) < _PAGE:
+            return rows
+        start += _PAGE
+
+
+def _like_literal(word: str) -> str:
+    """``word`` as a literal inside an ILIKE pattern."""
+    return word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def own_posts(client, user_id: str, team_id: str, display_name: str | None) -> list[dict]:
-    """The caller's posts in the lab, ``{paper_id, posted_at}``: the ones Atlas
-    knows are theirs, plus Teams posts whose sender name is theirs."""
-    mine = (
-        client.table("paper_posts")
-        .select("paper_id, posted_at")
-        .eq("team_id", team_id)
-        .eq("posted_by", user_id)
-        .execute()
-        .data
-        or []
+    """The caller's posts in the lab, ``{paper_id, posted_at, teams}``: the ones
+    Atlas knows are theirs, plus Teams posts whose sender name is theirs
+    (``teams`` true). Only rows carrying the longest word of their name are
+    fetched for the name match, so a big Teams import isn't read whole."""
+    mine = _all_rows(
+        lambda a, b: (
+            client.table("paper_posts")
+            .select("paper_id, posted_at")
+            .eq("team_id", team_id)
+            .eq("posted_by", user_id)
+            .order("paper_id")
+            .range(a, b)
+        )
     )
-    if not display_name:
-        return mine
-    unattributed = (
-        client.table("paper_posts")
-        .select("paper_id, posted_at, posted_by_label")
-        .eq("team_id", team_id)
-        .is_("posted_by", "null")
-        .not_.is_("posted_by_label", "null")
-        .execute()
-        .data
-        or []
+    out = [{**r, "teams": False} for r in mine]
+    words = (display_name or "").split()
+    if len(words) < 2:
+        return out
+    longest = max(words, key=len)
+    named = _all_rows(
+        lambda a, b: (
+            client.table("paper_posts")
+            .select("paper_id, posted_at, posted_by_label")
+            .eq("team_id", team_id)
+            .is_("posted_by", "null")
+            .ilike("posted_by_label", f"%{_like_literal(longest)}%")
+            .order("paper_id")
+            .range(a, b)
+        )
     )
-    return mine + [
-        {"paper_id": r["paper_id"], "posted_at": r["posted_at"]}
-        for r in unattributed
+    return out + [
+        {"paper_id": r["paper_id"], "posted_at": r["posted_at"], "teams": True}
+        for r in named
         if same_person(r.get("posted_by_label"), display_name)
     ]
 
@@ -159,13 +194,16 @@ def engagement_weights(
     team_id: str,
     anchors: dict[str, str] | None = None,
     display_name: str | None = None,
+    teams_posts: set[str] | None = None,
 ) -> dict[str, float]:
     """Per-paper positive-interest weight for the user in this lab, blending signal
     strength (save > post = reaction > comment > read) with recency decay.
 
     Pass ``anchors`` to also collect, from the same rows, each paper's strongest
     kind of engagement for the recommendation reasons (see ANCHOR_RANK). Pass
-    ``display_name`` to count the Teams posts sent under it (see same_person)."""
+    ``display_name`` to count the Teams posts sent under it (see same_person),
+    and ``teams_posts`` to collect those papers' ids: the recommendation RPCs
+    can't tell they are the caller's, so they are passed as p_exclude."""
     now = datetime.now(UTC)
     weights: dict[str, float] = {}
 
@@ -181,6 +219,8 @@ def engagement_weights(
     for p in own_posts(client, user_id, team_id, display_name):
         add(p["paper_id"], W_POSTED * recency_decay(parse_ts(p.get("posted_at")), now))
         anchor(p["paper_id"], "similar_posted")
+        if p["teams"] and teams_posts is not None:
+            teams_posts.add(p["paper_id"])
     for r in (
         client.table("reactions")
         .select("paper_id, emoji, created_at")
@@ -239,6 +279,21 @@ def engagement_weights(
     return weights
 
 
+def _weighted_mean_unit(items: list[tuple[float, list[float]]]) -> list[float]:
+    """The unit vector along the weighted mean of ``items`` (weight, vector)."""
+    wsum = sum(w for w, _ in items)
+    if np is not None:
+        acc = np.zeros(len(items[0][1]))
+        for w, v in items:
+            acc += w * np.asarray(v)
+        return unit((acc / wsum).tolist())
+    acc_l = [0.0] * len(items[0][1])
+    for w, v in items:
+        for i, x in enumerate(v):
+            acc_l[i] += w * x
+    return unit([a / wsum for a in acc_l])
+
+
 def blend_taste(
     profile_vec: list[float] | None,
     weights: dict[str, float],
@@ -262,26 +317,26 @@ def blend_taste(
         loaded.setdefault("titles", {})
     profile = unit(profile_vec) if profile_vec is not None else None
 
-    centroid = None
-    n_engaged = 0
-    acc: list[float] | None = None
-    wsum = 0.0
+    # A vector of another length is from another embedding model (mid-migration):
+    # skip it rather than let zip() quietly truncate everything to fit.
+    dim = len(profile) if profile is not None else None
+    rows: list[tuple[str, float, list[float]]] = []
     for r in papers:
         w = weights.get(r["id"], 0.0)
         raw = parse_vec(r.get("embedding"))
         if w <= 0 or not raw:
             continue
+        if dim is None:
+            dim = len(raw)
+        if len(raw) != dim:
+            continue
         v = unit(raw)
+        rows.append((r["id"], w, v))
         if loaded is not None:
             loaded["vecs"][r["id"]] = v
             loaded["titles"][r["id"]] = r.get("title")
-        acc = (
-            [w * x for x in v] if acc is None else [a + w * x for a, x in zip(acc, v, strict=False)]
-        )
-        wsum += w
-        n_engaged += 1
-    if acc is not None and wsum > 0:
-        centroid = unit([a / wsum for a in acc])
+    n_engaged = len(rows)
+    centroid = _weighted_mean_unit([(w, v) for _, w, v in rows]) if rows else None
 
     if loaded is not None:
         loaded["profile_q"] = profile

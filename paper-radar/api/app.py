@@ -1514,41 +1514,58 @@ _recency_decay = taste.recency_decay
 _engagement_weights = taste.engagement_weights
 
 
-def _display_name(uc, user_id: str) -> str | None:
-    """The caller's display name, which their Teams posts carry as text."""
-    rows = uc.table("profiles").select("display_name").eq("id", user_id).limit(1).execute().data
-    return (rows[0].get("display_name") or None) if rows else None
+def _profile_row(uc, user_id: str) -> dict | None:
+    """The caller's profile: what taste and the reasons read from it, and the
+    display name their Teams posts carry as text. Read once per request."""
+    rows = (
+        uc.table("profiles")
+        .select("display_name, profile_vec, profile_md, profile_md_us, interests")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+# Ids per `in.(…)` filter: PostgREST takes them in the URL, and a user credited
+# with hundreds of posts would otherwise build one too long for the gateway.
+_IN_CHUNK = 150
+
+
+def _papers_by_id(uc, ids: list[str], columns: str) -> list[dict]:
+    rows: list[dict] = []
+    for i in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[i : i + _IN_CHUNK]
+        rows.extend(uc.table("papers").select(columns).in_("id", chunk).execute().data or [])
+    return rows
 
 
 def _taste_vector(
-    uc, user_id: str, weights: dict[str, float], loaded: dict | None = None
+    uc,
+    user_id: str,
+    weights: dict[str, float],
+    loaded: dict | None = None,
+    profile: dict | None = None,
 ) -> list[float] | None:
     """Per-user taste vector (taste.blend_taste) from the caller's profile and
     ``weights`` (the caller's `_engagement_weights`, computed once per request).
+    Pass ``profile`` (the caller's `_profile_row`) if it has been read already.
 
     Pass ``loaded`` (a dict) to keep what was fetched for the recommendation
     reasons, instead of fetching it again: "vecs" (paper id → unit vector),
     "titles", "profile_md", "profile_md_us", "follows", and the per-signal query vectors
     "profile_q" / "engagement_q" that Discover searches with."""
-    prof = (
-        uc.table("profiles")
-        .select("profile_vec, profile_md, profile_md_us, interests")
-        .eq("id", user_id)
-        .limit(1)
-        .execute().data or []
-    )
+    if profile is None:
+        profile = _profile_row(uc, user_id)
+    prof = [profile] if profile else []
     if loaded is not None:
         loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
         # The profile in American spelling (a computed column over us_spelling),
         # so "tumour microenvironment" names tumor-microenvironment too.
         loaded["profile_md_us"] = (prof[0].get("profile_md_us") or "") if prof else ""
         loaded["follows"] = _follows(prof[0] if prof else None)
-    papers = (
-        uc.table("papers").select("id, title, embedding").in_("id", list(weights))
-        .execute().data or []
-        if weights
-        else []
-    )
+    papers = _papers_by_id(uc, list(weights), "id, title, embedding")
     profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
     return taste.blend_taste(profile_vec, weights, papers, loaded)
 
@@ -1687,7 +1704,12 @@ _followed_hits = taste.followed_hits
 
 
 def _recency_fallback(
-    uc, team_id: str, seen: set[str], limit: int, follows: list[str] | None = None
+    uc,
+    team_id: str,
+    seen: set[str],
+    limit: int,
+    follows: list[str] | None = None,
+    exclude: frozenset[str] = frozenset(),
 ) -> RecommendationsResponse:
     """Cold start (no profile, no engagement): recent unseen posts, newest first —
     led by the newest posts carrying a followed tag, however old, if the caller
@@ -1695,8 +1717,9 @@ def _recency_fallback(
 
     ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
     this server-side; here it comes from the request's `_engagement_weights` keys —
-    every engagement row gets a nonzero weight, so the keys are exactly the seen set)."""
-    lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit, frozenset(seen))]
+    every engagement row gets a nonzero weight, so the keys are exactly the seen set).
+    ``exclude``: the caller's Teams posts, which recommend_tagged can't tell are theirs."""
+    lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit, exclude)]
     rows = (
         uc.table("paper_posts")
         .select("id, paper_id, posted_at")
@@ -1856,17 +1879,13 @@ _DISCOVER_SOURCES = taste.DISCOVER_SOURCES
 def _rpc_recommend(
     uc, team_id: str, query: list[float], limit: int, exclude: frozenset[str] = frozenset()
 ) -> list[tuple[str, float]]:
-    """recommend_papers, minus the papers in ``exclude`` (asked for that many
-    more, so dropping them doesn't cost slots)."""
-    ask = limit + min(len(exclude), 50)
-    rows = (
-        uc.rpc("recommend_papers", {"p_team": team_id, "p_query": query, "p_limit": ask})
-        .execute()
-        .data
-        or []
-    )
-    kept = [r for r in rows if r.get("paper_id") not in exclude]
-    return [(r["post_id"], r["similarity"]) for r in kept][:limit]
+    """recommend_papers, leaving out the papers in ``exclude`` (in the database,
+    before its candidate pool is cut, so nobody else's ranking moves)."""
+    params = {"p_team": team_id, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = uc.rpc("recommend_papers", params).execute().data or []
+    return [(r["post_id"], r["similarity"]) for r in rows]
 
 
 def _rpc_tagged(
@@ -1880,21 +1899,14 @@ def _rpc_tagged(
     """recommend_tagged: unseen posts carrying a followed tag — nearest to
     ``query`` first, or newest first without one. Only tagged posts are ranked,
     so a followed tag far from the caller's other interests still surfaces.
-    Papers in ``exclude`` are dropped, as in _rpc_recommend."""
+    Papers in ``exclude`` are left out, as in _rpc_recommend."""
     if not follows:
         return []
-    ask = limit + min(len(exclude), 50)
-    rows = (
-        uc.rpc(
-            "recommend_tagged",
-            {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": ask},
-        )
-        .execute()
-        .data
-        or []
-    )
-    kept = [r for r in rows if r.get("paper_id") not in exclude]
-    return [(r["post_id"], r.get("similarity") or 0.0) for r in kept][:limit]
+    params = {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = uc.rpc("recommend_tagged", params).execute().data or []
+    return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
 
 
 def _discover_sources(
@@ -1903,9 +1915,9 @@ def _discover_sources(
     """The caller's signals, each searched on its own: post ids with similarity,
     best first. A signal the caller doesn't have is simply absent.
 
-    ``exclude`` is every paper the caller has engaged with. The RPCs already
-    drop most of them, but not a paper they posted from Teams: that post has no
-    user id, only their name (see taste.own_posts)."""
+    ``exclude`` is the papers the caller posted from Teams. The RPCs drop the
+    rest of their engagement themselves, but a Teams post has no user id, only
+    their name (see taste.own_posts)."""
     profile_q = loaded.get("profile_q")
     engagement_q = loaded.get("engagement_q")
     follows: list[str] = loaded.get("follows") or []
@@ -1946,17 +1958,25 @@ def recommendations(
     uc = user_client(token)
     anchors: dict[str, str] = {}
     loaded: dict = {}
+    profile = _profile_row(uc, user_id)
+    teams_posts: set[str] = set()
     weights = _engagement_weights(
-        uc, user_id, team_id, anchors, display_name=_display_name(uc, user_id)
+        uc,
+        user_id,
+        team_id,
+        anchors,
+        display_name=(profile or {}).get("display_name"),
+        teams_posts=teams_posts,
     )
-    taste_vec = _taste_vector(uc, user_id, weights, loaded)
+    taste_vec = _taste_vector(uc, user_id, weights, loaded, profile=profile)
+    exclude = frozenset(teams_posts)
 
     if scope == "reading_list":
         return _reading_list_ranked(uc, user_id, team_id, taste_vec, limit)
 
     if taste_vec is None:
         follows = loaded.get("follows") or []
-        result = _recency_fallback(uc, team_id, set(weights), limit, follows)
+        result = _recency_fallback(uc, team_id, set(weights), limit, follows, exclude)
         try:
             _attach_reasons(
                 result, _new_reasons(uc, user_id, [r.post for r in result.results], follows)
@@ -1965,7 +1985,7 @@ def recommendations(
             log.warning("recommendation reasons failed for %s: %s", user_id, exc)
         return result
 
-    sources = _discover_sources(uc, team_id, loaded, limit, frozenset(weights))
+    sources = _discover_sources(uc, team_id, loaded, limit, exclude)
     order, sims, origin = _interleave(sources, limit)
     result = _hydrate(uc, order, sims, cold=False)
     # Best-effort: a failure to explain must not cost the recommendations.

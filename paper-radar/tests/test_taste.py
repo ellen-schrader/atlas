@@ -41,6 +41,18 @@ class _Query:
     def in_(self, *_a, **_k):
         return self
 
+    def ilike(self, col, pattern):
+        needle = pattern.strip("%").lower()
+        self._rows = [r for r in self._rows if needle in (r.get(col) or "").lower()]
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def range(self, a, b):
+        self._rows = self._rows[a : b + 1]
+        return self
+
     def execute(self):
         return type("Result", (), {"data": self._rows})()
 
@@ -95,7 +107,12 @@ def _posts():
 def test_papers_you_posted_count_including_your_teams_posts():
     client = _Client(paper_posts=_posts())
     anchors: dict[str, str] = {}
-    weights = taste.engagement_weights(client, "u1", "t1", anchors, display_name="Ellen Schrader")
+    teams: set[str] = set()
+    weights = taste.engagement_weights(
+        client, "u1", "t1", anchors, display_name="Ellen Schrader", teams_posts=teams
+    )
+    # Only the Teams one needs naming to the RPCs; they know posted_by themselves.
+    assert teams == {"teams-mine"}
     assert weights == {
         "mine": pytest.approx(taste.W_POSTED),
         "teams-mine": pytest.approx(taste.W_POSTED),
@@ -168,6 +185,31 @@ def test_blend_matches_the_numpy_implementation(with_profile, n_papers):
         assert got is None
     else:
         assert got == pytest.approx(want.tolist(), abs=1e-9)
+
+
+@pytest.mark.parametrize("n_papers", [1, 5])
+def test_blend_is_the_same_without_numpy(monkeypatch, n_papers):
+    rng = random.Random(n_papers)
+    papers = [
+        {"id": f"p{i}", "embedding": [rng.uniform(-1, 1) for _ in range(8)]}
+        for i in range(n_papers)
+    ]
+    weights = {p["id"]: rng.uniform(0.1, 2.0) for p in papers}
+    with_np = taste.blend_taste([1.0] * 8, weights, papers)
+    monkeypatch.setattr(taste, "np", None)
+    assert taste.blend_taste([1.0] * 8, weights, papers) == pytest.approx(with_np, abs=1e-9)
+
+
+def test_vectors_from_another_model_are_skipped_not_truncated():
+    papers = [
+        {"id": "ok", "embedding": [0.0, 1.0]},
+        {"id": "other-model", "embedding": [1.0, 0.0, 0.0]},
+    ]
+    loaded: dict = {}
+    taste.blend_taste(None, {"ok": 1.0, "other-model": 1.0}, papers, loaded)
+    assert loaded["engagement_q"] == pytest.approx([0.0, 1.0])
+    assert set(loaded["vecs"]) == {"ok"}
+    assert taste.dot([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0
 
 
 def test_blend_keeps_what_the_reasons_need():

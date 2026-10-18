@@ -7,7 +7,7 @@
 -- Mirrors rls_isolation_test.sql (same JWT-claims trick to switch auth context).
 
 begin;
-select plan(9);
+select plan(10);
 
 -- A constant 1024-dim unit-ish vector for both the stored embeddings and the
 -- query, so every embedded paper ties on similarity and the test isolates the
@@ -125,6 +125,15 @@ select is(
      where paper_id = '50000000-0000-0000-0000-000000000005'),
     0,
     'a paper with no embedding is never recommended');
+
+-- A paper Ada posted from Teams carries only her name; the app names it in
+-- p_exclude (20261019100000), and it is left out like any other.
+select is(
+    (select array_agg(paper_id order by paper_id) from public.recommend_papers(
+        '11111111-1111-1111-1111-111111111111', pg_temp.qv(), 20,
+        array['40000000-0000-0000-0000-000000000004']::uuid[])),
+    array['70000000-0000-0000-0000-000000000007']::uuid[],
+    'a paper named in p_exclude is not recommended');
 
 -- A paper Ada posted herself is never recommended back to her.
 select is(

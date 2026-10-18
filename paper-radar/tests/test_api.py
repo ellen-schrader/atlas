@@ -731,6 +731,9 @@ class _FakeTable:
     def limit(self, *_a, **_k):
         return self
 
+    def range(self, *_a, **_k):
+        return self
+
     def execute(self):
         return type("Result", (), {"data": self._rows})()
 
@@ -1118,21 +1121,27 @@ def test_unreadable_tokens_are_left_to_supabase():
     assert _is_connector_token(_jwt({"client_id": None})) is False
 
 
-def test_discover_drops_papers_you_posted_from_teams():
+def test_discover_asks_the_database_to_leave_out_your_teams_posts():
     """recommend_papers drops posts with your user id, but a Teams post carries
-    only your name, so the app drops those papers itself — without losing slots."""
-    from api.app import _rpc_recommend
+    only your name, so the app names those papers. The limit is unchanged: the
+    RPC's candidate pool is a multiple of it, so raising it would move everyone's
+    ranking."""
+    from api.app import _rpc_recommend, _rpc_tagged
 
-    uc = _FakeClient(
-        **{
-            "rpc:recommend_papers": [
-                {"post_id": "a", "paper_id": "pa", "similarity": 0.9},
-                {"post_id": "mine", "paper_id": "teams-mine", "similarity": 0.8},
-                {"post_id": "b", "paper_id": "pb", "similarity": 0.7},
-            ]
-        }
+    calls: list[tuple[str, dict]] = []
+
+    class Recorder(_FakeClient):
+        def rpc(self, name, params=None):
+            calls.append((name, params))
+            return super().rpc(name, params)
+
+    uc = Recorder()
+    _rpc_recommend(uc, "t1", [1.0], 12, frozenset({"b", "a"}))
+    _rpc_tagged(uc, "t1", ["x"], None, 12, frozenset({"a"}))
+    _rpc_recommend(uc, "t1", [1.0], 12)
+    assert calls[0] == (
+        "recommend_papers",
+        {"p_team": "t1", "p_query": [1.0], "p_limit": 12, "p_exclude": ["a", "b"]},
     )
-    assert _rpc_recommend(uc, "t1", [1.0], 2, frozenset({"teams-mine"})) == [
-        ("a", 0.9),
-        ("b", 0.7),
-    ]
+    assert calls[1][1]["p_exclude"] == ["a"] and calls[1][1]["p_limit"] == 12
+    assert "p_exclude" not in calls[2][1]  # nothing to leave out: the old call
