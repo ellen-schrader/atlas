@@ -632,6 +632,7 @@ function EditedLine({ paper }: { paper: Paper }) {
   const { data: editor, isLoading } = useQuery({
     queryKey: ["paper-editor", paper.id, paper.edited_at],
     staleTime: 5 * 60_000,
+    retry: 1,
     queryFn: async () => {
       const { data, error } = await supabase
         .rpc("paper_editor", { p_paper: paper.id })
@@ -641,7 +642,8 @@ function EditedLine({ paper }: { paper: Paper }) {
     },
   });
   if (isLoading) return null;
-  // No row: a job re-resolved it, not a person.
+  // No row: no person made the last edit. A failed lookup also lands here, and
+  // the line still shows when, just not who.
   const who = !editor
     ? ""
     : editor.is_you

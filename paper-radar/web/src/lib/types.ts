@@ -36,16 +36,15 @@ export interface Paper {
   data_url: string | null;
   enriched_at: string | null;
   /** Last hand correction or re-resolve. Also the concurrency token an edit
-   *  must send back. Who made it is not a column members can read: it would
-   *  identify someone in another lab (paper_editor() answers for the card). */
+   *  must send back. Who made it lives where members cannot read it, since it
+   *  would identify someone in another lab; paper_editor() answers for the card. */
   edited_at: string | null;
   /** Fields a person corrected by hand; the resolver never overwrites these. */
   edited_fields: string[];
 }
 
 /** The `papers` columns a Paper holds, for embeds like `papers(${PAPER_COLUMNS})`.
- *  Never `papers(*)`: it would drag the embedding along, and members may not read
- *  every column, so `*` is refused outright. */
+ *  Never `papers(*)`: it would drag the 1024-dim embedding into every load. */
 export const PAPER_COLUMNS =
   "id, url, doi, title, authors, abstract, venue, year, keywords, tags, code_url, data_url, enriched_at, edited_at, edited_fields";
 

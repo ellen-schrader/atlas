@@ -3,7 +3,7 @@
 -- (issue #133, 20261018200000_cross_lab_leaks.sql). Run with `supabase test db`.
 
 begin;
-select plan(22);
+select plan(24);
 
 -- Ada in lab L1 corrected the preprint, merged it into the published paper and
 -- corrected that too. Cy is in her lab. Bo in lab L2 holds only the published
@@ -55,13 +55,14 @@ select public.apply_paper_edit('e8000000-0000-0000-0000-0000000000c3', 'e8000000
 
 -- === nothing else is hidden by accident ======================================
 
--- A column added later starts hidden from members. If one of these fails after
--- your migration, grant the new column to authenticated — or, if it really
--- says who in another lab did something, add it here and in the migration.
+-- A column added to paper_edits or paper_aliases later starts hidden from
+-- members. If one of these fails after your migration, grant the new column to
+-- authenticated — or, if it really says who in another lab did something, add
+-- it here and in 20261018200000_cross_lab_leaks.sql.
 select is((select string_agg(attname, ', ' order by attname) from pg_attribute
             where attrelid = 'public.papers'::regclass and attnum > 0 and not attisdropped
               and not has_column_privilege('authenticated', attrelid, attname, 'SELECT')),
-    'edited_by', 'members can read every papers column except edited_by');
+    null, 'members can read every papers column');
 select is((select string_agg(attname, ', ' order by attname) from pg_attribute
             where attrelid = 'public.paper_edits'::regclass and attnum > 0 and not attisdropped
               and not has_column_privilege('authenticated', attrelid, attname, 'SELECT')),
@@ -96,10 +97,11 @@ select throws_ok($$ select * from public.paper_aliases $$, '42501', null,
 select is((select venue || ' ' || (edited_at is not null)::text from public.papers
             where id = 'e8000000-0000-0000-0000-0000000000c2'),
     'Nature Methods true', 'the paper and when it was edited are readable');
-select throws_ok($$ select edited_by from public.papers $$, '42501', null,
-    'who last edited the paper is not readable');
-select throws_ok($$ select * from public.papers $$, '42501', null,
-    'select * on papers is refused');
+select is((select edited_by from public.papers where id = 'e8000000-0000-0000-0000-0000000000c2'), null,
+    'papers.edited_by is no longer written');
+select lives_ok($$ select * from public.papers $$, 'select * on papers still works');
+select throws_ok($$ select * from public.paper_editors $$, '42501', null,
+    'who edited each paper is not readable');
 
 -- The card's "Edited … outside your lab".
 select is((select row(is_you, in_your_lab, display_name)::text
@@ -133,12 +135,14 @@ select is((select row(is_you, in_your_lab, display_name)::text
 reset role;
 set local role service_role;
 
+select is((select edited_by from public.paper_editors where paper_id = 'e8000000-0000-0000-0000-0000000000c2'),
+    'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the edit recorded who made it');
 select is((select merged_by from public.paper_aliases
             where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
     'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the merge recorded who confirmed it');
-select is((select snapshot ->> 'edited_by' from public.paper_aliases
+select is((select snapshot ->> 'title' from public.paper_aliases
             where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
-    'e8000000-0000-0000-0000-0000000000a1', 'the service role still reads the snapshot');
+    'Preprint, fixed', 'the service role still reads the snapshot');
 select is((select edited_by from public.paper_edits
             where paper_id = 'e8000000-0000-0000-0000-0000000000c2' and after ? 'title'),
     'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the service role still reads who edited');
