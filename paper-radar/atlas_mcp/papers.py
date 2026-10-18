@@ -166,6 +166,11 @@ DIGEST_GUIDE = (
     "per paper with its linked title. Keep it skimmable, and don't remark on papers "
     "that have no abstract."
 )
+# A later page carries no picks: say only what applies to it.
+DIGEST_PAGE_GUIDE = (
+    "These are more of the digest's papers: group them by theme with the earlier "
+    "ones, one short line per paper with its linked title."
+)
 
 
 @audited
@@ -233,7 +238,9 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
     if first_page:
         parts += ["", f"{d['n_comments']} new comment(s) across the lab."]
     body = _untrusted("lab activity", "\n".join(parts))
-    return f"{body}\n\n{DIGEST_GUIDE}" if papers else body
+    if not papers:
+        return body
+    return f"{body}\n\n{DIGEST_GUIDE if first_page else DIGEST_PAGE_GUIDE}"
 
 
 @audited

@@ -70,10 +70,16 @@ DISCOVER_SOURCES = ("profile", "tags", "engagement")
 
 
 def parse_vec(value: object) -> list[float] | None:
-    """PostgREST returns a `vector` column as a JSON string; normalize to a list."""
-    if value is None:
+    """PostgREST returns a `vector` column as a JSON string; normalize to a list.
+    None for a missing or unreadable one."""
+    if value is None or value == "":
         return None
-    return json.loads(value) if isinstance(value, str) else list(value)  # type: ignore[arg-type]
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return list(value)  # type: ignore[call-overload]
 
 
 def dot(a, b) -> float:

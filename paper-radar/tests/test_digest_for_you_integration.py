@@ -134,7 +134,9 @@ def test_for_you_picks_by_your_teams_post_and_followed_tag(world):
     with lab.act_as(world["token"], world["ada"]):
         d = lab.digest({"id": world["team"], "name": "For-you lab"}, days=7)
     picks = {h["paper_id"]: h["reason"] for h in d["for_you"]}
-    assert set(picks) == {p["close1"], p["close2"], p["tagged"]}
+    # Four candidates, so each signal's top quarter is its single best: the
+    # closest paper by her posts, and the paper carrying her followed tag.
+    assert set(picks) == {p["close1"], p["tagged"]}
     # Close to the paper Ada posted from Teams, and said so, naming it.
     assert picks[p["close1"]]["kind"] == "similar_posted"
     assert picks[p["close1"]]["ref_id"] == p["ada_teams"]

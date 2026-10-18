@@ -603,3 +603,31 @@ def test_paper_results_end_with_the_link_reminder(monkeypatch):
     # No papers, no reminder about "these papers".
     quiet = _drive_digest(monkeypatch, n_papers=0, offset=0, page=0)
     assert "link its title" not in quiet
+
+
+def test_every_engagement_kind_has_words():
+    """A kind added to api/taste.ANCHOR_RANK must get its "which you …" words here,
+    or its reasons would quietly read as "In line with your activity"."""
+    pytest.importorskip("mcp")
+    from api import taste
+    from atlas_mcp import tools
+
+    assert set(tools._ANCHOR_VERBS) == set(taste.ANCHOR_RANK)
+
+
+def test_later_pages_dont_ask_for_picks(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=150, offset=100, page=50)
+    assert "How to present this digest" not in out
+    assert "group them by theme with the earlier ones" in out
+
+
+def test_top_share_keeps_each_signals_best_quarter_above_the_floor():
+    pytest.importorskip("mcp")
+    from atlas_mcp import lab as L
+
+    # Twenty papers 0.30..0.68: the top quarter is the five best, all above the floor.
+    scored = [(f"p{i}", 0.30 + 0.02 * i) for i in range(20)]
+    assert [pid for pid, _ in L._top_share(scored)] == ["p19", "p18", "p17", "p16", "p15"]
+    # A quiet window of unrelated papers yields nothing, however it ranks.
+    assert L._top_share([("a", 0.2), ("b", 0.3), ("c", 0.25), ("d", 0.1)]) == []
+    assert L._top_share([]) == []
