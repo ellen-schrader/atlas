@@ -1532,17 +1532,7 @@ def _profile_row(uc, user_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
-# Ids per `in.(…)` filter: PostgREST takes them in the URL, and a user credited
-# with hundreds of posts would otherwise build one too long for the gateway.
-_IN_CHUNK = 150
-
-
-def _papers_by_id(uc, ids: list[str], columns: str) -> list[dict]:
-    rows: list[dict] = []
-    for i in range(0, len(ids), _IN_CHUNK):
-        chunk = ids[i : i + _IN_CHUNK]
-        rows.extend(uc.table("papers").select(columns).in_("id", chunk).execute().data or [])
-    return rows
+_papers_by_id = taste.papers_by_id
 
 
 def _taste_vector(
@@ -1696,12 +1686,7 @@ def _reading_list_ranked(
     return _hydrate(uc, order, sims, cold=False)
 
 
-def _follows(profile: dict | None) -> list[str]:
-    """The tags the caller follows (profiles.interests), as clean strings."""
-    raw = (profile or {}).get("interests") or []
-    if not isinstance(raw, list):
-        return []
-    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+_follows = taste.follows_of
 
 
 _followed_hits = taste.followed_hits
@@ -1777,12 +1762,6 @@ def _source_reasons(
     recommendations' embeddings are read here."""
     if not posts:
         return {}
-    vecs: dict[str, np.ndarray] = loaded.get("vecs", {})
-    titles: dict[str, str | None] = loaded.get("titles", {})
-    follows: list[str] = loaded.get("follows") or []
-    profile_md = loaded.get("profile_md") or ""
-    profile_md_us = loaded.get("profile_md_us") or ""
-
     by_engagement = [p["papers"]["id"] for p in posts if source.get(p["id"]) == "engagement"]
     rec_vecs = (
         {
@@ -1796,51 +1775,20 @@ def _source_reasons(
         if by_engagement
         else {}
     )
-    candidates = [
-        (kind, pid, titles[pid], vecs[pid])
-        for pid, kind in anchors.items()
-        # An untitled anchor can't be named on the card.
-        if pid in vecs and titles.get(pid)
-    ]
-
-    def profile_reason(post: dict) -> dict:
-        tags = post.get("tags") or post["papers"].get("tags") or []
-        # Either spelling: stored tags keep theirs, so a UK-spelled profile must
-        # still name a UK-spelled tag, and name a US-spelled one via profile_md_us.
-        found = set(_profile_tags(profile_md, tags)) | set(_profile_tags(profile_md_us, tags))
-        hits = [t for t in tags if t in found]
-        return {
-            "kind": "profile",
-            "ref_id": None,
-            "ref_label": hits[0] if hits else "",
-            "extra_labels": hits[1:2],
-        }
-
-    reasons: dict[str, dict] = {}
-    for post in posts:
-        pid = post["papers"]["id"]
-        kind = source.get(post["id"])
-        if kind == "engagement":
-            reason = (_pick_reason(rec_vecs[pid], candidates) if pid in rec_vecs else None) or {
-                "kind": "engagement",
-                "ref_id": None,
-                "ref_label": "",
-            }
-        elif kind == "tags":
-            reason = _tag_reason(post, follows) or profile_reason(post)
-        else:
-            reason = profile_reason(post)
-        reasons[pid] = reason
-    return reasons
+    candidates = taste.anchor_candidates(anchors, loaded)
+    return {
+        post["papers"]["id"]: taste.reason_for(
+            source.get(post["id"]) or "profile",
+            post,
+            rec_vecs.get(post["papers"]["id"]),
+            candidates,
+            loaded,
+        )
+        for post in posts
+    }
 
 
-def _tag_reason(post: dict, follows: list[str]) -> dict | None:
-    """'Tagged X (and Y), which you follow' — certain, so it outranks the profile
-    text match; a close engaged paper is still more specific and comes first."""
-    hits = _followed_hits(post, follows)
-    if not hits:
-        return None
-    return {"kind": "tag", "ref_id": None, "ref_label": hits[0], "extra_labels": hits[1:2]}
+_tag_reason = taste.tag_reason
 
 
 def _new_reasons(
@@ -1880,61 +1828,9 @@ def _attach_reasons(result: RecommendationsResponse, reasons: dict[str, dict]) -
 _DISCOVER_SOURCES = taste.DISCOVER_SOURCES
 
 
-def _rpc_recommend(
-    uc, team_id: str, query: list[float], limit: int, exclude: frozenset[str] = frozenset()
-) -> list[tuple[str, float]]:
-    """recommend_papers, leaving out the papers in ``exclude`` (in the database,
-    before its candidate pool is cut, so nobody else's ranking moves)."""
-    params = {"p_team": team_id, "p_query": query, "p_limit": limit}
-    if exclude:
-        params["p_exclude"] = sorted(exclude)
-    rows = uc.rpc("recommend_papers", params).execute().data or []
-    return [(r["post_id"], r["similarity"]) for r in rows]
-
-
-def _rpc_tagged(
-    uc,
-    team_id: str,
-    follows: list[str],
-    query: list[float] | None,
-    limit: int,
-    exclude: frozenset[str] = frozenset(),
-) -> list[tuple[str, float]]:
-    """recommend_tagged: unseen posts carrying a followed tag — nearest to
-    ``query`` first, or newest first without one. Only tagged posts are ranked,
-    so a followed tag far from the caller's other interests still surfaces.
-    Papers in ``exclude`` are left out, as in _rpc_recommend."""
-    if not follows:
-        return []
-    params = {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit}
-    if exclude:
-        params["p_exclude"] = sorted(exclude)
-    rows = uc.rpc("recommend_tagged", params).execute().data or []
-    return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
-
-
-def _discover_sources(
-    uc, team_id: str, loaded: dict, limit: int, exclude: frozenset[str] = frozenset()
-) -> dict[str, list[tuple[str, float]]]:
-    """The caller's signals, each searched on its own: post ids with similarity,
-    best first. A signal the caller doesn't have is simply absent.
-
-    ``exclude`` is the papers the caller posted from Teams. The RPCs drop the
-    rest of their engagement themselves, but a Teams post has no user id, only
-    their name (see taste.own_posts)."""
-    profile_q = loaded.get("profile_q")
-    engagement_q = loaded.get("engagement_q")
-    follows: list[str] = loaded.get("follows") or []
-    sources: dict[str, list[tuple[str, float]]] = {}
-    if profile_q is not None:
-        sources["profile"] = _rpc_recommend(uc, team_id, profile_q, limit, exclude)
-    if engagement_q is not None:
-        sources["engagement"] = _rpc_recommend(uc, team_id, engagement_q, limit, exclude)
-    if follows:
-        # Nearest to the profile if there is one, else to engagement.
-        query = profile_q if profile_q is not None else engagement_q
-        sources["tags"] = _rpc_tagged(uc, team_id, follows, query, limit, exclude)
-    return sources
+_rpc_recommend = taste.rpc_recommend
+_rpc_tagged = taste.rpc_tagged
+_discover_sources = taste.discover_sources
 
 
 _interleave = taste.interleave

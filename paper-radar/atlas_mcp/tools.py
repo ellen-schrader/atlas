@@ -240,22 +240,85 @@ def _excerpt(text: str, limit: int = _EXCERPT_CHARS) -> tuple[str, bool]:
     return cut.rstrip(" ,;:") + "…", True
 
 
-def _format_digest_hit(h: dict) -> str:
-    """One paper for the digest: the citation block, the poster's note, and an
-    abstract excerpt — enough to summarise the lab's reading without a get_paper
-    call per paper."""
-    lines = [_format_hit(h)]
+# The engagement that names a "Similar to X" reason (api/taste.ANCHOR_RANK).
+_ANCHOR_VERBS = {
+    "similar_saved": "you saved",
+    "similar_posted": "you shared",
+    "similar_reacted": "you reacted to",
+    "similar_discussed": "you discussed",
+    "similar_read": "you read",
+    "similar_reading": "you are reading",
+}
+
+
+def _reason_text(reason: dict | None) -> str | None:
+    """Why a paper was picked for you, in words (api/taste.reason_for)."""
+    if not reason:
+        return None
+    kind = reason.get("kind")
+    label = reason.get("ref_label") or ""
+    extra = reason.get("extra_labels") or []
+    named = " and ".join([label, *extra]) if label else ""
+    if kind in _ANCHOR_VERBS and reason.get("ref_id"):
+        ref = _paper_title_link({"id": reason["ref_id"], "title": label})
+        return f"Similar to {ref}, which {_ANCHOR_VERBS[kind]}"
+    if kind == "tag" and named:
+        return f"Tagged {named}, which you follow"
+    if kind == "profile":
+        return (
+            f"Matches {named} in your research profile"
+            if named
+            else ("Matches your research profile")
+        )
+    return "In line with your activity in Atlas"
+
+
+def _venue_year(p: dict) -> str:
+    return " · ".join(str(x) for x in (p.get("venue"), p.get("year")) if x)
+
+
+def _format_compact(h: dict) -> str:
+    """One paper on one line, for the digest's full list: linked title, venue
+    and year, tags, and a short lab note."""
+    p = h["paper"]
+    bits = [_paper_title_link(p)]
+    if meta := _venue_year(p):
+        bits.append(meta)
+    tags = h.get("tags") or p.get("tags") or []
+    if tags:
+        bits.append("tags: " + ", ".join(tags[:4]))
+    if (h.get("note") or "").strip():
+        note, _ = _excerpt(h["note"], _COMPACT_NOTE_CHARS)
+        bits.append(f"note: “{note}”")
+    return "- " + " — ".join(bits[:2]) + "".join(f" · {b}" for b in bits[2:])
+
+
+# A note in the one-line list is a hint, not the whole aside.
+_COMPACT_NOTE_CHARS = 120
+
+
+def _format_pick(h: dict) -> str:
+    """A "For you" paper: linked title, why it was picked, its lab note and an
+    abstract excerpt to summarise from."""
+    p = h["paper"]
+    head = f"**{_paper_title_link(p)}**"
+    if meta := _venue_year(p):
+        head += f" — {meta}"
+    lines = [head]
+    if why := _reason_text(h.get("reason")):
+        lines.append(f"Why: {why}")
     note_cut = abstract_cut = False
     if (h.get("note") or "").strip():
         note, note_cut = _excerpt(h["note"], _NOTE_CHARS)
         lines.append(f"Lab note: “{note}”")
-    if (h["paper"].get("abstract") or "").strip():
-        abstract, abstract_cut = _excerpt(h["paper"]["abstract"])
+    if (p.get("abstract") or "").strip():
+        abstract, abstract_cut = _excerpt(p["abstract"])
         lines.append(f"Abstract: {abstract}")
     else:
-        lines.append("Abstract: (no abstract stored)")
+        # Said, so Claude doesn't summarise the title as if it were the paper.
+        lines.append("Abstract: (none stored)")
     if note_cut or abstract_cut:
-        lines.append(f'(shortened — get_paper("{h["paper"]["id"]}") has the full text)')
+        lines.append(f'(shortened — get_paper("{p["id"]}") has the full text)')
     return "\n".join(lines)
 
 

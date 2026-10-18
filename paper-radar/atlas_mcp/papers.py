@@ -15,10 +15,12 @@ from .tools import (
     _citation_key,
     _clamp,
     _elicit_confirm,
-    _format_digest_hit,
+    _format_compact,
     _format_hit,
+    _format_pick,
     _paper_title_link,
     _papers_result,
+    _reason_text,
     _render,
     _untrusted,
     audited,
@@ -79,13 +81,19 @@ def list_recent_papers(limit: int = 10, team_id: str | None = None) -> str:
     return _papers_result(hits, f"No papers posted in {team['name']} yet.")
 
 
+def _with_why(h: dict) -> str:
+    """A recommended paper's block, with why it was picked."""
+    why = _reason_text(h.get("reason"))
+    return _format_hit(h) + (f"\nWhy: {why}" if why else "")
+
+
 @audited
 def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
-    """Recommend papers for you to read next, based on your reading history.
+    """Recommend papers for you to read next, the way Atlas's Discover feed does.
 
-    Builds a taste profile from the papers you've read/reacted to in the lab and
-    ranks unseen papers by similarity (with a mild freshness boost). Falls back to
-    the most recent papers when you have no reading history yet.
+    Uses your research profile, the tags you follow, and the papers you post, save,
+    react to, discuss and read in the lab; each paper says why it was picked. Falls
+    back to the most recent papers when Atlas knows nothing about you yet.
 
     Args:
         limit: Maximum number of recommendations (1-50).
@@ -97,8 +105,8 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         if hits:
             return _untrusted(
                 "lab papers",
-                f"Recommended for you in {team['name']} (by your reading history):\n\n"
-                + _render(hits, ""),
+                f"Recommended for you in {team['name']}:\n\n"
+                + "\n\n".join(_with_why(h) for h in hits),
             )
         # No recommendations — either no reading history yet, or nothing unseen is
         # left (e.g. you posted everything). Fall back to recency, said plainly.
@@ -109,9 +117,9 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         return f"No papers in {team['name']} yet to recommend from."
     return _untrusted(
         "lab papers",
-        f"No personalised recommendations in {team['name']} right now (no reading "
-        "history yet, or you've already seen every paper) — here are the most recent "
-        "instead:\n\n" + _render(recent, ""),
+        f"No personalised recommendations in {team['name']} right now (Atlas doesn't "
+        "know your interests yet, or you've already seen every paper) — here are the "
+        "most recent instead:\n\n" + _render(recent, ""),
     )
 
 
@@ -150,11 +158,25 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
     )
 
 
+# Trusted guidance, outside the untrusted wrapper: how a digest reads best.
+DIGEST_GUIDE = (
+    "How to present this digest: one line on what the lab has been reading; then "
+    "\u201cFor you\u201d \u2014 each pick with one or two sentences from its abstract "
+    "and why it was picked; then the remaining papers grouped by theme, one short line "
+    "per paper with its linked title. Keep it skimmable, and don't remark on papers "
+    "that have no abstract."
+)
+
+
 @audited
 def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> str:
-    """Summarise recent activity in your lab: new papers (with each poster's note and
-    an abstract excerpt), comments, and mentions. Papers come newest first, a page
-    at a time; when there are more, the result says which offset fetches the next page.
+    """Catch up on your lab: what's new, and which of it is worth your time.
+
+    Returns "For you" — up to 5 new papers picked the way Atlas's Discover feed
+    picks (your research profile, followed tags, and what you post, save, react
+    to and read), each with why and an abstract excerpt — then every new paper
+    as one linked line, newest first, plus comments and your mentions. Present
+    it skimmably: the picks first, then the rest grouped by theme.
 
     Args:
         days: How many days back to look (1-90).
@@ -171,34 +193,47 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
         return f"Error: {exc}"
     papers = d["new_papers"]
     n_papers = d["n_papers"]
-    parts = [f"**{team['name']} — last {d['days']} day(s)**", ""]
+    first_page = d["n_comments"] is not None
+    parts = [f"**{team['name']} — last {d['days']} day(s): {n_papers} new paper(s)**"]
+    if first_page and d["mentions"]:
+        titles = "; ".join(_paper_title_link(m) for m in d["mentions"])
+        parts.append(f"You were tagged on: {titles}")
+
+    if first_page and n_papers:
+        parts += ["", "### For you"]
+        if d["for_you"]:
+            parts.append("\n\n".join(_format_pick(h) for h in d["for_you"]))
+        elif d["for_you"] is None and not d.get("for_you_failed"):
+            parts.append(
+                "(No picks: Atlas doesn't know your interests yet. Post or save papers, "
+                "follow tags, or add a research profile in Atlas.)"
+            )
+        elif d.get("for_you_failed"):
+            parts.append("(Picks are unavailable right now.)")
+        else:
+            parts.append("(Nothing new is close to your interests this time.)")
+
     if d["n_fetched"]:
         first, last = offset + 1, offset + d["n_fetched"]
-        if first == 1 and last >= n_papers:
-            parts.append(f"{n_papers} new paper(s):")
-        else:
-            parts.append(f"{n_papers} new paper(s), showing {first}–{last}, newest first:")
-        parts.append("\n\n".join(_format_digest_hit(h) for h in papers))
+        heading = "### All new papers, newest first"
+        if not (first == 1 and last >= n_papers):
+            heading += f" ({first}–{last} of {n_papers})"
+        parts += ["", heading, "\n".join(_format_compact(h) for h in papers)]
         if last < n_papers:
             # Name the lab: following the hint without it could page through another one.
-            parts.append("")
             parts.append(
                 f"{n_papers - last} more: call lab_digest(days={days}, offset={last}, "
                 f'team_id="{team["id"]}") for the next page.'
             )
     elif n_papers:
-        parts.append(f"{n_papers} new paper(s); none left from offset {offset}.")
+        parts.append(f"None left from offset {offset}.")
     else:
         parts.append("No new papers.")
-    if d["n_comments"] is None:
-        # A later page: comments and mentions were reported with the first one.
-        return _untrusted("lab activity", "\n".join(parts))
-    parts.append("")
-    parts.append(f"{d['n_comments']} new comment(s) across the lab.")
-    if d["mentions"]:
-        titles = "; ".join(_paper_title_link(m) for m in d["mentions"])
-        parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
-    return _untrusted("lab activity", "\n".join(parts))
+
+    if first_page:
+        parts += ["", f"{d['n_comments']} new comment(s) across the lab."]
+    body = _untrusted("lab activity", "\n".join(parts))
+    return f"{body}\n\n{DIGEST_GUIDE}" if papers else body
 
 
 @audited

@@ -346,37 +346,11 @@ def test_cvd_simulation_leaves_gray_unchanged():
         assert abs(r - 128) <= 3 and abs(g - 128) <= 3 and abs(b - 128) <= 3
 
 
-# --- taste vector / recommendations (numpy-free vector math) ----------------
+# --- vectors -----------------------------------------------------------------
 
 
 def _almost(a, b, tol=1e-9):
     return all(abs(x - y) <= tol for x, y in zip(a, b))
-
-
-def test_unit_normalises_and_rejects_zero():
-    assert _almost(lab._unit([3.0, 4.0]), [0.6, 0.8])
-    assert lab._unit([0.0, 0.0]) is None
-
-
-def test_centroid_is_mean_of_unit_vectors():
-    # Two opposite unit vectors cancel; orthogonal ones average to the diagonal.
-    assert lab._centroid([[1.0, 0.0], [-1.0, 0.0]]) is None  # zero mean → no direction
-    c = lab._centroid([[1.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2**-0.5, 2**-0.5])
-    assert lab._centroid([]) is None
-    assert lab._centroid([[0.0, 0.0]]) is None  # only unusable vectors
-
-
-def test_centroid_weights_each_paper_equally():
-    # A long vector must not dominate a short one — both are unit-normalised first.
-    c = lab._centroid([[100.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2**-0.5, 2**-0.5])
-
-
-def test_centroid_skips_mismatched_dimension_vectors():
-    # A stray vector of the wrong dimension is skipped, not a crash or corruption.
-    c = lab._centroid([[1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0]])
-    assert _almost(c, [2**-0.5, 2**-0.5])  # only the two 2-D vectors count
 
 
 def test_parse_embedding_handles_json_string_and_list():
@@ -450,31 +424,75 @@ def test_excerpt_cuts_at_a_word_boundary():
     assert cut and text == "alpha beta gamma…"
 
 
-def test_digest_hit_shows_note_and_abstract(monkeypatch):
+def test_picks_show_why_note_and_abstract(monkeypatch):
     pytest.importorskip("mcp")
     from atlas_mcp import tools
 
-    monkeypatch.setattr(lab, "paper_link", lambda pid: f"http://x/{pid}")
-    out = tools._format_digest_hit(_digest_hit("p1", "We map tumours.", "For the FFPE project"))
+    monkeypatch.setattr(lab, "paper_link", lambda pid: f"https://atlas.test/papers?paper={pid}")
+    hit = _digest_hit("p1", "We map tumours.", "For the FFPE project")
+    hit["reason"] = {"kind": "similar_posted", "ref_id": "p0", "ref_label": "REZCUE"}
+    out = tools._format_pick(hit)
+    assert "Why: Similar to [REZCUE](https://atlas.test/papers?paper=p0), which you shared" in out
     assert "Lab note: “For the FFPE project”" in out
     assert "Abstract: We map tumours." in out
     assert "shortened" not in out
 
-    long = tools._format_digest_hit(_digest_hit("p2", "word " * 400))
+    long = tools._format_pick(_digest_hit("p2", "word " * 400))
     assert len(long) < 1200
     assert 'get_paper("p2")' in long
 
-    # A pasted essay of a note is capped too, so the page stays the size it was budgeted.
-    chatty = tools._format_digest_hit(_digest_hit("p4", "Short.", "note\n\n" * 200))
+    # A pasted essay of a note is capped too, so the picks stay the size they were budgeted.
+    chatty = tools._format_pick(_digest_hit("p4", "Short.", "note\n\n" * 200))
     assert len(chatty) < 600 and "\n\n" not in chatty
-    assert 'get_paper("p4")' in chatty
 
     # A missing abstract says so, so Claude doesn't summarise from the title as if it had one.
-    assert "Abstract: (no abstract stored)" in tools._format_digest_hit(_digest_hit("p3"))
+    assert "Abstract: (none stored)" in tools._format_pick(_digest_hit("p3"))
+
+
+def test_every_other_paper_is_one_line(monkeypatch):
+    pytest.importorskip("mcp")
+    from atlas_mcp import tools
+
+    monkeypatch.setattr(lab, "paper_link", lambda pid: f"https://atlas.test/papers?paper={pid}")
+    hit = _digest_hit("p1", "An abstract that the list leaves out.", "Worth a look\nfor FFPE")
+    hit["paper"].update(venue="Nature", year=2026)
+    hit["tags"] = ["spatial-omics", "ffpe"]
+    line = tools._format_compact(hit)
+    assert "\n" not in line
+    assert line == (
+        "- [Paper p1](https://atlas.test/papers?paper=p1) — Nature · 2026"
+        " · tags: spatial-omics, ffpe · note: “Worth a look for FFPE”"
+    )
+
+
+def test_reasons_read_as_the_app_says_them(monkeypatch):
+    pytest.importorskip("mcp")
+    from atlas_mcp import tools
+
+    monkeypatch.setattr(lab, "paper_link", lambda pid: f"https://x/papers?paper={pid}")
+    r = tools._reason_text
+    assert r({"kind": "tag", "ref_label": "ffpe", "extra_labels": ["imaging"]}) == (
+        "Tagged ffpe and imaging, which you follow"
+    )
+    assert r({"kind": "profile", "ref_label": "spatial-omics"}) == (
+        "Matches spatial-omics in your research profile"
+    )
+    assert r({"kind": "profile", "ref_label": ""}) == "Matches your research profile"
+    assert r({"kind": "engagement", "ref_label": ""}) == "In line with your activity in Atlas"
+    saved = r({"kind": "similar_saved", "ref_id": "p0", "ref_label": "X"})
+    assert saved == "Similar to [X](https://x/papers?paper=p0), which you saved"
+    assert r(None) is None
 
 
 def _drive_digest(
-    monkeypatch, *, n_papers: int, offset: int, page: int, unreadable: int = 0
+    monkeypatch,
+    *,
+    n_papers: int,
+    offset: int,
+    page: int,
+    unreadable: int = 0,
+    for_you: list | None = None,
+    **more,
 ) -> str:
     """Run lab_digest over a stubbed lab.digest. `unreadable` posts on the page were
     fetched but their papers didn't hydrate."""
@@ -486,6 +504,8 @@ def _drive_digest(
     monkeypatch.setattr(L, "paper_link", lambda pid: f"https://atlas.test/papers?paper={pid}")
     hits = [_digest_hit(f"p{i}", "An abstract.") for i in range(offset, offset + page)]
     first_page = offset == 0
+    extra = {"for_you": for_you} if first_page else {"for_you": None}
+    extra.update(more)
     monkeypatch.setattr(
         L,
         "digest",
@@ -496,6 +516,7 @@ def _drive_digest(
             "n_fetched": len(hits),
             "n_comments": 4 if first_page else None,
             "mentions": [] if first_page else None,
+            **extra,
         },
     )
     return papers.lab_digest(days=10, offset=offset)
@@ -503,14 +524,15 @@ def _drive_digest(
 
 def test_digest_points_to_the_next_page_in_the_same_lab(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20)
-    assert "35 new paper(s), showing 1–20" in out
+    assert "35 new paper(s)" in out and "(1–20 of 35)" in out
     assert '15 more: call lab_digest(days=10, offset=20, team_id="t1")' in out
     assert "4 new comment(s)" in out
 
 
 def test_digest_last_page_has_no_pointer_or_repeated_comments(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=35, offset=20, page=15)
-    assert "showing 21–35" in out
+    assert "(21–35 of 35)" in out
+    assert "### For you" not in out  # the picks come with the first page
     assert "more:" not in out
     assert "comment" not in out
 
@@ -523,9 +545,29 @@ def test_digest_next_offset_counts_posts_not_readable_papers(monkeypatch):
 
 def test_digest_single_page_and_past_the_end(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3)
-    assert "3 new paper(s):" in out and "showing" not in out
+    assert "3 new paper(s)" in out and " of 3)" not in out
     out = _drive_digest(monkeypatch, n_papers=3, offset=40, page=0)
-    assert "none left from offset 40" in out
+    assert "None left from offset 40" in out
+
+
+def test_digest_leads_with_the_picks_and_says_how_to_present(monkeypatch):
+    pick = _digest_hit("p7", "A close paper.")
+    pick["reason"] = {"kind": "tag", "ref_label": "ffpe"}
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3, for_you=[pick])
+    assert out.index("### For you") < out.index("### All new papers")
+    assert "Why: Tagged ffpe, which you follow" in out
+    # The guide is ours: outside the untrusted wrapper, before the link reminder.
+    assert out.index("</lab activity>") < out.index("How to present this digest")
+    assert out.index("How to present this digest") < out.index("link its title")
+
+
+def test_digest_says_why_there_are_no_picks(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3)
+    assert "Atlas doesn't know your interests yet" in out
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3, for_you=[])
+    assert "Nothing new is close to your interests" in out
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3, for_you_failed=True)
+    assert "Picks are unavailable right now" in out
 
 
 # --- Atlas links on every paper ---------------------------------------------
