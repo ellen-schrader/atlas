@@ -2,7 +2,6 @@ import { type FormEvent, useState } from "react";
 import { isAuthApiError } from "@supabase/supabase-js";
 import { useNavigate } from "react-router-dom";
 
-import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -95,11 +94,7 @@ export default function ResetPassword({
   }
 
   return (
-    <AuthLayout>
-      <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <AtlasMark size={24} className="text-accent" />
-        <span className="text-lg font-bold tracking-tight">Atlas</span>
-      </div>
+    <AuthLayout homeLink={false}>
 
       {step === "dead" ? (
         <>
