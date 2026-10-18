@@ -226,7 +226,7 @@ export default function ReadingList() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-display font-serif font-semibold tracking-tight">My reading list</h1>
+          <h1 className="text-display font-bold tracking-tight">My reading list</h1>
           {total > 0 ? (
             <p className="mt-1.5 text-sm text-muted">
               {queueCount > 0 ? (

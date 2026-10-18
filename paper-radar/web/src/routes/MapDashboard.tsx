@@ -161,7 +161,7 @@ export default function MapDashboard() {
           <header>
             <p className="text-xs font-semibold uppercase tracking-wide text-accent">Topic map</p>
             <div className="flex items-start gap-2">
-              <h1 className="font-serif text-display font-semibold tracking-tight text-fg">
+              <h1 className="text-display font-bold tracking-tight text-fg">
                 {data.name}
               </h1>
               {canEdit && (
@@ -178,7 +178,7 @@ export default function MapDashboard() {
               )}
             </div>
             <p className="mt-1 text-sm text-muted">
-              papers near <span className="font-serif italic text-fg">{data.seed}</span>
+              papers near <span className="italic text-fg">{data.seed}</span>
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               <Chip>
@@ -239,7 +239,7 @@ export default function MapDashboard() {
                 <div className="lg:order-1">
                   {data.points.length >= 2 ? (
                     <section className="rounded-card border border-border bg-surface p-5">
-                      <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
+                      <h2 className="mb-1 text-lg font-semibold tracking-tight">
                         The map
                       </h2>
                       <p className="mb-3 text-xs text-faint">
@@ -314,7 +314,7 @@ export default function MapDashboard() {
               {/* Important papers — full width below the band: the reading queue. */}
               <section className="rounded-card border border-border bg-surface p-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="font-serif text-lg font-semibold tracking-tight">
+                  <h2 className="text-lg font-semibold tracking-tight">
                     Important papers
                   </h2>
                   <Segmented
@@ -450,7 +450,7 @@ function MapEditPanel({
     <Modal open onClose={onClose} label="Edit map" className="max-w-md">
       <div className="p-5">
         <div className="mb-3 pl-8">
-          <h2 className="font-serif text-lg font-semibold tracking-tight">Edit map</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Edit map</h2>
         </div>
 
         <label className="block text-xs font-medium text-muted">Name</label>
@@ -574,7 +574,7 @@ function WhatsNew({
   return (
     <section className="rounded-card border border-border bg-surface p-5">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 font-serif text-lg font-semibold tracking-tight">
+        <h2 className="flex items-center gap-1.5 text-lg font-semibold tracking-tight">
           <Sparkles size={16} className="text-accent" /> What’s new
         </h2>
         {has && (
@@ -743,7 +743,7 @@ function PaperRow({
 function RankPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-card border border-border bg-surface p-4">
-      <h3 className="mb-2 font-serif text-base font-semibold tracking-tight">{title}</h3>
+      <h3 className="mb-2 text-base font-semibold tracking-tight">{title}</h3>
       {children}
     </section>
   );
@@ -785,7 +785,7 @@ function RankBars({
                 style={{
                   width: `${(it.count / max) * 100}%`,
                   background:
-                    it.tone == null ? "var(--accent)" : categorical[it.tone % categorical.length],
+                    it.tone == null ? "var(--ch-1)" : categorical[it.tone % categorical.length],
                 }}
               />
             </div>

@@ -15,10 +15,10 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         <div className="relative flex h-full flex-col justify-between p-10">
           <div className="flex items-center gap-2.5">
             <AtlasMark size={28} className="text-accent" />
-            <span className="font-serif text-xl font-semibold tracking-tight">Atlas</span>
+            <span className="text-xl font-bold tracking-tight">Atlas</span>
           </div>
           <div className="max-w-sm">
-            <h1 className="text-balance font-serif text-3xl font-semibold leading-tight tracking-tight">
+            <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight">
               Every lab has a taste. Atlas gives yours to Claude.
             </h1>
             <p className="mt-4 text-sm leading-relaxed text-muted">

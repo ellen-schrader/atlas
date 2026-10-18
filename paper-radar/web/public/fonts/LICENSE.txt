@@ -1,7 +1,8 @@
-Source Serif 4
-Copyright 2014-2023 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
-Licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org
+Schibsted Grotesk
+Copyright 2023 The Schibsted-Grotesk Project Authors (https://github.com/schibsted/schibsted-grotesk)
+Licensed under the SIL Open Font License, Version 1.1; full text in
+OFL-schibsted-grotesk.txt beside this file.
 
 Vendored (not loaded from a CDN) so that Atlas renders identically on every OS,
-and because the app's CSP forbids external font hosts. Latin subset, weight 600,
-roman + italic.
+and because the app's CSP forbids external font hosts. Variable weight 400-900,
+roman + italic, Latin and Latin Extended subsets, from @fontsource-variable/schibsted-grotesk 5.3.0.

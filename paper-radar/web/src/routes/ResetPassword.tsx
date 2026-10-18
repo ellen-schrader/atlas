@@ -98,12 +98,12 @@ export default function ResetPassword({
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
         <AtlasMark size={24} className="text-accent" />
-        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
+        <span className="text-lg font-bold tracking-tight">Atlas</span>
       </div>
 
       {step === "dead" ? (
         <>
-          <h2 className="font-serif text-xl font-semibold tracking-tight">This link has expired</h2>
+          <h2 className="text-xl font-bold tracking-tight">This link has expired</h2>
           <p className="mb-5 mt-1 text-sm text-muted">
             Reset links work once and only for an hour.{" "}
             {signedInAs
@@ -114,7 +114,7 @@ export default function ResetPassword({
         </>
       ) : step === "confirm" ? (
         <>
-          <h2 className="font-serif text-xl font-semibold tracking-tight">Reset your password</h2>
+          <h2 className="text-xl font-bold tracking-tight">Reset your password</h2>
           <p className="mb-5 mt-1 text-sm text-muted">Continue to choose a new password.</p>
           {error && <p className="mb-3 text-xs text-danger">{error}</p>}
           <Button onClick={onContinue} disabled={busy} autoFocus>
@@ -123,7 +123,7 @@ export default function ResetPassword({
         </>
       ) : step === "done" ? (
         <>
-          <h2 className="font-serif text-xl font-semibold tracking-tight">Password updated</h2>
+          <h2 className="text-xl font-bold tracking-tight">Password updated</h2>
           <p className="mb-5 mt-1 text-sm text-muted">
             Your password has been changed and you're signed in.
           </p>
@@ -131,7 +131,7 @@ export default function ResetPassword({
         </>
       ) : (
         <>
-          <h2 className="font-serif text-xl font-semibold tracking-tight">Choose a new password</h2>
+          <h2 className="text-xl font-bold tracking-tight">Choose a new password</h2>
           <p className="mb-5 mt-1 text-sm text-muted">Set a new password for your account.</p>
 
           <form onSubmit={onSubmit} className="flex flex-col gap-3">

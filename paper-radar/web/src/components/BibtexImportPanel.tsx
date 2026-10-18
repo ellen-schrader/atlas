@@ -159,7 +159,7 @@ export function BibtexImportPanel({
 
       {preflight && (
         <section className="rounded-card border border-border bg-surface-2 p-4">
-          <h3 className="font-serif text-base font-semibold tracking-tight">
+          <h3 className="text-base font-semibold tracking-tight">
             {fileName} — {preflight.entries.length} entries
           </h3>
           <p className="mb-3 mt-1 text-sm text-muted">Nothing has been imported yet.</p>
@@ -235,7 +235,7 @@ export function BibtexImportDone({
   if (result.imported === 0) {
     return (
       <section className="rounded-card border border-border bg-surface-2 p-5">
-        <h3 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+        <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           <Info size={18} className="text-faint" />
           Nothing new to import
         </h3>
@@ -250,7 +250,7 @@ export function BibtexImportDone({
 
   return (
     <section className="rounded-card border border-accent/40 bg-accent-weak p-5">
-      <h3 className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+      <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
         <Check size={18} className="text-accent" />
         {result.imported} {result.imported === 1 ? "paper" : "papers"} imported
       </h3>
@@ -315,7 +315,7 @@ function Problem({ entry }: { entry: BibEntryPreview }) {
 function HowTo() {
   return (
     <details className="rounded-card border border-border bg-surface-2 px-4 py-3">
-      <summary className="cursor-pointer font-serif text-sm font-semibold tracking-tight text-fg">
+      <summary className="cursor-pointer text-sm font-semibold tracking-tight text-fg">
         Where do I get a .bib file?
       </summary>
       <dl className="mt-3 flex flex-col gap-2.5 text-sm">

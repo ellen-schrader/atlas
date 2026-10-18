@@ -80,7 +80,7 @@ ${webLine}`;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <header>
-        <h1 className="text-display font-serif font-semibold tracking-tight text-fg">
+        <h1 className="text-display font-bold tracking-tight text-fg">
           Give Claude your lab’s context
         </h1>
         <p className="mt-1.5 max-w-[62ch] text-sm text-muted">
@@ -104,7 +104,7 @@ ${webLine}`;
 
       {/* what it can actually touch — permissions, distinct from the capabilities above */}
       <section className="rounded-card border border-border bg-surface p-5">
-        <h2 className="mb-1 font-serif text-lg font-semibold tracking-tight">
+        <h2 className="mb-1 text-lg font-semibold tracking-tight">
           What Claude can and can’t see
         </h2>
         <p className="mb-3 text-sm text-muted">
@@ -308,7 +308,7 @@ function ConnectorSetup() {
   const [app, setApp] = useState<App>("claude");
   return (
     <section className="rounded-card border border-border bg-surface p-5">
-      <h2 className="font-serif text-lg font-semibold tracking-tight">Add Atlas to Claude</h2>
+      <h2 className="text-lg font-semibold tracking-tight">Add Atlas to Claude</h2>
       <p className="mb-3 mt-1 text-sm text-muted">This is the connector’s address:</p>
       <CopyBlock value={MCP_URL} label="Copy URL" />
 
@@ -372,7 +372,7 @@ function ConnectedApps() {
 
   return (
     <section className="rounded-card border border-border bg-surface p-5">
-      <h2 className="font-serif text-lg font-semibold tracking-tight">Your connected apps</h2>
+      <h2 className="text-lg font-semibold tracking-tight">Your connected apps</h2>
       <p className="mb-3 mt-1 text-sm text-muted">
         Apps you’ve let use Atlas as you. Disconnecting takes effect immediately.
       </p>
@@ -476,7 +476,7 @@ function ActivityLog() {
   const { team } = useAppContext();
   return (
     <section className="rounded-card border border-border bg-surface p-5">
-      <h2 className="font-serif text-lg font-semibold tracking-tight">Recent Claude activity</h2>
+      <h2 className="text-lg font-semibold tracking-tight">Recent Claude activity</h2>
       <p className="mb-3 mt-1 text-sm text-muted">
         Every tool call Claude makes against {team.name}, visible to everyone in the lab. Blocked
         attempts show up here too.
@@ -534,7 +534,7 @@ const CAPABILITIES: {
 function Capabilities({ teamName }: { teamName: string }) {
   return (
     <section className="rounded-card border border-border bg-surface p-5">
-      <h2 className="font-serif text-lg font-semibold tracking-tight">
+      <h2 className="text-lg font-semibold tracking-tight">
         What you can ask Claude to do
       </h2>
       <p className="mb-4 mt-1 max-w-[60ch] text-sm text-muted">

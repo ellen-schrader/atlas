@@ -47,7 +47,7 @@ export default function Onboarding() {
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
         <AtlasMark size={24} className="text-accent" />
-        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
+        <span className="text-lg font-bold tracking-tight">Atlas</span>
       </div>
 
       <h2 className="text-xl font-bold tracking-tight">Set up your lab</h2>

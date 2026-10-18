@@ -173,7 +173,7 @@ function MobileNav(p: Parameters<typeof Sidebar>[0]) {
         >
           <Menu size={18} />
         </button>
-        <span className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+        <span className="flex items-center gap-2 text-lg font-bold tracking-tight">
           <AtlasMark size={21} className="text-accent" /> Atlas
         </span>
         <NotificationsBell userId={p.userId} align="right" className="ml-auto" />

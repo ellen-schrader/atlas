@@ -148,7 +148,7 @@ export default function MapView() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <div>
-        <h1 className="text-display font-serif font-semibold tracking-tight text-fg">Overview</h1>
+        <h1 className="text-display font-bold tracking-tight text-fg">Overview</h1>
         <p className="mt-1.5 text-sm text-muted">
           Your lab’s papers by meaning, plus themes and trends across what you’ve shared.
         </p>
