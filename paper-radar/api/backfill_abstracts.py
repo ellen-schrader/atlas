@@ -7,7 +7,8 @@ asks again (``find_abstract``: Europe PMC, then PubMed, both by DOI, then the
 paper's own page) on a schedule that follows how indexing actually lags:
 
   * daily for a paper's first 30 days,
-  * weekly until it is 90 days old,
+  * weekly until it is 90 days old (age counts from publication when the row
+    knows it, so a BibTeX import of 2015 papers is not treated as new),
   * once, for anything older that has never been checked (the first run's
     backlog), and then never again.
 
@@ -35,8 +36,10 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from paper_radar.ingest.metadata import find_abstract
+from paper_radar.ingest.urls import norm_doi
 
 from .backfill_metadata import _write_unless_edited
+from .merge_suggestions import fold
 from .supa import service_client
 
 _PAGE = 500
@@ -55,17 +58,48 @@ def _ts(value: str | datetime | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _born(row: dict) -> datetime:
+    """When the paper came out, as far as the row can say: indexing lags
+    publication, not the day a lab member happened to post it.
+
+    ``published_at`` on January 1st is the "year only" marker, so a year counts
+    as its last day -- the latest the paper could have appeared. Never later
+    than ``created_at``: a paper can't come out after it was posted.
+    """
+    added = _ts(row["created_at"])
+    published = row.get("published_at")
+    if published and str(published)[5:10] != "01-01":
+        out = datetime.fromisoformat(str(published)[:10]).replace(tzinfo=UTC)
+    elif row.get("year"):
+        out = datetime(int(row["year"]), 12, 31, tzinfo=UTC)
+    else:
+        return added
+    return min(out, added)
+
+
 def is_due(row: dict, now: datetime) -> bool:
     """Whether the schedule says to look for this paper's abstract now."""
     checked = _ts(row.get("abstract_checked_at"))
     if checked is None:
         return True
-    age = now - _ts(row["created_at"])
+    age = now - _born(row)
     if age <= _DAILY_UNTIL:
         return now - checked >= _DAILY
     if age <= _WEEKLY_UNTIL:
         return now - checked >= _WEEKLY
     return False
+
+
+def page_is_the_paper(row: dict, found) -> bool:
+    """Whether a scraped page is this paper's own: same DOI, or same title.
+
+    A stored URL can come to redirect to a login wall, a consent page or a
+    journal homepage, whose long site description would otherwise be filed as
+    the abstract and never looked at again.
+    """
+    if row.get("doi") and found.doi:
+        return norm_doi(row["doi"]) == norm_doi(found.doi)
+    return bool(found.title and row.get("title")) and fold(found.title) == fold(row["title"])
 
 
 def plan_patch(row: dict, found) -> dict:
@@ -78,6 +112,8 @@ def plan_patch(row: dict, found) -> dict:
     held = row.get("edited_fields") or ()
     if found is None or not found.abstract or "abstract" in held:
         return patch
+    if found.source == "page" and not page_is_the_paper(row, found):
+        return patch
     patch["abstract"] = found.abstract
     if found.keywords and not row.get("keywords") and "keywords" not in held:
         patch["keywords"] = found.keywords
@@ -89,17 +125,24 @@ def plan_patch(row: dict, found) -> dict:
 
 
 def _fetch_candidates(svc, now: datetime) -> list[dict]:
-    """Titled papers with no abstract that are due a look, stalest first."""
+    """Titled papers with no abstract that are due a look, stalest first.
+
+    The database drops rows checked before and added over 90 days ago -- the
+    schedule never asks about those again, and they only accumulate. The rest
+    of the schedule is ``is_due``, in Python.
+    """
+    window = (now - _WEEKLY_UNTIL).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows: list[dict] = []
     start = 0
     while True:
         page = (
             svc.table("papers")
             .select(
-                "id, url, doi, title, keywords, created_at, abstract_checked_at, "
-                "edited_at, edited_fields"
+                "id, url, doi, title, keywords, year, published_at, created_at, "
+                "abstract_checked_at, edited_at, edited_fields"
             )
             .or_("abstract.is.null,abstract.eq.")
+            .or_(f"abstract_checked_at.is.null,created_at.gt.{window}")
             .not_.is_("title", "null")
             .order("id")
             .range(start, start + _PAGE - 1)
@@ -142,7 +185,7 @@ def main(argv: list[str] | None = None) -> None:
             break
         title = (row.get("title") or "")[:60]
         try:
-            found = find_abstract(row.get("doi"), row["url"], scrape=True)
+            found = find_abstract(row.get("doi"), row["url"])
             patch = plan_patch(row, found)
             if "abstract" in patch:
                 found_n += 1

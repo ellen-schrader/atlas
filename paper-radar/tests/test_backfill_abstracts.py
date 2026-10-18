@@ -142,14 +142,36 @@ def _page(description: str) -> bytes:
     ).encode()
 
 
-def test_page_is_scraped_only_when_asked_and_only_for_a_real_abstract(monkeypatch):
+def test_page_is_the_last_resort_and_only_for_a_real_abstract(monkeypatch):
     long_abstract = "We show a thing. " * 20
-    asked = _stub(monkeypatch, {"example.org": _page(long_abstract)})
-    assert find_abstract(None, "https://example.org/paper") is None
-    assert not asked  # no DOI, no scrape: nothing to ask
-    found = find_abstract(None, "https://example.org/paper", scrape=True)
-    assert found and found.abstract.startswith("We show a thing.")
+    _stub(monkeypatch, {"example.org": _page(long_abstract)})
+    found = find_abstract(None, "https://example.org/paper")
+    assert found.source == "page" and found.abstract.startswith("We show a thing.")
+    assert found.title == "A paper" and not found.keywords
 
     # A one-line teaser is not an abstract.
     _stub(monkeypatch, {"example.org": _page("A short teaser.")})
-    assert find_abstract(None, "https://example.org/paper", scrape=True) is None
+    assert find_abstract(None, "https://example.org/paper") is None
+
+
+def test_a_page_is_only_trusted_when_it_is_the_paper():
+    page = PaperMetadata(url="u", title="A Paper!", abstract="We show X.", source="page")
+    assert "abstract" in plan_patch({"id": "p1", "title": "A paper"}, page)
+    # The URL now lands on a journal homepage or a login wall.
+    homepage = PaperMetadata(url="u", title="Nature", abstract="Nature is a...", source="page")
+    assert "abstract" not in plan_patch({"id": "p1", "title": "A paper"}, homepage)
+    # With DOIs on both sides, the DOI decides.
+    other = PaperMetadata(url="u", title="A paper", doi="10.1/b", abstract="X", source="page")
+    assert "abstract" not in plan_patch({"id": "p1", "title": "A paper", "doi": "10.1/a"}, other)
+    same = PaperMetadata(url="u", title="Retitled", doi="10.1/A", abstract="X", source="page")
+    assert "abstract" in plan_patch({"id": "p1", "title": "A paper", "doi": "10.1/a"}, same)
+
+
+def test_age_counts_from_publication_not_from_posting():
+    # Imported two days ago from BibTeX, published in 2015: not a new paper.
+    assert not is_due(_row(2, 3, year=2015, published_at="2015-01-01"), NOW)
+    assert not is_due(_row(2, 3, published_at="2015-06-12"), NOW)
+    # Published this year, year only: the posting date still decides.
+    assert is_due(_row(2, 1, year=2026, published_at="2026-01-01"), NOW)
+    # A precise recent date makes it young.
+    assert is_due(_row(2, 1, published_at="2026-10-10"), NOW)

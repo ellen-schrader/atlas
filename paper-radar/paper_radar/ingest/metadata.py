@@ -582,14 +582,18 @@ def _pmid_for_doi(doi: str) -> str | None:
 _MIN_PAGE_ABSTRACT = 200
 
 
-def find_abstract(doi: str | None, url: str, *, scrape: bool = False) -> PaperMetadata | None:
-    """An abstract for a paper, from the sources that index one, or None.
+def find_abstract(doi: str | None, url: str) -> PaperMetadata | None:
+    """An abstract for a stored paper, from the sources that index one, or None.
 
     Europe PMC by DOI first, then PubMed by DOI (it has abstracts Europe PMC
-    hasn't picked up yet), then -- with ``scrape`` -- the paper's own page.
-    Publisher pages rarely help (Nature and Cell block us), so ingest, which
-    has usually just scraped or skipped the page, leaves ``scrape`` off.
-    Only ``abstract``, ``keywords`` and ``source`` of the result are meant to be used.
+    hasn't picked up yet), then the paper's own page. Only ``abstract``,
+    ``keywords`` and ``source`` of the result are meant to be used.
+
+    A page result has ``source="page"``, no keywords, and the page's own title
+    and DOI: the URL may now redirect to a login wall or a journal homepage
+    whose description is not this paper's abstract, so the caller must check
+    the page is the paper before trusting it. Used by the daily backfill, not
+    ingest -- two NCBI calls are fine in a batch job, not in a request.
     """
     if doi:
         if (m := _fetch_europepmc(doi, url)) and m.abstract:
@@ -598,9 +602,9 @@ def find_abstract(doi: str | None, url: str, *, scrape: bool = False) -> PaperMe
             abstract, keywords = _fetch_pubmed_abstract(pmid)
             if abstract:
                 return PaperMetadata(url=url, abstract=abstract, keywords=keywords, source="pubmed")
-    if scrape and (m := _scrape_landing_page(url)):
-        if m.abstract and len(m.abstract) >= _MIN_PAGE_ABSTRACT:
-            return m
+    m = _scrape_landing_page(url)
+    if m and m.abstract and len(m.abstract) >= _MIN_PAGE_ABSTRACT:
+        return PaperMetadata(url=url, title=m.title, doi=m.doi, abstract=m.abstract, source="page")
     return None
 
 
@@ -991,7 +995,7 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
                 meta.abstract = abstract
             if keywords and not meta.keywords:
                 meta.keywords = keywords
-        if not meta.abstract and (extra := find_abstract(meta.doi, url)):
+        if not meta.abstract and meta.doi and (extra := _fetch_europepmc(meta.doi, url)):
             _merge(meta, extra)
 
     # 4) A preprint is labelled with its server, whichever source resolved it.
