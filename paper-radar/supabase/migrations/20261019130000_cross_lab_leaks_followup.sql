@@ -1,4 +1,4 @@
--- 20261018210000_cross_lab_leaks_followup.sql — loose ends of
+-- 20261019130000_cross_lab_leaks_followup.sql — loose ends of
 -- 20261018200000_cross_lab_leaks.sql (issue #133), now that the API that read
 -- papers.edited_by has been replaced.
 
