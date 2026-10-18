@@ -34,7 +34,8 @@ def _fetch_papers(svc, re_tag_all: bool) -> list[dict]:
         start += _PAGE
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Returns how many papers failed, so a caller (or the exit status) can tell."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--all", action="store_true", help="re-tag every paper, not just new")
     parser.add_argument("--batch-size", type=int, default=enrichment.BATCH_SIZE, help="papers/call")
@@ -63,7 +64,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {done + failed}/{len(todo)}  tagged={done} failed={failed}")
         time.sleep(args.delay)
     print(f"Done. tagged={done} failed={failed}")
+    return failed
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(1 if main() else 0)

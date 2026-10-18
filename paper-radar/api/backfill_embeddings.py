@@ -36,7 +36,8 @@ def _fetch_papers(svc, re_embed_all: bool) -> list[dict]:
         start += _PAGE
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
+    """Returns how many papers failed, so a caller (or the exit status) can tell."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--all",
@@ -75,7 +76,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {done}/{len(todo)}")
         time.sleep(args.delay)
     print(f"Done. embedded={done} failed={failed}")
+    return failed
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(1 if main() else 0)

@@ -296,3 +296,23 @@ def test_an_unpublished_preprint_is_left_alone(monkeypatch):
         is None
     )
     assert db.rpcs == [] and db.upserts == []
+
+
+def test_a_backfill_that_fails_papers_turns_the_run_red(monkeypatch):
+    # A rejected API key makes every paper fail without raising: the run used
+    # to finish green with embedded=0 failed=3 (2026-10-18).
+    import pytest
+
+    from api import backfill_embeddings, backfill_enrichment
+
+    db = _Db(teams=[])
+    monkeypatch.setattr(preprint_watch, "_fetch_papers", lambda svc, *a: [])
+    monkeypatch.setattr(preprint_watch, "service_client", lambda: db)
+    monkeypatch.setattr(backfill_embeddings, "main", lambda argv: 3)
+    monkeypatch.setattr(backfill_enrichment, "main", lambda argv: 0)
+    with pytest.raises(SystemExit) as exit_:
+        preprint_watch.main([])
+    assert exit_.value.code == 1
+
+    monkeypatch.setattr(backfill_embeddings, "main", lambda argv: 0)
+    preprint_watch.main([])  # nothing failed: no exit
