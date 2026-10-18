@@ -1,7 +1,6 @@
 import { type FormEvent, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
-import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,10 +70,6 @@ export default function Login() {
 
   return (
     <AuthLayout>
-      <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <AtlasMark size={24} className="text-accent" />
-        <span className="text-lg font-bold tracking-tight">Atlas</span>
-      </div>
 
       <h2 className="text-xl font-bold tracking-tight">
         {mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}
@@ -83,7 +78,7 @@ export default function Login() {
         {mode === "login"
           ? "Sign in to your lab."
           : mode === "signup"
-            ? "Create a lab, and Atlas starts learning its taste."
+            ? "Create a lab and start your group’s shared library."
             : "Enter your email and we'll send you a link to set a new password."}
       </p>
 
@@ -161,6 +156,20 @@ export default function Login() {
                 ? "Create account"
                 : "Send reset link"}
         </Button>
+
+        {mode === "signup" && (
+          <p className="text-xs leading-relaxed text-muted">
+            By creating an account you agree to the{" "}
+            <Link to="/terms" className="underline underline-offset-2 hover:text-fg">
+              Terms
+            </Link>{" "}
+            and{" "}
+            <Link to="/privacy" className="underline underline-offset-2 hover:text-fg">
+              Privacy
+            </Link>{" "}
+            notice.
+          </p>
+        )}
 
         {mode === "reset" && (
           <button

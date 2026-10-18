@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom";
 
-import { AtlasMark } from "@/components/Brand";
+import { AtlasMark, Brand } from "@/components/Brand";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import type { Team } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -76,9 +76,7 @@ export function Sidebar({
   return (
     <>
       <div className="flex items-center justify-between px-1">
-        <span className="flex items-center gap-2 text-lg font-bold tracking-tight">
-          <AtlasMark size={24} className="text-accent" /> Atlas
-        </span>
+        <Brand size={24} />
         {/* Not in the drawer: the top bar behind it already has one, and its
             320px dropdown doesn't fit a 280px drawer. */}
         {!drawer && <NotificationsBell userId={p.userId} align="left" />}

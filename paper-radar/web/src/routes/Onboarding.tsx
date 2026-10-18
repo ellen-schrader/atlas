@@ -1,7 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,10 +44,6 @@ export default function Onboarding() {
 
   return (
     <AuthLayout>
-      <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <AtlasMark size={24} className="text-accent" />
-        <span className="text-lg font-bold tracking-tight">Atlas</span>
-      </div>
 
       <h2 className="text-xl font-bold tracking-tight">Set up your lab</h2>
       <p className="mb-5 mt-1 text-sm text-muted">Create a new lab, or join one with its code.</p>

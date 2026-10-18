@@ -10,6 +10,7 @@ import ResetPassword from "@/routes/ResetPassword";
 import Dashboard from "@/routes/Dashboard";
 import Layout from "@/routes/Layout";
 import Landing from "@/routes/Landing";
+import { About, Privacy, Terms } from "@/routes/PublicPages";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
 import MapView from "@/routes/Map";
@@ -81,6 +82,9 @@ export default function App() {
       <LinkErrorRedirect to={(e) => (e.reset ? "/login?mode=reset" : "/login")}>
         <Routes>
           <Route path="/" element={<Landing />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/terms" element={<Terms />} />
           <Route path="/login" element={<Login />} />
           {/* A shared /papers/:id link is the one signed-out URL worth keeping.
               The catch-all below replaces the URL, so without this the paper id is
@@ -183,11 +187,19 @@ function AuthedApp({ session }: { session: Session }) {
     <OAuthConsent memberships={teams} userId={session.user.id} email={session.user.email ?? ""} />
   );
 
+  // About, Privacy and Terms stay readable once signed in, outside the app shell.
+  const publicPages = [
+    <Route key="about" path="/about" element={<About signedIn />} />,
+    <Route key="privacy" path="/privacy" element={<Privacy signedIn />} />,
+    <Route key="terms" path="/terms" element={<Terms signedIn />} />,
+  ];
+
   if (!team) {
     return (
       <Routes>
         <Route path="/oauth/consent" element={consent} />
         <Route path="/login" element={<ReturnToNext />} />
+        {publicPages}
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="*" element={<Navigate to="/onboarding" replace />} />
       </Routes>
@@ -198,6 +210,7 @@ function AuthedApp({ session }: { session: Session }) {
     <Routes>
       <Route path="/onboarding" element={<Navigate to="/" replace />} />
       <Route path="/oauth/consent" element={consent} />
+      {publicPages}
       <Route
         element={
           <Layout session={session} team={team} labs={teams.flatMap((m) => (m.teams ? [m.teams] : []))} onSwitchLab={switchLab} />

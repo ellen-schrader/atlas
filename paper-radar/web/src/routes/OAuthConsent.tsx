@@ -3,7 +3,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Check, ShieldAlert, X } from "lucide-react";
 
-import { AtlasMark } from "@/components/Brand";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { useSetMcpAccess } from "@/hooks/useMcpAccess";
@@ -237,10 +236,6 @@ export default function OAuthConsent({
 
   return (
     <AuthLayout>
-      <div className="mb-6 flex items-center gap-2.5 md:hidden">
-        <AtlasMark size={24} className="text-accent" />
-        <span className="text-lg font-bold tracking-tight">Atlas</span>
-      </div>
       {body}
     </AuthLayout>
   );
