@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { supabase } from "@/lib/supabase";
-import type { PaperPost } from "@/lib/types";
+import { PAPER_COLUMNS, type PaperPost } from "@/lib/types";
 
 export const PAGE_SIZE = 30;
 
@@ -58,7 +58,7 @@ export function usePaperSearch(
           p_sort: sort,
         })
         .select(
-          "id, posted_at, note, posted_by, posted_by_label, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
+          `id, posted_at, note, posted_by, posted_by_label, tags, papers(${PAPER_COLUMNS}), poster:profiles!paper_posts_posted_by_fkey(display_name)`,
         );
       if (error) throw error;
       return (data ?? []) as unknown as PaperPost[];

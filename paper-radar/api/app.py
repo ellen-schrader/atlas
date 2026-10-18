@@ -213,7 +213,7 @@ class PostResponse(BaseModel):
 # the 1024-dim embedding into every response.
 PAPER_COLUMNS = (
     "id, url, doi, title, authors, abstract, venue, year, keywords, tags, "
-    "code_url, data_url, enriched_at, edited_by, edited_at, edited_fields"
+    "code_url, data_url, enriched_at, edited_at, edited_fields"
 )
 POST_COLUMNS = f"id, posted_at, note, posted_by, posted_by_label, tags, papers({PAPER_COLUMNS})"
 
@@ -692,7 +692,7 @@ EDITABLE_FIELDS = ("title", "authors", "venue", "year", "abstract", "code_url", 
 # Everything an edit compares against or reports back. Never `*`: the embedding.
 _EDIT_COLUMNS = (
     "id, url, doi, title, authors, venue, year, abstract, keywords, code_url, data_url, "
-    "metadata_source, published_at, edited_by, edited_at, edited_fields"
+    "metadata_source, published_at, edited_at, edited_fields"
 )
 
 
