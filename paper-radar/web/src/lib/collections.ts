@@ -42,6 +42,7 @@ export interface CollectionNote {
 }
 
 export interface CollectionPaper {
+  paper_id: string;
   added_at: string;
   papers: { id: string; title: string | null; venue: string | null; year: number | null } | null;
 }
@@ -81,15 +82,20 @@ export async function fetchCollections(teamId: string): Promise<Collection[]> {
   return (data as unknown as Row[]).map(fromRow);
 }
 
-export async function fetchCollection(id: string): Promise<CollectionDetail | null> {
+/** null if there's no such collection in this lab. */
+export async function fetchCollection(
+  id: string,
+  teamId: string,
+): Promise<CollectionDetail | null> {
   const { data, error } = await supabase
     .from("trial_collections")
     .select(
-      `${BASE}, collection_papers(added_at, papers(id, title, venue, year)), ` +
+      `${BASE}, collection_papers(paper_id, added_at, papers(id, title, venue, year)), ` +
         "collection_notes(id, body, created_at, author_id, " +
         "author:profiles!collection_notes_author_id_fkey(display_name))",
     )
     .eq("id", id)
+    .eq("team_id", teamId)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
@@ -105,48 +111,44 @@ export async function fetchCollection(id: string): Promise<CollectionDetail | nu
   };
 }
 
+/** Only the editable fields, trimmed: a loaded collection carries more. */
 function clean(f: CollectionFields): CollectionFields {
   return {
-    ...f,
     title: f.title.trim(),
     question: f.question?.trim() || null,
+    settings: f.settings,
+    patient_groups: f.patient_groups,
+    therapy_classes: f.therapy_classes,
     comparison: f.comparison?.trim() || null,
   };
 }
 
-/** Create a collection (optionally with trials) and return its id. */
+/** Create a collection with its trials, in one transaction (as the user, so
+ *  RLS applies): a trial that can't go in leaves no half-made collection. */
 export async function createCollection(
   teamId: string,
-  userId: string,
   fields: CollectionFields,
   trialIds: string[] = [],
 ): Promise<string> {
-  const { data, error } = await supabase
-    .from("trial_collections")
-    .insert({ team_id: teamId, ...clean(fields), created_by: userId, updated_by: userId })
-    .select("id")
-    .single();
+  const f = clean(fields);
+  const { data, error } = await supabase.rpc("create_collection", {
+    p_team: teamId,
+    p_title: f.title,
+    p_question: f.question,
+    p_settings: f.settings,
+    p_patient_groups: f.patient_groups,
+    p_therapy_classes: f.therapy_classes,
+    p_comparison: f.comparison,
+    p_trials: trialIds,
+  });
   if (error) throw error;
-  const id = (data as { id: string }).id;
-  if (trialIds.length) await addCollectionTrials(id, trialIds, userId);
-  return id;
+  return data as string;
 }
 
-export async function updateCollection(id: string, userId: string, fields: CollectionFields) {
-  const { error } = await supabase
-    .from("trial_collections")
-    .update({ ...clean(fields), updated_by: userId, updated_at: new Date().toISOString() })
-    .eq("id", id);
+/** The database stamps who changed it and when. */
+export async function updateCollection(id: string, fields: CollectionFields) {
+  const { error } = await supabase.from("trial_collections").update(clean(fields)).eq("id", id);
   if (error) throw error;
-}
-
-/** Marks the collection as changed now, by this person (adding a trial or a
- *  paper is an edit too: "updated 3d ago" should say so). */
-async function touch(id: string, userId: string) {
-  await supabase
-    .from("trial_collections")
-    .update({ updated_by: userId, updated_at: new Date().toISOString() })
-    .eq("id", id);
 }
 
 export async function deleteCollection(id: string) {
@@ -163,17 +165,15 @@ export async function addCollectionTrials(id: string, trialIds: string[], userId
       { onConflict: "collection_id,trial_id", ignoreDuplicates: true },
     );
   if (error) throw error;
-  await touch(id, userId);
 }
 
-export async function removeCollectionTrial(id: string, trialId: string, userId: string) {
+export async function removeCollectionTrial(id: string, trialId: string) {
   const { error } = await supabase
     .from("collection_trials")
     .delete()
     .eq("collection_id", id)
     .eq("trial_id", trialId);
   if (error) throw error;
-  await touch(id, userId);
 }
 
 export async function addCollectionPaper(id: string, paperId: string, userId: string) {
@@ -184,17 +184,15 @@ export async function addCollectionPaper(id: string, paperId: string, userId: st
       { onConflict: "collection_id,paper_id", ignoreDuplicates: true },
     );
   if (error) throw error;
-  await touch(id, userId);
 }
 
-export async function removeCollectionPaper(id: string, paperId: string, userId: string) {
+export async function removeCollectionPaper(id: string, paperId: string) {
   const { error } = await supabase
     .from("collection_papers")
     .delete()
     .eq("collection_id", id)
     .eq("paper_id", paperId);
   if (error) throw error;
-  await touch(id, userId);
 }
 
 export async function setFollowing(id: string, userId: string, follow: boolean) {

@@ -3,7 +3,7 @@
 -- see nothing, and removals and merges keep them consistent. `f3…` ids.
 
 begin;
-select plan(17);
+select plan(20);
 
 -- Ada (owner) and Cy (member) in Lab A, which has the feature. Bob in Lab B.
 insert into auth.users (id, email) values
@@ -47,11 +47,20 @@ insert into public.paper_posts (paper_id, team_id, posted_by, source) values
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"f3000000-0000-0000-0000-0000000000a1"}';
 
-select lives_ok($$ insert into public.trial_collections (id, team_id, title, settings, created_by, updated_by)
-    values ('f3000000-0000-0000-0000-0000000000d1', 'f3000000-0000-0000-0000-0000000000b1',
-            'Neoadjuvant immunotherapy in TNBC', '{neoadjuvant}',
-            'f3000000-0000-0000-0000-0000000000a1', 'f3000000-0000-0000-0000-0000000000a1') $$,
-    'Ada creates a collection');
+select throws_ok($$ select public.create_collection('f3000000-0000-0000-0000-0000000000b1', 'Mixed', null,
+    '{}', '{}', '{}', null, array['f3000000-0000-0000-0000-0000000000e1', 'f3000000-0000-0000-0000-0000000000e3']::uuid[]) $$,
+    '42501', null, 'create_collection refuses a trial the lab does not follow');
+select is_empty($$ select 1 from public.trial_collections where title = 'Mixed' $$,
+    'and leaves no empty collection behind');
+reset role;
+-- A fixed id for the rest of the test (ids aren't client-writable).
+insert into public.trial_collections (id, team_id, title, settings, created_by)
+values ('f3000000-0000-0000-0000-0000000000d1', 'f3000000-0000-0000-0000-0000000000b1',
+        'Neoadjuvant immunotherapy in TNBC', '{neoadjuvant}', 'f3000000-0000-0000-0000-0000000000a1');
+set local role authenticated;
+select throws_ok($$ insert into public.trial_collections (team_id, title, created_by, updated_at)
+    values ('f3000000-0000-0000-0000-0000000000b1', 'Backdated', 'f3000000-0000-0000-0000-0000000000a1', '2020-01-01') $$,
+    '42501', null, 'timestamps are not the browser''s to set');
 select lives_ok($$ insert into public.collection_trials (collection_id, trial_id, added_by)
     values ('f3000000-0000-0000-0000-0000000000d1', 'f3000000-0000-0000-0000-0000000000e1', 'f3000000-0000-0000-0000-0000000000a1'),
            ('f3000000-0000-0000-0000-0000000000d1', 'f3000000-0000-0000-0000-0000000000e2', 'f3000000-0000-0000-0000-0000000000a1') $$,
@@ -72,9 +81,10 @@ select lives_ok($$ insert into public.collection_notes (collection_id, author_id
 -- === Cy, a member, edits but can't delete ====================================
 set local request.jwt.claims to '{"sub":"f3000000-0000-0000-0000-0000000000a3"}';
 
-select lives_ok($$ update public.trial_collections set title = 'Neoadjuvant IO in TNBC',
-    updated_by = 'f3000000-0000-0000-0000-0000000000a3', updated_at = now()
+select lives_ok($$ update public.trial_collections set title = 'Neoadjuvant IO in TNBC'
     where id = 'f3000000-0000-0000-0000-0000000000d1' $$, 'Cy edits the title');
+select is((select updated_by from public.trial_collections where id = 'f3000000-0000-0000-0000-0000000000d1'),
+    'f3000000-0000-0000-0000-0000000000a3'::uuid, 'and the database records Cy as the last editor');
 select throws_ok($$ update public.trial_collections set team_id = 'f3000000-0000-0000-0000-0000000000b2'
     where id = 'f3000000-0000-0000-0000-0000000000d1' $$, '42501', null, 'nobody moves it to another lab');
 select lives_ok($$ insert into public.collection_followers (collection_id, user_id)

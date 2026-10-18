@@ -101,7 +101,7 @@ create policy trial_collections_select on public.trial_collections for select
 create policy trial_collections_insert on public.trial_collections for insert
     to authenticated with check (
         public.has_feature(team_id, 'clinical_trials')
-        and created_by = auth.uid() and updated_by = auth.uid()
+        and created_by = auth.uid()
     );
 
 -- Any member edits, as themselves. The column grants keep team_id and the
@@ -187,9 +187,13 @@ create policy collection_notes_delete on public.collection_notes for delete
 
 revoke all on public.trial_collections, public.collection_trials, public.collection_papers,
     public.collection_followers, public.collection_notes from public, anon, authenticated;
-grant select, insert, delete on public.trial_collections to authenticated;
-grant update (title, question, settings, patient_groups, therapy_classes, comparison,
-              updated_by, updated_at)
+grant select, delete on public.trial_collections to authenticated;
+-- Timestamps and "updated by" are the database's (triggers below), not the
+-- browser's.
+grant insert (team_id, title, question, settings, patient_groups, therapy_classes, comparison,
+              created_by)
+    on public.trial_collections to authenticated;
+grant update (title, question, settings, patient_groups, therapy_classes, comparison)
     on public.trial_collections to authenticated;
 grant select, insert, delete on public.collection_trials, public.collection_papers,
     public.collection_followers, public.collection_notes to authenticated;
@@ -201,6 +205,93 @@ select public.close_to_connectors('public.collection_trials');
 select public.close_to_connectors('public.collection_papers');
 select public.close_to_connectors('public.collection_followers');
 select public.close_to_connectors('public.collection_notes');
+
+-- === "updated 3d ago" =======================================================
+
+-- Set by the database: on the collection's own edits, and whenever its
+-- trials, papers or notes change (adding a trial is an edit too).
+create function public.trial_collections_stamp()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+    if tg_op = 'INSERT' then
+        new.created_at := now();
+    end if;
+    new.updated_at := now();
+    new.updated_by := coalesce(auth.uid(), new.updated_by);
+    return new;
+end;
+$$;
+revoke execute on function public.trial_collections_stamp() from public, anon, authenticated;
+
+create trigger trial_collections_stamp
+    before insert or update on public.trial_collections
+    for each row execute function public.trial_collections_stamp();
+
+create function public.collection_child_stamp()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    c uuid := case when tg_op = 'DELETE' then old.collection_id else new.collection_id end;
+begin
+    -- The trigger above sets the time and the person.
+    update public.trial_collections set updated_at = now() where id = c;
+    return null;
+end;
+$$;
+revoke execute on function public.collection_child_stamp() from public, anon, authenticated;
+
+create trigger collection_trials_stamp after insert or delete on public.collection_trials
+    for each row execute function public.collection_child_stamp();
+create trigger collection_papers_stamp after insert or delete on public.collection_papers
+    for each row execute function public.collection_child_stamp();
+create trigger collection_notes_stamp after insert or delete on public.collection_notes
+    for each row execute function public.collection_child_stamp();
+
+-- === creating one with its trials, in one go ================================
+
+-- As the caller (security invoker), so every policy above applies. One
+-- transaction: if a trial can't go in (taken off the list meanwhile), no
+-- empty collection is left behind for a retry to duplicate.
+create function public.create_collection(
+    p_team uuid,
+    p_title text,
+    p_question text,
+    p_settings text[],
+    p_patient_groups text[],
+    p_therapy_classes text[],
+    p_comparison text,
+    p_trials uuid[]
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+    new_id uuid;
+begin
+    insert into public.trial_collections
+        (team_id, title, question, settings, patient_groups, therapy_classes, comparison, created_by)
+    values
+        (p_team, p_title, p_question, coalesce(p_settings, '{}'), coalesce(p_patient_groups, '{}'),
+         coalesce(p_therapy_classes, '{}'), p_comparison, auth.uid())
+    returning id into new_id;
+    insert into public.collection_trials (collection_id, trial_id, added_by)
+    select new_id, t, auth.uid() from unnest(coalesce(p_trials, '{}')) t
+    on conflict do nothing;
+    return new_id;
+end;
+$$;
+revoke execute on function public.create_collection(uuid, text, text, text[], text[], text[], text, uuid[])
+    from public, anon;
+grant execute on function public.create_collection(uuid, text, text, text[], text[], text[], text, uuid[])
+    to authenticated;
 
 -- === keeping collections consistent =========================================
 

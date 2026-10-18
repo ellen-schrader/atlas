@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Layers, Loader2, Plus, Search, Sparkles } from "lucide-react";
@@ -38,6 +38,9 @@ function useDismissed(teamId: string): [Set<string>, (key: string) => void] {
     }
   };
   const [dismissed, setDismissed] = useState(read);
+  // Each lab has its own list: read it again when the lab changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setDismissed(read()), [storageKey]);
   const dismiss = (key: string) => {
     const next = new Set(dismissed).add(key);
     setDismissed(next);
@@ -51,7 +54,7 @@ function useDismissed(teamId: string): [Set<string>, (key: string) => void] {
 }
 
 function Collections() {
-  const { team, userId } = useAppContext();
+  const { team } = useAppContext();
   const [query, setQuery] = useState("");
   const [chip, setChip] = useState<string | null>(null);
   const [creating, setCreating] = useState<Suggestion | "blank" | null>(null);
@@ -78,9 +81,11 @@ function Collections() {
     const hay = `${c.title} ${c.question ?? ""} ${questionCaps(c)} ${names}`.toLowerCase();
     return (!needle || hay.includes(needle)) && (!chip || c.therapy_classes.includes(chip as never));
   });
+  // Only once both have loaded: before the collections arrive, every group
+  // would look new and a quick click could duplicate a collection.
   const suggestion =
-    !needle && !chip
-      ? suggestCollections(trials.data ?? [], all).find((s) => !dismissed.has(s.key))
+    !needle && !chip && collections.data && trials.data
+      ? suggestCollections(trials.data, collections.data).find((s) => !dismissed.has(s.key))
       : undefined;
 
   return (
@@ -203,7 +208,6 @@ function Collections() {
         open={creating !== null}
         onClose={() => setCreating(null)}
         teamId={team.id}
-        userId={userId}
         initial={creating && creating !== "blank" ? creating.fields : undefined}
         trialIds={creating && creating !== "blank" ? creating.trials.map((t) => t.id) : []}
         note={

@@ -120,7 +120,6 @@ export function NewCollectionDialog({
   open,
   onClose,
   teamId,
-  userId,
   initial = EMPTY_COLLECTION,
   trialIds = [],
   note,
@@ -128,7 +127,6 @@ export function NewCollectionDialog({
   open: boolean;
   onClose: () => void;
   teamId: string;
-  userId: string;
   initial?: CollectionFields;
   trialIds?: string[];
   /** A line under the heading ("2 trials · they don't share setting…"). */
@@ -137,15 +135,20 @@ export function NewCollectionDialog({
   const qc = useQueryClient();
   const navigate = useNavigate();
   const create = useMutation({
-    mutationFn: (f: CollectionFields) => createCollection(teamId, userId, f, trialIds),
+    mutationFn: (f: CollectionFields) => createCollection(teamId, f, trialIds),
     onSuccess: (id) => {
       qc.invalidateQueries({ queryKey: ["collections", teamId] });
-      onClose();
+      close();
       navigate(`/trials/collections/${id}`);
     },
   });
+  // A failure stays with this attempt, not the next time the dialog opens.
+  const close = () => {
+    create.reset();
+    onClose();
+  };
   return (
-    <Modal open={open} onClose={onClose} label="New collection">
+    <Modal open={open} onClose={close} label="New collection">
       <div className="flex flex-col gap-4 overflow-y-auto p-6 pt-14">
         <div>
           <h2 className="text-heading font-semibold text-fg">New collection</h2>
@@ -160,7 +163,7 @@ export function NewCollectionDialog({
             pending={create.isPending}
             error={create.error ? "Couldn’t create the collection. Try again." : null}
             onSubmit={(f) => create.mutate(f)}
-            onCancel={onClose}
+            onCancel={close}
           />
         )}
       </div>

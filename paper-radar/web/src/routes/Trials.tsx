@@ -68,7 +68,7 @@ export default function Trials() {
 }
 
 function AllTrials() {
-  const { team, userId } = useAppContext();
+  const { team } = useAppContext();
   const [params, setParams] = useSearchParams();
   const [adding, setAdding] = useState(false);
   // Trials picked for a new collection (the mock-up's tray).
@@ -297,7 +297,6 @@ function AllTrials() {
         open={saving}
         onClose={() => setSaving(false)}
         teamId={team.id}
-        userId={userId}
         trialIds={picked}
         initial={{ ...EMPTY_COLLECTION, ...sharedTags(all.filter((t) => picked.includes(t.id))) }}
         note={`With ${all

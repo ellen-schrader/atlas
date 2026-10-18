@@ -51,7 +51,10 @@ export default function TrialCollection() {
 function CollectionPage() {
   const { id = "" } = useParams();
   const { team } = useAppContext();
-  const detail = useQuery({ queryKey: ["collection", id], queryFn: () => fetchCollection(id) });
+  const detail = useQuery({
+    queryKey: ["collection", team.id, id],
+    queryFn: () => fetchCollection(id, team.id),
+  });
   const trials = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
@@ -77,7 +80,7 @@ function CollectionPage() {
       )}
       {detail.data === null && (
         <p className="text-sm text-muted">
-          This collection doesn’t exist any more.{" "}
+          There’s no such collection in {team.name}.{" "}
           <Link to="/trials/collections" className="text-accent">
             Back to collections
           </Link>
@@ -97,7 +100,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
   const { data: role } = useMyRole(team.id, userId);
   const [editing, setEditing] = useState(false);
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["collection", c.id] });
+    qc.invalidateQueries({ queryKey: ["collection", team.id, c.id] });
     qc.invalidateQueries({ queryKey: ["collections", team.id] });
   };
 
@@ -108,7 +111,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
     onError: () => toast({ message: "Couldn’t change that. Try again." }),
   });
   const save = useMutation({
-    mutationFn: (f: CollectionFields) => updateCollection(c.id, userId, f),
+    mutationFn: (f: CollectionFields) => updateCollection(c.id, f),
     onSuccess: () => {
       setEditing(false);
       refresh();
@@ -139,7 +142,14 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
       {editing ? (
         <section className="rounded-card border border-border bg-surface p-5">
           <CollectionForm
-            initial={c}
+            initial={{
+              title: c.title,
+              question: c.question,
+              settings: c.settings,
+              patient_groups: c.patient_groups,
+              therapy_classes: c.therapy_classes,
+              comparison: c.comparison,
+            }}
             submitLabel="Save"
             pending={save.isPending}
             error={save.error ? "Couldn’t save. Try again." : null}
@@ -243,10 +253,11 @@ function TrialRows({
   trials: LabTrial[];
   onChange: () => void;
 }) {
-  const { userId } = useAppContext();
+  const toast = useToast();
   const remove = useMutation({
-    mutationFn: (trialId: string) => removeCollectionTrial(c.id, trialId, userId),
+    mutationFn: (trialId: string) => removeCollectionTrial(c.id, trialId),
     onSuccess: onChange,
+    onError: () => toast({ message: "Couldn’t remove that trial. Try again." }),
   });
   if (trials.length === 0)
     return (
@@ -312,6 +323,7 @@ function AddTrialMenu({
   onAdded: () => void;
 }) {
   const { userId } = useAppContext();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -324,6 +336,10 @@ function AddTrialMenu({
     onSuccess: () => {
       setOpen(false);
       onAdded();
+    },
+    onError: () => {
+      setOpen(false);
+      toast({ message: "Couldn’t add that trial. It may have left the lab’s list." });
     },
   });
 
@@ -416,7 +432,9 @@ function AddTrialMenu({
 // --- notes ---------------------------------------------------------------------
 
 function Notes({ c, onChange }: { c: CollectionDetail; onChange: () => void }) {
-  const { userId } = useAppContext();
+  const { team, userId } = useAppContext();
+  const { data: role } = useMyRole(team.id, userId);
+  const toast = useToast();
   const [body, setBody] = useState("");
   const add = useMutation({
     mutationFn: () => addNote(c.id, userId, body),
@@ -425,7 +443,11 @@ function Notes({ c, onChange }: { c: CollectionDetail; onChange: () => void }) {
       onChange();
     },
   });
-  const del = useMutation({ mutationFn: (id: string) => deleteNote(id), onSuccess: onChange });
+  const del = useMutation({
+    mutationFn: (id: string) => deleteNote(id),
+    onSuccess: onChange,
+    onError: () => toast({ message: "Couldn’t delete the note. Try again." }),
+  });
   return (
     <div className="flex flex-col gap-3">
       {c.notes.length === 0 && (
@@ -448,7 +470,8 @@ function Notes({ c, onChange }: { c: CollectionDetail; onChange: () => void }) {
                 <p className="whitespace-pre-wrap text-sm text-fg">{n.body}</p>
                 <div className="mt-0.5 flex items-center gap-2 text-meta text-faint">
                   {name} · {formatRelative(n.created_at)}
-                  {n.author_id === userId && (
+                  {/* Yours; or, for a lab owner, notes whose author left Atlas. */}
+                  {(n.author_id === userId || (n.author_id === null && role === "owner")) && (
                     <button
                       type="button"
                       onClick={() => del.mutate(n.id)}
@@ -517,6 +540,7 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
       return data as unknown as ReportingPaper[];
     },
   });
+  const toast = useToast();
   const add = useMutation({
     mutationFn: (paperId: string) => addCollectionPaper(c.id, paperId, userId),
     onSuccess: () => {
@@ -524,13 +548,30 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
       setPicking(false);
       onChange();
     },
+    onError: () => toast({ message: "Couldn’t add that paper. Try again." }),
   });
   const remove = useMutation({
-    mutationFn: (paperId: string) => removeCollectionPaper(c.id, paperId, userId),
+    mutationFn: (paperId: string) => removeCollectionPaper(c.id, paperId),
     onSuccess: onChange,
+    onError: () => toast({ message: "Couldn’t remove that paper. Try again." }),
+  });
+  // Papers the lab still holds. One the lab has since removed (or that the
+  // viewer can't read) stays listed as removed, so someone can take it out.
+  const held = useQuery({
+    queryKey: ["collection-held", team.id, c.id, c.papers.map((p) => p.paper_id)],
+    enabled: c.papers.length > 0,
+    queryFn: async (): Promise<Set<string>> => {
+      const { data, error } = await supabase
+        .from("paper_posts")
+        .select("paper_id")
+        .eq("team_id", team.id)
+        .in("paper_id", c.papers.map((p) => p.paper_id));
+      if (error) throw error;
+      return new Set((data as { paper_id: string }[]).map((r) => r.paper_id));
+    },
   });
 
-  const about = c.papers.filter((p) => p.papers);
+  const about = c.papers;
   // One row per paper, even if it reports two of the collection's trials.
   const byPaper = new Map<string, NonNullable<ReportingPaper["papers"]>>();
   for (const r of reporting.data ?? []) if (r.papers) byPaper.set(r.papers.id, r.papers);
@@ -565,19 +606,28 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
           <p className="mt-1 text-sm text-muted">Meta-analyses and reviews that cover these trials.</p>
         ) : (
           <ul className="divide-y divide-border">
-            {about.map((p) =>
-              row(
-                p.papers!,
+            {about.map((p) => {
+              const action = (
                 <Button
                   variant="ghost"
                   size="icon"
                   aria-label="Remove from this collection"
-                  onClick={() => remove.mutate(p.papers!.id)}
+                  onClick={() => remove.mutate(p.paper_id)}
                 >
                   <X size={14} aria-hidden />
-                </Button>,
-              ),
-            )}
+                </Button>
+              );
+              return p.papers && (!held.data || held.data.has(p.paper_id)) ? (
+                row(p.papers, action)
+              ) : (
+                <li key={p.paper_id} className="flex items-center gap-2 py-2">
+                  <span className="flex-1 text-sm text-faint">
+                    A paper no longer in {team.name}’s library
+                  </span>
+                  {action}
+                </li>
+              );
+            })}
           </ul>
         )}
         {picking ? (
