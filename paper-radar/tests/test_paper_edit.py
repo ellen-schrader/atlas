@@ -179,9 +179,18 @@ def test_edit_requires_a_token():
     assert resp.status_code in (401, 403)
 
 
-def test_rpc_serialization_failure_becomes_409(monkeypatch):
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("40001", 409),  # serialization failure: someone else edited first
+        ("23503", 401),  # paper_editors foreign key: the editor's account is gone
+    ],
+)
+def test_rpc_errors_become_honest_statuses(monkeypatch, code, status):
     class _Conflict(Exception):
-        code = "40001"
+        pass
+
+    _Conflict.code = code
 
     class _Svc:
         def rpc(self, *_a):
@@ -193,7 +202,7 @@ def test_rpc_serialization_failure_becomes_409(monkeypatch):
     monkeypatch.setattr(app_mod, "service_client", lambda: _Svc())
     with pytest.raises(HTTPException) as err:
         app_mod._apply_edit("p1", "u", "edit", None, {"title": "x"}, ["title"])
-    assert err.value.status_code == 409
+    assert err.value.status_code == status
 
 
 # --- re-resolve --------------------------------------------------------------
