@@ -629,12 +629,12 @@ function MetadataEditor({
  *  draws — and otherwise says "outside your lab" without handing out their id,
  *  which would let a lab tell that one person corrected several papers. */
 function EditedLine({ paper }: { paper: Paper }) {
-  const { data: editor, isLoading } = useQuery({
+  const { data: editor, isLoading, isPlaceholderData } = useQuery({
     queryKey: ["paper-editor", paper.id, paper.edited_at],
     staleTime: 5 * 60_000,
     retry: 1,
-    // A save moves edited_at, so the key changes: keep showing the last answer
-    // for this paper meanwhile rather than blinking the line out.
+    // A save moves edited_at, so the key changes: keep the line up meanwhile
+    // rather than blinking it out (but without the old editor's name, below).
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === paper.id ? prev : undefined),
     queryFn: async () => {
       const { data, error } = await supabase
@@ -647,7 +647,8 @@ function EditedLine({ paper }: { paper: Paper }) {
   if (isLoading) return null;
   // No row: no person made the last edit. A failed lookup also lands here, and
   // the line still shows when, just not who.
-  const who = !editor
+  // The placeholder answered for the previous edit; this one may be someone else's.
+  const who = !editor || isPlaceholderData
     ? ""
     : editor.is_you
       ? " by you"

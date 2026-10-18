@@ -795,6 +795,10 @@ def _apply_edit(
             raise HTTPException(
                 status_code=422, detail="That DOI isn’t in a form Atlas can store."
             ) from exc
+        if code == "23503":  # foreign_key_violation — paper_editors: no profile
+            raise HTTPException(
+                status_code=401, detail="Your account no longer exists."
+            ) from exc
         raise
 
 

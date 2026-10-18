@@ -145,8 +145,8 @@ begin
 end;
 $$;
 
--- `create or replace` with the same signature keeps 20261007140000's grants
--- (service role only); 20261018210000 restates them.
+-- Postgres grants EXECUTE to PUBLIC on a new function; revoke first, or the
+-- grants below add nothing. apply_paper_edit in particular is a definer write to
 
 -- The card's "Edited by Ada · 2 Oct": who last edited the paper, as far as the
 -- caller may know. No row when the caller cannot see the paper or no person
