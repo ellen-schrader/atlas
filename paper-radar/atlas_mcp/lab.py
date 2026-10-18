@@ -700,7 +700,7 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
             ids = list({r["paper_id"] for r in rows})
             papers = client.table("papers").select("id, title").in_("id", ids).execute().data or []
             by_id = {p["id"]: p.get("title") for p in papers}
-            my_mentions = [{"title": by_id.get(pid) or pid} for pid in ids]
+            my_mentions = [{"id": pid, "title": by_id.get(pid)} for pid in ids]
 
     return {**page, "n_comments": n_comments, "mentions": my_mentions}
 

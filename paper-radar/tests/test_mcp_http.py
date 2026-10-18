@@ -418,3 +418,18 @@ def test_connector_has_its_own_cors_policy(api_with_connector):
 def test_requests_before_startup_get_503(api_with_connector):
     client = TestClient(api_with_connector, base_url="https://mcp.atlas.test")  # no lifespan
     assert client.post("/mcp").status_code == 503
+
+
+def test_connecting_hands_claude_the_link_instructions(server):
+    r = _rpc(
+        server,
+        "initialize",
+        {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    )
+    assert r.status_code == 200, r.text
+    instructions = r.json()["result"]["instructions"]
+    assert "link its title to its Atlas page" in instructions

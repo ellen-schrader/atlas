@@ -17,6 +17,7 @@ from .tools import (
     _elicit_confirm,
     _format_digest_hit,
     _format_hit,
+    _paper_title_link,
     _papers_result,
     _render,
     _untrusted,
@@ -130,6 +131,7 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
         team = lab.resolve_team(team_id)
         anchor = lab.get_post(team, paper_id)  # validates membership + gives the title
         title = anchor["paper"].get("title") or paper_id
+        anchor_link = _paper_title_link(anchor["paper"])
         hits = lab.similar(team, paper_id, _clamp(limit))
         note = ""
         if hits is None:  # no embedding on the anchor → keyword fallback
@@ -143,7 +145,9 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
         return f"Error: {exc}"
     if not hits:
         return f"No other papers similar to “{title}” in {team['name']} yet."
-    return _untrusted("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
+    return _untrusted(
+        "lab papers", f"Papers similar to {anchor_link}{note}:\n\n" + _render(hits, "")
+    )
 
 
 @audited
@@ -192,7 +196,7 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
     parts.append("")
     parts.append(f"{d['n_comments']} new comment(s) across the lab.")
     if d["mentions"]:
-        titles = "; ".join(m["title"] for m in d["mentions"])
+        titles = "; ".join(_paper_title_link(m) for m in d["mentions"])
         parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
     return _untrusted("lab activity", "\n".join(parts))
 
@@ -258,11 +262,13 @@ def draft_related_work(
     """
     n = max(1, min(int(limit), 20))
     anchor_title = None  # external (paper title) — must not enter the trusted guide
+    anchor_link = None
     try:
         team = lab.resolve_team(team_id)
         if paper_id:
             anchor = lab.get_post(team, paper_id)  # validate membership + get the title
             anchor_title = anchor["paper"].get("title") or paper_id
+            anchor_link = _paper_title_link(anchor["paper"])
             subject = "the paper you selected"
             hits = lab.similar(team, paper_id, n)
             if hits is None:  # no embedding → keyword fallback on the title
@@ -289,26 +295,26 @@ def draft_related_work(
     sources = []
     for i, h in enumerate(hits, 1):
         p = h["paper"]
-        block = [f"[{i}] ({_citation_key(p)}) {p.get('title') or p.get('url')}"]
+        block = [f"[{i}] ({_citation_key(p)}) {_paper_title_link(p)}"]
         authors = ", ".join(p.get("authors") or [])
         if authors:
             block.append(authors)
         if p.get("abstract"):
             block.append(f"Abstract: {p['abstract']}")
-        block.append(lab.paper_link(p["id"]))
         sources.append("\n".join(block))
 
     guide = (
         f"Draft a Related Work section on {subject} for {team['name']} using ONLY the "
-        f"{len(sources)} sources below. Cite each as (Author, Year) with its deep link; "
+        f"{len(sources)} sources below. Cite each as (Author, Year) with its title linked "
+        "to its Atlas page as given; "
         "group related work by theme; for each, state its contribution and how it "
         "relates. Do not introduce any reference that isn't listed here.\n\n"
     )
     # The anchor title is externally authored — expose it as data, never as part of
     # the instruction above.
     body = _untrusted("lab papers", "\n\n".join(sources))
-    if anchor_title:
-        body = _untrusted("anchor paper title", anchor_title) + "\n\n" + body
+    if anchor_link:
+        body = _untrusted("anchor paper title", anchor_link) + "\n\n" + body
     return guide + body
 
 
@@ -411,7 +417,8 @@ async def post_paper(
 
     head = f"Already in {team['name']}" if already else f"Shared to {team['name']}"
     tail = f" — tagged @{member['display_name']}" if member else ""
-    body = f"{head}: {title}{tail}\n{lab.paper_link(paper_id)}"
+    linked = _paper_title_link({"id": paper_id, "title": title})
+    body = f"{head}{tail}:\n" + _untrusted("paper", linked)
     if preprint:
         body += "\n(The published version of the preprint you linked.)"
     return f"{body}\n{warn}" if warn else body

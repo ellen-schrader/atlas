@@ -483,7 +483,7 @@ def _drive_digest(
     from atlas_mcp import papers
 
     monkeypatch.setattr(L, "resolve_team", lambda tid: {"id": "t1", "name": "Lab A"})
-    monkeypatch.setattr(L, "paper_link", lambda pid: f"http://x/{pid}")
+    monkeypatch.setattr(L, "paper_link", lambda pid: f"https://atlas.test/papers?paper={pid}")
     hits = [_digest_hit(f"p{i}", "An abstract.") for i in range(offset, offset + page)]
     first_page = offset == 0
     monkeypatch.setattr(
@@ -526,3 +526,38 @@ def test_digest_single_page_and_past_the_end(monkeypatch):
     assert "3 new paper(s):" in out and "showing" not in out
     out = _drive_digest(monkeypatch, n_papers=3, offset=40, page=0)
     assert "none left from offset 40" in out
+
+
+# --- Atlas links on every paper ---------------------------------------------
+
+
+def test_paper_titles_are_ready_made_atlas_links(monkeypatch):
+    pytest.importorskip("mcp")
+    from atlas_mcp import tools
+
+    monkeypatch.setattr(lab, "paper_link", lambda pid: f"https://atlas.test/papers?paper={pid}")
+    block = tools._format_hit(_digest_hit("p1"))
+    assert block.splitlines()[0] == "**[Paper p1](https://atlas.test/papers?paper=p1)**"
+    assert "paper_id: p1" in block
+
+    # Brackets, inline markup and line breaks in a title can't break the link,
+    # and a hostile title can't smuggle in a second one.
+    weird = tools._md_link("[18F]FDG <i>PET</i>\n in mice", "https://x")
+    assert weird == "[(18F)FDG PET in mice](https://x)"
+    hostile = tools._md_link("x](https://evil.example) [y", "https://x")
+    assert "](https://evil" not in hostile
+
+    # A blank title falls back rather than giving an empty link.
+    blank = tools._paper_title_link({"id": "p9", "title": "\n ", "url": "https://doi.org/1"})
+    assert blank.startswith("[https://doi.org/1](")
+
+
+def test_paper_results_end_with_the_link_reminder(monkeypatch):
+    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3)
+    assert out.endswith("link its title to its Atlas page as given above.")
+    # The reminder is ours, so it sits outside the untrusted-data wrapper.
+    assert out.index("</lab activity>") < out.index("link its title")
+
+    # No papers, no reminder about "these papers".
+    quiet = _drive_digest(monkeypatch, n_papers=0, offset=0, page=0)
+    assert "link its title" not in quiet
