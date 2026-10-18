@@ -27,6 +27,8 @@ export interface AppContext {
   features: readonly string[];
   /** Whether `features` has loaded: an empty list before then means "not yet". */
   featuresLoaded: boolean;
+  /** Loading `features` failed (after retries). */
+  featuresFailed: boolean;
 }
 
 export function useAppContext() {
@@ -64,7 +66,7 @@ export default function Layout({
   // flash of the mobile nav on a desktop load.
   const shellWidth = useElementWidth(shellRef) || window.innerWidth;
   const mode = navModeFor(shellWidth);
-  const { features, loaded: featuresLoaded } = useFeatures(team.id);
+  const { features, loaded: featuresLoaded, failed: featuresFailed } = useFeatures(team.id);
   const ctx: AppContext = {
     session,
     team,
@@ -73,6 +75,7 @@ export default function Layout({
     shellWidth,
     features,
     featuresLoaded,
+    featuresFailed,
   };
   const sidebar = {
     userId: session.user.id,

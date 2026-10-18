@@ -10,10 +10,23 @@ import { useAppContext } from "@/routes/Layout";
 /** Renders its children only when clinical trials is on for the user in this
  *  lab; otherwise sends them home, as if the page didn't exist. */
 export function RequireTrials({ children }: { children: ReactNode }) {
-  const { features, featuresLoaded } = useAppContext();
+  const { features, featuresLoaded, featuresFailed } = useAppContext();
+  if (featuresFailed)
+    return (
+      <p role="alert" className="p-8 text-sm text-danger">
+        Couldn’t load this page. Check your connection and reload.
+      </p>
+    );
   if (!featuresLoaded) return null;
   if (!features.includes(TRIALS_FEATURE)) return <Navigate to="/" replace />;
   return <>{children}</>;
+}
+
+/** What a classification field shows before Claude has filled it in. */
+export function Unclassified({ state }: { state: "pending" | "missing" }) {
+  return (
+    <span className="text-faint">{state === "pending" ? "Classifying…" : "Not classified"}</span>
+  );
 }
 
 /** Every trials page ends with this. */

@@ -5,14 +5,14 @@ Claude reads the registry record once, when a trial joins a lab's list; a
 member's correction (classified_by = 'person') is never overwritten. Registry
 text is untrusted data: it goes in delimited, and Claude has no tools.
 
-Cost: one short call per trial a lab adds.
+Cost: one short call per trial a lab adds (at most MAX_ATTEMPTS if it fails).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
@@ -125,53 +125,97 @@ def classify(registry: dict[str, Any]) -> Classification | None:
     )
 
 
+MAX_ATTEMPTS = 3  # then Claude leaves it; a person can still classify it
+CLAIM_FOR = timedelta(minutes=10)  # a claim older than this was a crashed task
+
+
+def _pending(svc, team_id: str) -> list[tuple[str, int]]:
+    """(trial_id, attempts so far) for the lab's trials nobody has classified,
+    that Claude hasn't given up on and no task is working on right now."""
+    posted = {
+        r["trial_id"]
+        for r in svc.table("trial_posts").select("trial_id").eq("team_id", team_id).execute().data
+        or []
+    }
+    rows = (
+        svc.table("trial_facts")
+        .select("trial_id, classified_by, classify_attempts, classify_claimed_at")
+        .eq("team_id", team_id)
+        .execute()
+        .data
+        or []
+    )
+    facts = {r["trial_id"]: r for r in rows}
+    stale = datetime.now(UTC) - CLAIM_FOR
+    out = []
+    for trial_id in sorted(posted):
+        f = facts.get(trial_id)
+        if f is None:
+            out.append((trial_id, 0))
+            continue
+        claimed = f.get("classify_claimed_at")
+        if (
+            f.get("classified_by") is None
+            and f["classify_attempts"] < MAX_ATTEMPTS
+            and (claimed is None or datetime.fromisoformat(claimed) < stale)
+        ):
+            out.append((trial_id, f["classify_attempts"]))
+    return out
+
+
+def _claim(svc, team_id: str, trial_id: str, attempts: int) -> bool:
+    """Take the row for this attempt. Conditional on the attempt count still
+    being what we read, so of two tasks only one gets it."""
+    # The row may not exist yet; its short name stays null (the registry's
+    # shows until a person sets one).
+    svc.table("trial_facts").upsert(
+        {"team_id": team_id, "trial_id": trial_id},
+        on_conflict="team_id,trial_id",
+        ignore_duplicates=True,
+    ).execute()
+    taken = (
+        svc.table("trial_facts")
+        .update(
+            {
+                "classify_attempts": attempts + 1,
+                "classify_claimed_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .eq("classify_attempts", attempts)
+        .is_("classified_by", "null")
+        .execute()
+        .data
+    )
+    return bool(taken)
+
+
 def classify_lab(team_id: str) -> int:
     """Classify the lab's trials that nobody has classified yet. Returns how
-    many were classified. Never raises: it runs as a background task."""
+    many were classified. Never raises: it runs as a background task.
+
+    Cheap when there's nothing to do (the usual case after a paper is posted):
+    two small reads, and registry records are only loaded for trials it works on.
+    """
     try:
         svc = service_client()
-        posts = (
-            svc.table("trial_posts")
-            .select("trial_id, trials(acronym, registry)")
-            .eq("team_id", team_id)
-            .execute()
-            .data
-            or []
-        )
-        done = {
-            r["trial_id"]
-            for r in svc.table("trial_facts")
-            .select("trial_id")
-            .eq("team_id", team_id)
-            .in_("classified_by", ["claude", "person"])
-            .execute()
-            .data
-            or []
-        }
         n = 0
-        for p in posts:
-            trial = p.get("trials")
-            if p["trial_id"] in done or not trial:
-                continue
-            c = classify(trial["registry"])
+        for trial_id, attempts in _pending(svc, team_id):
+            if not _claim(svc, team_id, trial_id, attempts):
+                continue  # another task has it
+            rows = svc.table("trials").select("registry").eq("id", trial_id).execute().data
+            c = classify(rows[0]["registry"]) if rows else None
             if c is None:
-                continue
-            # Only fills a row nobody classified: a person's row (or one a
-            # person wrote while Claude was thinking) is left alone.
-            svc.table("trial_facts").upsert(
-                {"team_id": team_id, "trial_id": p["trial_id"], "acronym": trial.get("acronym")},
-                on_conflict="team_id,trial_id",
-                ignore_duplicates=True,
-            ).execute()
+                continue  # counted as an attempt; retried after CLAIM_FOR, up to MAX_ATTEMPTS
             svc.table("trial_facts").update(
                 {
                     **c.model_dump(),
                     "classified_by": "claude",
                     "classified_at": datetime.now(UTC).isoformat(),
+                    "classify_claimed_at": None,
                 }
-            ).eq("team_id", team_id).eq("trial_id", p["trial_id"]).is_(
-                "classified_by", "null"
-            ).execute()
+            ).eq("team_id", team_id).eq("trial_id", trial_id).is_("classified_by", "null").execute()
             n += 1
         return n
     except Exception as exc:  # noqa: BLE001

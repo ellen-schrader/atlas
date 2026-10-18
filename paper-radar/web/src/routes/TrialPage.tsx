@@ -17,6 +17,7 @@ import {
   type TherapyClass,
   type TrialDetail,
   type TrialLink,
+  classification,
   ctgovUrl,
   decideLink,
   fetchTrialDetail,
@@ -44,7 +45,10 @@ function Trial() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["trial", team.id, nct],
     queryFn: () => fetchTrialDetail(team.id, nct),
-    refetchInterval: (q) => (q.state.data && !q.state.data.facts?.classified_by ? 5000 : false),
+    refetchInterval: (q) =>
+      q.state.data && classification(q.state.data.facts, q.state.data.added_at) === "pending"
+        ? 5000
+        : false,
   });
 
   return (
@@ -283,7 +287,9 @@ function Classification({ d, onSaved }: { d: TrialDetail; onSaved: () => void })
       ? "Edited by a lab member"
       : f?.classified_by === "claude"
         ? "Suggested by Claude from the registry record"
-        : "Claude is classifying this trial…";
+        : classification(f, d.added_at) === "pending"
+          ? "Claude is classifying this trial…"
+          : "Not classified yet. Use Edit to set it.";
 
   if (editing && draft) {
     const toggle = <K extends "settings" | "patient_groups" | "therapy_classes">(

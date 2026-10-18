@@ -5,7 +5,11 @@ import { supabase } from "@/lib/supabase";
 /** The features switched on for the current user in this lab (for the lab, or
  *  just for them). Empty while loading, so a dark feature never flashes in;
  *  `loaded` says whether an empty list is the answer yet. */
-export function useFeatures(teamId: string): { features: string[]; loaded: boolean } {
+export function useFeatures(teamId: string): {
+  features: string[];
+  loaded: boolean;
+  failed: boolean;
+} {
   const { data, isError } = useQuery({
     queryKey: ["features", teamId],
     queryFn: async (): Promise<string[]> => {
@@ -15,5 +19,7 @@ export function useFeatures(teamId: string): { features: string[]; loaded: boole
     },
     staleTime: 5 * 60_000,
   });
-  return { features: data ?? [], loaded: data !== undefined || isError };
+  // A failed load is not "off": pages behind a feature say so instead of
+  // redirecting, so a network blip doesn't throw someone off their page.
+  return { features: data ?? [], loaded: data !== undefined, failed: isError };
 }

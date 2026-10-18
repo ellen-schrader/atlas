@@ -25,6 +25,11 @@ create table public.trial_facts (
     -- 'claude' until a person edits the row; then 'person', and Claude leaves it.
     classified_by   text check (classified_by in ('claude', 'person')),
     classified_at   timestamptz,
+    -- Claude's attempts, for the service role: a row is claimed before the
+    -- call (so two background tasks don't both pay for it) and given up after
+    -- a few failures (a person can still classify it).
+    classify_attempts   integer not null default 0,
+    classify_claimed_at timestamptz,
     updated_by      uuid references public.profiles (id) on delete set null,
     updated_at      timestamptz not null default now(),
     primary key (team_id, trial_id)

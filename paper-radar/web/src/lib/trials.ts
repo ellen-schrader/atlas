@@ -99,6 +99,8 @@ export interface TrialFacts {
   patient_groups: PatientGroup[];
   therapy_classes: TherapyClass[];
   classified_by: "claude" | "person" | null;
+  classify_attempts: number;
+  classify_claimed_at: string | null;
   updated_by: string | null;
   updated_at: string;
 }
@@ -114,6 +116,22 @@ export interface LabTrial extends Trial {
   papers: number;
   /** Suggested links waiting for someone to confirm or reject them. */
   suggestions: number;
+}
+
+/** Where Claude's classification stands: "done", "pending" (just added, or a
+ *  task is working on it: worth waiting for) or "missing" (it didn't happen;
+ *  someone can set it on the trial page). */
+export function classification(
+  facts: TrialFacts | null,
+  addedAt: string,
+  now = Date.now(),
+): "done" | "pending" | "missing" {
+  if (facts?.classified_by) return "done";
+  const recent = (iso: string | null | undefined, ms: number) =>
+    !!iso && now - new Date(iso).getTime() < ms;
+  if (recent(addedAt, 3 * 60_000) || recent(facts?.classify_claimed_at, 2 * 60_000))
+    return "pending";
+  return "missing";
 }
 
 export const TRIAL_COLUMNS =
@@ -179,6 +197,7 @@ export interface TrialLink {
 export interface TrialDetail {
   trial: Trial & { registry: Registry };
   added: "manual" | "paper";
+  added_at: string;
   facts: TrialFacts | null;
   links: TrialLink[];
 }
@@ -209,7 +228,7 @@ export interface Registry {
 export async function fetchTrialDetail(teamId: string, nct: string): Promise<TrialDetail | null> {
   const post = await supabase
     .from("trial_posts")
-    .select(`source, trials!inner(${TRIAL_COLUMNS}, registry)`)
+    .select(`source, created_at, trials!inner(${TRIAL_COLUMNS}, registry)`)
     .eq("team_id", teamId)
     .eq("trials.nct_id", nct)
     .maybeSingle();
@@ -235,6 +254,7 @@ export async function fetchTrialDetail(teamId: string, nct: string): Promise<Tri
   return {
     trial,
     added: (post.data as { source: "manual" | "paper" }).source,
+    added_at: (post.data as { created_at: string }).created_at,
     facts: facts.data as TrialFacts | null,
     links: links.data as unknown as TrialLink[],
   };
@@ -271,6 +291,16 @@ export async function saveFacts(teamId: string, trialId: string, userId: string,
   const { error } = await supabase
     .from("trial_facts")
     .insert({ team_id: teamId, trial_id: trialId, ...row });
+  if (error?.code === "23505") {
+    // Someone (or Claude) created the row between our update and insert.
+    const again = await supabase
+      .from("trial_facts")
+      .update(row)
+      .eq("team_id", teamId)
+      .eq("trial_id", trialId);
+    if (again.error) throw again.error;
+    return;
+  }
   if (error) throw error;
 }
 

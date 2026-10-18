@@ -174,7 +174,8 @@ def test_search_by_nct_fetches_that_trial(monkeypatch):
 
 # --- linking papers to trials ------------------------------------------------------
 
-trial_links = pytest.importorskip("api.trial_links")
+from api import trial_links  # noqa: E402
+
 # conftest turns link_paper into a no-op for every test; keep the real one.
 _real_link_paper = trial_links.link_paper
 
@@ -352,7 +353,6 @@ def test_link_paper_links_for_labs_with_the_feature(monkeypatch):
 
 # --- the API ---------------------------------------------------------------------
 
-pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.trials as trials_api  # noqa: E402
@@ -409,7 +409,7 @@ def test_add_rejects_bad_ids_and_non_breast_trials(monkeypatch):
 
 # --- classification (PR 2) ----------------------------------------------------------
 
-trial_classify = pytest.importorskip("api.trial_classify")
+from api import trial_classify  # noqa: E402
 
 
 def test_registry_digest_carries_what_classification_needs():
@@ -471,14 +471,21 @@ def test_classify_gives_up_quietly(monkeypatch):
     assert trial_classify.classify({}) is None
 
 
-def test_classify_lab_skips_trials_already_classified(monkeypatch):
+def test_classify_lab_claims_and_fills_only_pending_trials(monkeypatch):
     svc = _FakeSvc(
         {
-            "trial_posts": [
-                {"trial_id": "t1", "trials": {"acronym": "A", "registry": {}}},
-                {"trial_id": "t2", "trials": {"acronym": "B", "registry": {}}},
+            "trial_posts": [{"trial_id": "t1"}, {"trial_id": "t2"}],
+            # A person did t1. Reads of trial_facts also answer _claim's update,
+            # which only needs to come back non-empty.
+            "trial_facts": [
+                {
+                    "trial_id": "t1",
+                    "classified_by": "person",
+                    "classify_attempts": 0,
+                    "classify_claimed_at": None,
+                }
             ],
-            "trial_facts": [{"trial_id": "t1"}],  # a person (or Claude) did t1
+            "trials": [{"registry": {"identificationModule": {}}}],
         }
     )
     monkeypatch.setattr(trial_classify, "service_client", lambda: svc)
@@ -492,4 +499,56 @@ def test_classify_lab_skips_trials_already_classified(monkeypatch):
     monkeypatch.setattr(trial_classify, "classify", classify)
     assert trial_classify.classify_lab("lab") == 1
     assert len(seen) == 1
-    assert svc.upserts == [("trial_facts", {"team_id": "lab", "trial_id": "t2", "acronym": "B"})]
+    # The placeholder row carries no short name: the registry's shows until a
+    # person sets one.
+    assert svc.upserts == [("trial_facts", {"team_id": "lab", "trial_id": "t2"})]
+
+
+def test_pending_skips_given_up_and_claimed_trials():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    row = {"classified_by": None, "classify_attempts": 0, "classify_claimed_at": None}
+    svc = _FakeSvc(
+        {
+            "trial_posts": [{"trial_id": t} for t in ("new", "retry", "gave-up", "busy", "stale")],
+            "trial_facts": [
+                {
+                    **row,
+                    "trial_id": "retry",
+                    "classify_attempts": 1,
+                    "classify_claimed_at": (now - timedelta(hours=1)).isoformat(),
+                },
+                {**row, "trial_id": "gave-up", "classify_attempts": trial_classify.MAX_ATTEMPTS},
+                {
+                    **row,
+                    "trial_id": "busy",
+                    "classify_attempts": 1,
+                    "classify_claimed_at": now.isoformat(),
+                },
+                {
+                    **row,
+                    "trial_id": "stale",
+                    "classify_attempts": 2,
+                    "classify_claimed_at": (now - timedelta(minutes=30)).isoformat(),
+                },
+            ],
+        }
+    )
+    assert trial_classify._pending(svc, "lab") == [("new", 0), ("retry", 1), ("stale", 2)]
+
+
+def test_lab_trials_match_the_labs_short_name_too():
+    svc = _FakeSvc(
+        {
+            "trial_posts": [
+                {
+                    "trial_id": "t",
+                    "trials": {"id": "t", "nct_id": "NCT02620280", "acronym": "NeoTRIPaPDL1"},
+                }
+            ],
+            "trial_facts": [{"trial_id": "t", "acronym": "NeoTRIP"}],
+        }
+    )
+    trials = trial_links._lab_trials(svc, "lab")
+    assert trials["NCT02620280"]["names"] == ["NeoTRIP", "NeoTRIPaPDL1"]

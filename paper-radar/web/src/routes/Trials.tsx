@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { FlaskConical, LayoutGrid, List, Loader2, Plus, X } from "lucide-react";
@@ -11,6 +11,7 @@ import {
   TherapyList,
   TherapySwatch,
   TrialsDisclaimer,
+  Unclassified,
 } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import {
   SETTINGS,
   THERAPY_CLASSES,
   type TherapyClass,
+  classification,
   fetchLabTrials,
   phaseLabel,
   statusLabel,
@@ -72,7 +74,7 @@ function AllTrials() {
     queryFn: () => fetchLabTrials(team.id),
     // Claude classifies new trials in the background: look again shortly.
     refetchInterval: (q) =>
-      q.state.data?.some((t) => !t.facts?.classified_by) ? 5000 : false,
+      q.state.data?.some((t) => classification(t.facts, t.added_at) === "pending") ? 5000 : false,
   });
 
   const selected = (key: FilterKey) => params.get(key)?.split(",").filter(Boolean) ?? [];
@@ -282,8 +284,11 @@ function AllTrials() {
   );
 }
 
-function Classifying() {
-  return <span className="text-faint">Classifying…</span>;
+/** `content` once Claude (or a person) has classified the trial; until then,
+ *  whether it's on its way or didn't happen. */
+function Classified({ t, children }: { t: LabTrial; children: ReactNode }) {
+  const state = classification(t.facts, t.added_at);
+  return state === "done" ? <>{children}</> : <Unclassified state={state} />;
 }
 
 function PaperCount({ t }: { t: LabTrial }) {
@@ -331,21 +336,15 @@ function TrialTable({ trials }: { trials: LabTrial[] }) {
                 </div>
               </td>
               <td className="px-3 py-3 text-fg">
-                {t.facts?.classified_by ? list(t, "settings", SETTINGS) : <Classifying />}
+                <Classified t={t}>{list(t, "settings", SETTINGS)}</Classified>
               </td>
               <td className="px-3 py-3 text-fg">
-                {t.facts?.classified_by ? (
-                  <TherapyList therapies={t.facts.therapy_classes} />
-                ) : (
-                  <Classifying />
-                )}
+                <Classified t={t}>
+                  <TherapyList therapies={t.facts?.therapy_classes ?? []} />
+                </Classified>
               </td>
               <td className="px-3 py-3 text-fg">
-                {t.facts?.classified_by ? (
-                  list(t, "patient_groups", PATIENT_GROUPS)
-                ) : (
-                  <Classifying />
-                )}
+                <Classified t={t}>{list(t, "patient_groups", PATIENT_GROUPS)}</Classified>
               </td>
               <td className="px-3 py-3 text-muted">{statusLabel(t.status)}</td>
               <td className="px-4 py-3 text-fg">
@@ -377,15 +376,20 @@ function TrialGrid({ trials }: { trials: LabTrial[] }) {
               </span>
             )}
             <div className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
-              {list(t, "settings", SETTINGS)} · {phaseLabel(t.phases)}
+              <Classified t={t}>{list(t, "settings", SETTINGS)}</Classified> ·{" "}
+              {phaseLabel(t.phases)}
             </div>
             <div className="text-card font-semibold text-fg">{t.name}</div>
             <p className="line-clamp-2 text-sm text-muted">{t.title}</p>
             <div className="text-sm text-fg">
-              {t.facts?.classified_by ? <TherapyList therapies={therapies} /> : <Classifying />}
+              <Classified t={t}>
+                <TherapyList therapies={therapies} />
+              </Classified>
             </div>
             <div className="mt-auto flex items-center justify-between pt-2 text-meta text-muted">
-              <span>{list(t, "patient_groups", PATIENT_GROUPS)}</span>
+              <span>
+                <Classified t={t}>{list(t, "patient_groups", PATIENT_GROUPS)}</Classified>
+              </span>
               <PaperCount t={t} />
             </div>
           </Link>
