@@ -306,7 +306,12 @@ def main(argv: list[str] | None = None) -> None:
         steps = ((backfill_embeddings.main, []), (backfill_enrichment.main, ["--batch-size", "5"]))
         for step, step_args in steps:
             try:
-                step(step_args)
+                # Each returns how many papers it couldn't do -- a rejected API
+                # key fails every paper without raising, and must still turn
+                # the run red.
+                if step_failed := step(step_args):
+                    failed += 1
+                    print(f"  ! {step.__module__}: {step_failed} papers failed")
             except Exception as exc:  # noqa: BLE001 -- the next run retries
                 failed += 1
                 print(f"  ! {step.__module__} failed: {exc}")
