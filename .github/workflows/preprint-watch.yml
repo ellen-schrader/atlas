@@ -2,6 +2,8 @@
 # merge or promote them, notify the people who held them, and record likely
 # duplicate pairs for the labs to answer. docs/preprint-dedup-plan.md, PR 4.
 #
+# Also finds abstracts for papers that came in without one (api/backfill_abstracts.py).
+#
 # Runs here rather than on Fly: the API machine stops when idle, and nothing
 # about this needs the web server. Free: a public repo's standard runners cost
 # nothing, and a run is a few hundred Crossref/bioRxiv lookups.
@@ -37,7 +39,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     environment: preprint-watch
     defaults:
       run:
@@ -58,4 +60,9 @@ jobs:
           cache-dependency-glob: paper-radar/uv.lock
       - run: uv sync --frozen --extra api
       # A scheduled run has no inputs, so it writes; a manual one defaults to a dry run.
-      - run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}
+      # Abstracts first: preprint_watch ends by re-embedding and re-tagging, which
+      # picks up the papers that just gained one (issue #136).
+      - run: uv run --frozen python -m api.backfill_abstracts ${{ inputs.dry_run && '--dry-run' || '' }}
+      # Still runs if the abstract step failed on a paper or two.
+      - if: ${{ !cancelled() }}
+        run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}

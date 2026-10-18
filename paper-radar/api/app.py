@@ -2421,7 +2421,7 @@ def bibtex_import(
 
             # BibTeX metadata is already structured, so we trust it and skip the
             # network entirely — a 400-entry import must not become 400 HTTP fetches.
-            # Anything thin (no abstract) is picked up by the existing backfill.
+            # A missing abstract is looked up by the daily api.backfill_abstracts.
             meta = PaperMetadata(
                 url=url,
                 title=e.title,

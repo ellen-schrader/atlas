@@ -554,6 +554,56 @@ def _fetch_europepmc(doi: str, url: str) -> PaperMetadata | None:
     return parse_europepmc(raw, url) if raw is not None else None
 
 
+def parse_pubmed_esearch(payload: bytes) -> str | None:
+    """The PMID from an esearch response, if it matched exactly one record.
+
+    A DOI search that matches several records (an erratum, a comment indexed
+    under the same DOI) has no right answer, so it is treated as no match.
+    """
+    try:
+        ids = json.loads(payload)["esearchresult"]["idlist"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    return ids[0] if len(ids) == 1 else None
+
+
+def _pmid_for_doi(doi: str) -> str | None:
+    term = urllib.request.quote(f"{doi}[doi]")
+    endpoint = (
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+        f"?db=pubmed&retmode=json&term={term}{_NCBI_PARAMS}"
+    )
+    raw = _get(endpoint)
+    return parse_pubmed_esearch(raw) if raw is not None else None
+
+
+# A "description" meta tag is often a one-line teaser, not an abstract. Below
+# this, a scraped page is not trusted to have given us the real thing.
+_MIN_PAGE_ABSTRACT = 200
+
+
+def find_abstract(doi: str | None, url: str, *, scrape: bool = False) -> PaperMetadata | None:
+    """An abstract for a paper, from the sources that index one, or None.
+
+    Europe PMC by DOI first, then PubMed by DOI (it has abstracts Europe PMC
+    hasn't picked up yet), then -- with ``scrape`` -- the paper's own page.
+    Publisher pages rarely help (Nature and Cell block us), so ingest, which
+    has usually just scraped or skipped the page, leaves ``scrape`` off.
+    Only ``abstract``, ``keywords`` and ``source`` of the result are meant to be used.
+    """
+    if doi:
+        if (m := _fetch_europepmc(doi, url)) and m.abstract:
+            return m
+        if pmid := _pmid_for_doi(doi):
+            abstract, keywords = _fetch_pubmed_abstract(pmid)
+            if abstract:
+                return PaperMetadata(url=url, abstract=abstract, keywords=keywords, source="pubmed")
+    if scrape and (m := _scrape_landing_page(url)):
+        if m.abstract and len(m.abstract) >= _MIN_PAGE_ABSTRACT:
+            return m
+    return None
+
+
 # --- landing-page citation-tag scraping --------------------------------------
 
 
@@ -941,7 +991,7 @@ def fetch_metadata(url: str, *, network: bool = True) -> PaperMetadata:
                 meta.abstract = abstract
             if keywords and not meta.keywords:
                 meta.keywords = keywords
-        if not meta.abstract and meta.doi and (extra := _fetch_europepmc(meta.doi, url)):
+        if not meta.abstract and (extra := find_abstract(meta.doi, url)):
             _merge(meta, extra)
 
     # 4) A preprint is labelled with its server, whichever source resolved it.
