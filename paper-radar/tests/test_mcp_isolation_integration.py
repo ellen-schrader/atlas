@@ -317,4 +317,4 @@ def test_digest_past_the_last_page_is_not_an_error(labs):
     with lab.act_as(a.token, a.user_id):
         out = papers.lab_digest(days=7, offset=10_000)
     assert "Error" not in out
-    assert "none left from offset 10000" in out
+    assert "None left from offset 10000" in out

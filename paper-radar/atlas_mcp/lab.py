@@ -22,7 +22,6 @@ app, so cited links are shareable — override it to point at your own deploymen
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Iterator
@@ -30,7 +29,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
 
-from api import embeddings
+from api import embeddings, taste
 from api.config import get_api_settings
 from api.ratelimit import PerUserRateLimiter
 from paper_radar.ingest import url_guard
@@ -46,8 +45,8 @@ PAPER_COLUMNS = (
     "id, url, doi, title, authors, abstract, venue, year, keywords, tags, code_url, data_url"
 )
 POST_COLUMNS = "id, team_id, paper_id, posted_at, note, posted_by_label, tags"
-# Papers per lab_digest page. Each carries an abstract excerpt, so keep it modest.
-DIGEST_PAGE = 20
+# Papers per lab_digest page: one line each, so a fortnight of a busy lab fits.
+DIGEST_PAGE = 100
 
 
 # The lab the in-flight tool call is acting on. Set by resolve_team so the audit
@@ -392,11 +391,11 @@ def _embed_query(text: str) -> list[float]:
 
 
 def _hydrate(client: Client, posts: list[dict]) -> list[dict]:
-    """Attach each post's paper (one `in_` query), preserving post order."""
+    """Attach each post's paper (URL-sized `in_` queries), preserving post order."""
     ids = list({p["paper_id"] for p in posts})
     if not ids:
         return []
-    papers = client.table("papers").select(PAPER_COLUMNS).in_("id", ids).execute().data or []
+    papers = taste.papers_by_id(client, ids, PAPER_COLUMNS)
     by_id = {p["id"]: p for p in papers}
     out = []
     for p in posts:
@@ -413,10 +412,7 @@ def _hydrate_scored(client: Client, rows: list[dict]) -> list[dict]:
     if not rows:
         return []
     sim = {r["post_id"]: r["similarity"] for r in rows}
-    posts = (
-        client.table("paper_posts").select(POST_COLUMNS).in_("id", list(sim)).execute().data or []
-    )
-    hydrated = _hydrate(client, posts)
+    hydrated = _hydrate_in_order(client, list(sim))
     for h in hydrated:
         h["similarity"] = sim.get(h["id"])
     hydrated.sort(key=lambda h: -(h.get("similarity") or 0))
@@ -469,100 +465,189 @@ def recent(team: dict, limit: int) -> list[dict]:
 # stays in Postgres (match_papers / recommend_papers over the HNSW index).
 
 
-def _unit(v: list[float]) -> list[float] | None:
-    """L2-normalise a vector; None if it has no magnitude."""
-    s = sum(x * x for x in v) ** 0.5
-    return [x / s for x in v] if s > 0 else None
+_parse_embedding = taste.parse_vec
 
 
-def _centroid(vectors: list[list[float]]) -> list[float] | None:
-    """The L2-normalised mean of unit-normalised vectors (equal weight each), so a
-    few papers define a taste direction. None when nothing usable was passed."""
-    acc: list[float] | None = None
-    n = 0
-    for v in vectors:
-        u = _unit(v)
-        if u is None:
-            continue
-        if acc is None:
-            acc = list(u)
-        elif len(u) == len(acc):
-            for i in range(len(acc)):
-                acc[i] += u[i]
-        else:
-            continue  # different dimensionality — skip rather than crash/corrupt
-        n += 1
-    if acc is None:
-        return None
-    return _unit([x / n for x in acc])
+# The caller's signals, computed the way the app's Discover feed does
+# (api/taste.py), so Claude's recommendations and the app's agree.
 
 
-def _parse_embedding(raw) -> list[float] | None:
-    """PostgREST returns a pgvector column as a JSON string — normalise to a list."""
-    if not raw:
-        return None
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            return None
-    return raw
+def _taste_signals(client: Client, team: dict) -> dict:
+    """What api.taste needs, read as the caller: ``weights`` (paper id → interest),
+    ``anchors`` (paper id → strongest engagement), ``loaded`` (query vectors,
+    follows, profile text, engaged papers' vectors and titles), ``exclude`` (the
+    caller's Teams posts, which the RPCs can't tell are theirs) and ``taste``
+    (the blended vector, None on cold start).
 
-
-def taste_vector(team: dict) -> list[float] | None:
-    """A taste centroid for the signed-in user: the mean embedding of the papers
-    they've read/are reading or reacted to in this lab. None on cold start (no
-    such engagement). RLS scopes every read to the caller."""
-    client = get_client()
+    The profile comes from my_recommendation_inputs(): profiles is closed to
+    connector tokens, and that function returns the caller's own row only."""
     uid = current_user_id()
+    loaded: dict = {"follows": [], "profile_md": "", "profile_md_us": ""}
+    signals = {
+        "weights": {},
+        "anchors": {},
+        "loaded": loaded,
+        "exclude": frozenset(),
+        "taste": None,
+    }
     if not uid:
-        return None
-    tid = team["id"]
-    ids: set[str] = set()
-    status = (
-        client.table("paper_status")
-        .select("paper_id")
-        .eq("team_id", tid)
-        .eq("user_id", uid)
-        .in_("status", ["read", "reading"])
-        .execute()
-        .data
-        or []
+        return signals
+    try:
+        rows = client.rpc("my_recommendation_inputs", {}).execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        # PGRST202: the function isn't there (MCP deployed ahead of its migration,
+        # or a local stack on another branch). Rank without the profile signals.
+        if getattr(exc, "code", None) != "PGRST202":
+            raise
+        log.warning("my_recommendation_inputs is missing; recommending without the profile")
+        rows = []
+    profile = rows[0] if rows else {}
+    loaded["follows"] = taste.follows_of(profile)
+    loaded["profile_md"] = profile.get("profile_md") or ""
+    loaded["profile_md_us"] = profile.get("profile_md_us") or ""
+    anchors: dict[str, str] = {}
+    teams_posts: set[str] = set()
+    weights = taste.engagement_weights(
+        client,
+        uid,
+        team["id"],
+        anchors,
+        display_name=profile.get("display_name"),
+        teams_posts=teams_posts,
     )
-    ids.update(r["paper_id"] for r in status)
-    reacted = (
-        client.table("reactions")
-        .select("paper_id")
-        .eq("team_id", tid)
-        .eq("user_id", uid)
-        .execute()
-        .data
-        or []
-    )
-    ids.update(r["paper_id"] for r in reacted)
-    if not ids:
-        return None
-    rows = client.table("papers").select("id, embedding").in_("id", list(ids)).execute().data or []
-    vectors = [v for v in (_parse_embedding(r.get("embedding")) for r in rows) if v]
-    return _centroid(vectors)
+    papers = taste.papers_by_id(client, list(weights), "id, title, embedding")
+    vec = taste.blend_taste(taste.parse_vec(profile.get("profile_vec")), weights, papers, loaded)
+    return {
+        "weights": weights,
+        "anchors": anchors,
+        "loaded": loaded,
+        "exclude": frozenset(teams_posts),
+        "taste": vec,
+    }
+
+
+def _paper_vectors(client: Client, paper_ids) -> dict[str, list[float]]:
+    """paper id → unit embedding, for the papers that have one."""
+    rows = taste.papers_by_id(client, list(paper_ids), "id, embedding")
+    return {r["id"]: taste.unit(v) for r in rows if (v := taste.parse_vec(r.get("embedding")))}
+
+
+def _with_reasons(
+    client: Client,
+    hits: list[dict],
+    origin: dict[str, str],
+    signals: dict,
+    vecs: dict[str, list[float]] | None = None,
+) -> list[dict]:
+    """Attach ``reason`` (api/taste.reason_for) to each hit, from the signal that
+    found it (``origin``: post id → source)."""
+    if vecs is None:
+        engaged = {h["paper_id"] for h in hits if origin.get(h["id"]) == "engagement"}
+        vecs = _paper_vectors(client, engaged) if engaged else {}
+    candidates = taste.anchor_candidates(signals["anchors"], signals["loaded"])
+    for h in hits:
+        h["reason"] = taste.reason_for(
+            origin.get(h["id"]) or "profile",
+            h,
+            vecs.get(h["paper_id"]),
+            candidates,
+            signals["loaded"],
+        )
+    return hits
+
+
+def _hydrate_in_order(client: Client, post_ids: list[str]) -> list[dict]:
+    """Hydrated posts for ``post_ids``, in that order."""
+    if not post_ids:
+        return []
+    rows = client.table("paper_posts").select(POST_COLUMNS).in_("id", post_ids).execute().data
+    by_id = {h["id"]: h for h in _hydrate(client, rows or [])}
+    return [by_id[pid] for pid in post_ids if pid in by_id]
 
 
 @with_refresh
 def recommend(team: dict, limit: int) -> list[dict]:
-    """Papers to read next, ranked by the user's taste (recommend_papers RPC, which
-    already drops self-posted / already-engaged papers and re-ranks for freshness).
-    Empty list when there's no taste signal — the caller handles cold start."""
+    """Papers to read next, picked the way the app's Discover feed picks them:
+    your research profile, the tags you follow and what you post, save, react
+    to, discuss and read, each searched on its own and interleaved. Each hit
+    carries ``similarity`` and ``reason``. Empty with no taste signal — the
+    caller falls back to recent papers, as the app does."""
     client = get_client()
-    vec = taste_vector(team)
-    if vec is None:
-        return []
-    rows = (
-        client.rpc("recommend_papers", {"p_team": team["id"], "p_query": vec, "p_limit": limit})
-        .execute()
-        .data
-        or []
+    signals = _taste_signals(client, team)
+    if signals["taste"] is None:
+        # No profile and no engagement. The app's cold start leads with posts
+        # carrying a followed tag, newest first; with no follows either, the
+        # caller falls back to recent papers, as the app does.
+        follows = signals["loaded"]["follows"]
+        rows = taste.rpc_tagged(client, team["id"], follows, None, limit, signals["exclude"])
+        hits = _hydrate_in_order(client, [pid for pid, _ in rows])
+        return _with_reasons(client, hits, {h["id"]: "tags" for h in hits}, signals, {})
+    sources = taste.discover_sources(
+        client, team["id"], signals["loaded"], limit, signals["exclude"]
     )
-    return _hydrate_scored(client, rows)
+    order, sims, origin = taste.interleave(sources, limit)
+    hits = _hydrate_in_order(client, order)
+    for h in hits:
+        h["similarity"] = sims.get(h["id"])
+    return _with_reasons(client, hits, origin, signals)
+
+
+# The digest's "For you": at most this many papers. A paper counts for a signal
+# only if it is in that signal's top quarter of the window AND at least
+# FOR_YOU_FLOOR close: the two signals sit on different scales (on one real
+# account, papers in the lab scored a median 0.58 against "your posts" but 0.44
+# against the research profile), so a single fixed cut-off would let half the
+# lab through one and filter the other. The floor keeps a quiet fortnight of
+# unrelated papers from producing picks at all.
+FOR_YOU_MAX = 5
+FOR_YOU_TOP_SHARE = 0.25
+FOR_YOU_FLOOR = 0.35
+
+
+def _top_share(scored: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """The (post id, score) pairs in the top FOR_YOU_TOP_SHARE of the window and
+    above FOR_YOU_FLOOR, best first."""
+    ranked = sorted(scored, key=lambda x: -x[1])
+    keep = max(1, round(len(ranked) * FOR_YOU_TOP_SHARE))
+    return [x for x in ranked[:keep] if x[1] >= FOR_YOU_FLOOR]
+
+
+def _for_you(client: Client, team: dict, cutoff: str, signals: dict) -> list[dict] | None:
+    """The window's papers most worth your time, picked like Discover: each
+    signal ranks the window on its own (window_scores, in Postgres) and they take
+    turns. Papers you posted or engaged with are left out. None when Atlas has
+    no signal for you."""
+    loaded = signals["loaded"]
+    queries = {"profile": loaded.get("profile_q"), "engagement": loaded.get("engagement_q")}
+    follows = loaded.get("follows") or []
+    if all(q is None for q in queries.values()) and not follows:
+        return None
+
+    def window(q) -> list[dict]:
+        params = {"p_team": team["id"], "p_since": cutoff, "p_query": q}
+        if signals["exclude"]:
+            params["p_exclude"] = sorted(signals["exclude"])
+        return client.rpc("window_scores", params).execute().data or []
+
+    sources: dict[str, list[tuple[str, float]]] = {}
+    rows_by_signal = {name: window(q) for name, q in queries.items() if q is not None}
+    for name, rows in rows_by_signal.items():
+        scored = [(r["post_id"], r["similarity"]) for r in rows if r["similarity"] is not None]
+        sources[name] = _top_share(scored)
+    if follows:
+        # A followed tag is certain on its own: closeness only orders the tagged
+        # papers, and one without an embedding (yet) still counts, last.
+        rows = next(iter(rows_by_signal.values()), None) or window(None)
+        wanted = set(follows)
+        tagged = [r for r in rows if wanted & set(r.get("tags") or [])]
+        tagged.sort(key=lambda r: -(r["similarity"] if r["similarity"] is not None else -1.0))
+        sources["tags"] = [(r["post_id"], r["similarity"] or 0.0) for r in tagged]
+
+    order, sims, origin = taste.interleave(sources, FOR_YOU_MAX)
+    picks = _hydrate_in_order(client, order)
+    for h in picks:
+        h["similarity"] = sims.get(h["id"])
+    return _with_reasons(client, picks, origin, signals)
 
 
 def _match_by_vector(client: Client, team: dict, vec: list[float], limit: int) -> list[dict]:
@@ -623,8 +708,9 @@ def novelty(
 @with_refresh
 def digest(team: dict, days: int, offset: int = 0) -> dict:
     """Lab activity in the last `days`: new posts (hydrated, one page of them from
-    `offset`), plus — on the first page only — the new-comment count and the papers
-    the caller was @-mentioned on. All RLS-scoped to the lab."""
+    `offset`), plus — on the first page only — the "For you" picks (None when
+    Atlas has no signal for the caller), the new-comment count and the papers the
+    caller was @-mentioned on. All RLS-scoped to the lab."""
     from datetime import datetime, timedelta, timezone
 
     client = get_client()
@@ -670,6 +756,7 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
         "n_fetched": len(posts),
         "n_comments": None,
         "mentions": None,
+        "for_you": None,
     }
     if offset:
         # Comments and mentions aren't paged; the first page already reported them.
@@ -702,7 +789,15 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
             by_id = {p["id"]: p.get("title") for p in papers}
             my_mentions = [{"id": pid, "title": by_id.get(pid)} for pid in ids]
 
-    return {**page, "n_comments": n_comments, "mentions": my_mentions}
+    try:
+        # Nothing new, nothing to pick: skip the signal reads altogether.
+        for_you = _for_you(client, team, cutoff, _taste_signals(client, team)) if n_papers else []
+    except Exception as exc:  # noqa: BLE001 -- the digest is still worth having
+        if getattr(exc, "code", None) in _CONNECTOR_REFUSALS or _is_auth_error(exc):
+            raise
+        log.warning("for-you picks failed: %s", exc)
+        return {**page, "n_comments": n_comments, "mentions": my_mentions, "for_you_failed": True}
+    return {**page, "n_comments": n_comments, "mentions": my_mentions, "for_you": for_you}
 
 
 @with_refresh

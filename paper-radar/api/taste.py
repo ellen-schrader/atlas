@@ -70,10 +70,16 @@ DISCOVER_SOURCES = ("profile", "tags", "engagement")
 
 
 def parse_vec(value: object) -> list[float] | None:
-    """PostgREST returns a `vector` column as a JSON string; normalize to a list."""
-    if value is None:
+    """PostgREST returns a `vector` column as a JSON string; normalize to a list.
+    None for a missing or unreadable one."""
+    if value is None or value == "":
         return None
-    return json.loads(value) if isinstance(value, str) else list(value)  # type: ignore[arg-type]
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return list(value)  # type: ignore[call-overload]
 
 
 def dot(a, b) -> float:
@@ -183,6 +189,20 @@ def own_posts(client, user_id: str, team_id: str, display_name: str | None) -> l
         for r in named
         if same_person(r.get("posted_by_label"), display_name)
     ]
+
+
+# Ids per `in.(…)` filter: PostgREST takes them in the URL, and a user credited
+# with hundreds of posts would otherwise build one too long for the gateway.
+_IN_CHUNK = 150
+
+
+def papers_by_id(client, ids: list[str], columns: str) -> list[dict]:
+    """``papers`` rows for ``ids``, a URL-sized chunk at a time."""
+    rows: list[dict] = []
+    for i in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[i : i + _IN_CHUNK]
+        rows.extend(client.table("papers").select(columns).in_("id", chunk).execute().data or [])
+    return rows
 
 
 # --- engagement ----------------------------------------------------------------------
@@ -391,14 +411,87 @@ def profile_tags(profile_md: str, tags: list[str]) -> list[str]:
     return out
 
 
+def follows_of(profile: dict | None) -> list[str]:
+    """The tags a profile follows (profiles.interests), as clean strings."""
+    raw = (profile or {}).get("interests") or []
+    if not isinstance(raw, list):
+        return []
+    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+
+
+def post_tags(post: dict) -> list[str]:
+    """A post's tags by post_tags(): its lab tags if it has any, else the
+    paper's own — the rule every tag surface uses. Takes the app's posts
+    (``papers``) and the MCP's (``paper``) alike."""
+    paper = post.get("papers") or post.get("paper") or {}
+    return post.get("tags") or paper.get("tags") or []
+
+
 def followed_hits(post: dict, follows: list[str]) -> list[str]:
-    """The followed tags this post carries, by post_tags(): its lab tags if it
-    has any, else the paper's own — the rule every tag surface uses."""
+    """The followed tags this post carries."""
     if not follows:
         return []
-    tags = post.get("tags") or (post.get("papers") or {}).get("tags") or []
     wanted = set(follows)
-    return [t for t in tags if t in wanted]
+    return [t for t in post_tags(post) if t in wanted]
+
+
+def tag_reason(post: dict, follows: list[str]) -> dict | None:
+    """'Tagged X (and Y), which you follow' — certain, so it outranks the profile
+    text match; a close engaged paper is still more specific and comes first."""
+    hits = followed_hits(post, follows)
+    if not hits:
+        return None
+    return {"kind": "tag", "ref_id": None, "ref_label": hits[0], "extra_labels": hits[1:2]}
+
+
+def profile_reason(post: dict, loaded: dict) -> dict:
+    """'Matches X in your research profile': the post's tags the profile names,
+    in either spelling — stored tags keep theirs, so a UK-spelled profile must
+    still name a UK-spelled tag, and name a US-spelled one via profile_md_us."""
+    tags = post_tags(post)
+    found = set(profile_tags(loaded.get("profile_md") or "", tags))
+    found |= set(profile_tags(loaded.get("profile_md_us") or "", tags))
+    hits = [t for t in tags if t in found]
+    return {
+        "kind": "profile",
+        "ref_id": None,
+        "ref_label": hits[0] if hits else "",
+        "extra_labels": hits[1:2],
+    }
+
+
+def anchor_candidates(anchors: dict[str, str], loaded: dict) -> list[tuple]:
+    """(kind, paper_id, title, unit vector) for each engaged paper that can be
+    named as a reason: one whose vector and title were loaded by blend_taste."""
+    vecs = loaded.get("vecs", {})
+    titles = loaded.get("titles", {})
+    return [
+        (kind, pid, titles[pid], vecs[pid])
+        for pid, kind in anchors.items()
+        # An untitled anchor can't be named on the card.
+        if pid in vecs and titles.get(pid)
+    ]
+
+
+def reason_for(source: str, post: dict, vec, candidates: list[tuple], loaded: dict) -> dict:
+    """Why a post was recommended, from the signal whose search found it:
+
+    * engagement → the nearest engaged paper if it clears REASON_MIN_SIMILARITY,
+      else the generic "In line with your activity in Atlas";
+    * tags → "Tagged X, which you follow";
+    * profile → "Matches X in your research profile", else "Matches your
+      research profile".
+
+    ``vec`` is the post's paper's unit vector (needed for engagement only)."""
+    if source == "engagement":
+        return (pick_reason(vec, candidates) if vec is not None else None) or {
+            "kind": "engagement",
+            "ref_id": None,
+            "ref_label": "",
+        }
+    if source == "tags":
+        return tag_reason(post, loaded.get("follows") or []) or profile_reason(post, loaded)
+    return profile_reason(post, loaded)
 
 
 def interleave(
@@ -427,3 +520,63 @@ def interleave(
         if not placed:
             break
     return order, sims, origin
+
+
+# --- the searches ---------------------------------------------------------------------
+
+
+def rpc_recommend(
+    client, team_id: str, query: list[float], limit: int, exclude: frozenset[str] = frozenset()
+) -> list[tuple[str, float]]:
+    """recommend_papers, leaving out the papers in ``exclude`` (in the database,
+    before its candidate pool is cut, so nobody else's ranking moves)."""
+    params = {"p_team": team_id, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = client.rpc("recommend_papers", params).execute().data or []
+    return [(r["post_id"], r["similarity"]) for r in rows]
+
+
+def rpc_tagged(
+    client,
+    team_id: str,
+    follows: list[str],
+    query: list[float] | None,
+    limit: int,
+    exclude: frozenset[str] = frozenset(),
+) -> list[tuple[str, float]]:
+    """recommend_tagged: unseen posts carrying a followed tag — nearest to
+    ``query`` first, or newest first without one. Only tagged posts are ranked,
+    so a followed tag far from the caller's other interests still surfaces.
+    Papers in ``exclude`` are left out, as in rpc_recommend."""
+    if not follows:
+        return []
+    params = {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = client.rpc("recommend_tagged", params).execute().data or []
+    return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
+
+
+def discover_sources(
+    client, team_id: str, loaded: dict, limit: int, exclude: frozenset[str] = frozenset()
+) -> dict[str, list[tuple[str, float]]]:
+    """The caller's signals, each searched on its own: post ids with similarity,
+    best first. A signal the caller doesn't have is simply absent.
+
+    ``exclude`` is the papers the caller posted from Teams. The RPCs drop the
+    rest of their engagement themselves, but a Teams post has no user id, only
+    their name (see taste.own_posts)."""
+    profile_q = loaded.get("profile_q")
+    engagement_q = loaded.get("engagement_q")
+    follows: list[str] = loaded.get("follows") or []
+    sources: dict[str, list[tuple[str, float]]] = {}
+    if profile_q is not None:
+        sources["profile"] = rpc_recommend(client, team_id, profile_q, limit, exclude)
+    if engagement_q is not None:
+        sources["engagement"] = rpc_recommend(client, team_id, engagement_q, limit, exclude)
+    if follows:
+        # Nearest to the profile if there is one, else to engagement.
+        query = profile_q if profile_q is not None else engagement_q
+        sources["tags"] = rpc_tagged(client, team_id, follows, query, limit, exclude)
+    return sources
