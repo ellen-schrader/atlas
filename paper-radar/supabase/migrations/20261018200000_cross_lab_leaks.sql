@@ -25,9 +25,12 @@
 --
 -- Column grants make `select *` (or `paper_aliases(*)` in an embed) fail with
 -- "permission denied" for members rather than quietly returning less; name the
--- columns. A history UI that wants "edited by Ada" for an editor in the
--- viewer's own lab should get it from a definer function that returns
--- edited_by only when the two share a lab, not by granting the column back.
+-- columns. A column added to either table later is hidden from members until a
+-- migration grants it, which is the safe default.
+--
+-- A history UI that wants "edited by Ada" for an editor in the viewer's own lab
+-- should get it from a definer function that returns edited_by only when the
+-- two share a lab, not by granting the column back.
 --
 -- papers.edited_by is left as it is: the card's "Edited … outside your lab"
 -- line reads it, and narrowing it needs a column list on every papers read.

@@ -3,7 +3,7 @@
 -- (issue #133, 20261018200000_cross_lab_leaks.sql). Run with `supabase test db`.
 
 begin;
-select plan(11);
+select plan(12);
 
 -- Ada in lab L1 corrected the preprint and merged it into the published paper.
 -- Bo in lab L2 holds only the published paper.
@@ -31,9 +31,15 @@ insert into public.paper_posts (paper_id, team_id, posted_by, source) values
 
 select public.apply_paper_edit('e8000000-0000-0000-0000-0000000000c1', 'e8000000-0000-0000-0000-0000000000a1',
     'edit', null, '{"title": "Preprint, fixed"}', '["title"]');
-select public.merge_papers('e8000000-0000-0000-0000-0000000000c1', 'e8000000-0000-0000-0000-0000000000c2', 'manual');
-update public.paper_aliases set merged_by = 'e8000000-0000-0000-0000-0000000000a1'
- where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1';
+insert into public.merge_suggestions (id, team_id, preprint_id, published_id, score) values
+    ('e8000000-0000-0000-0000-0000000000e1', 'e8000000-0000-0000-0000-0000000000b1',
+     'e8000000-0000-0000-0000-0000000000c1', 'e8000000-0000-0000-0000-0000000000c2', 0.95);
+
+-- Ada confirms the merge the way the app does, which records her as merged_by.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"e8000000-0000-0000-0000-0000000000a1"}';
+select public.decide_merge_suggestion('e8000000-0000-0000-0000-0000000000e1', true);
+reset role;
 
 -- === Bo, in the other lab ====================================================
 
@@ -69,6 +75,9 @@ select throws_ok($$ select * from public.paper_edits $$, '42501', null,
 reset role;
 set local role service_role;
 
+select is((select merged_by from public.paper_aliases
+            where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
+    'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the merge recorded who confirmed it');
 select is((select snapshot ->> 'edited_by' from public.paper_aliases
             where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
     'e8000000-0000-0000-0000-0000000000a1', 'the service role still reads the snapshot');
