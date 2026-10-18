@@ -9,7 +9,7 @@ import { Container, ISSUES_URL, PublicFooter, PublicHeader, REPO_URL } from "@/c
  *  table here whenever Atlas starts sending data somewhere new. */
 
 const CONTACT = "hello@labatlas.app";
-const UPDATED = "18 October 2026";
+const UPDATED = "18 October 2026";  // bump when the text changes
 
 function PublicPage({ title, signedIn, children }: { title: string; signedIn: boolean; children: ReactNode }) {
   return (
@@ -183,9 +183,9 @@ export function Privacy({ signedIn = false }: { signedIn?: boolean }) {
 
       <H2>How long</H2>
       <p>
-        For as long as your account exists. To delete your account, email <Mail />; your account details
-        are removed within 30 days. What you posted to a lab stays with that lab, attributed to a deleted
-        user, unless you ask for it to be removed too.
+        For as long as your account exists. You can delete your account yourself in Settings, and your
+        account details are removed at once. What you posted to a lab (papers, comments, figures, shared
+        maps) stays with that lab without your name, unless you ask <Mail /> for it to be removed too. A lab you are the only member of is deleted with your account.
       </p>
 
       <H2>Your rights</H2>

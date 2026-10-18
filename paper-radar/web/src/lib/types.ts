@@ -183,7 +183,7 @@ export interface OverviewData {
 export interface MapDoc {
   id: string;
   team_id: string;
-  created_by: string;
+  created_by: string | null; // null once the creator has deleted their account
   name: string;
   seed: string;
   visibility: "lab" | "private";
@@ -200,7 +200,7 @@ export interface MapOverviewData extends OverviewData {
   name: string;
   seed: string;
   visibility: string;
-  created_by: string; // gate edit controls to the map's creator
+  created_by: string | null; // gate edit controls to the map's creator; null once they've left
   new_this_week: number;
   min_similarity: number; // the map's relevance floor
   below_threshold: number; // embedded papers just under the floor

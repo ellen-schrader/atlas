@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { LabManagement } from "@/components/LabManagement";
@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useProfile } from "@/hooks/useProfile";
 import { useTeamTags } from "@/hooks/useTeamTags";
-import { updateProfile } from "@/lib/api";
+import { deleteAccount, updateProfile } from "@/lib/api";
 import { RESET_PATH, useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import { cn, normaliseTag } from "@/lib/utils";
@@ -48,6 +48,8 @@ export default function Settings() {
       <ClaudePrivacyPanel teamId={team.id} teamName={team.name} userId={userId} />
 
       <LabManagement teamId={team.id} teamName={team.name} teamCode={team.join_code} userId={userId} />
+
+      <DeleteAccountPanel userId={userId} email={session.user.email ?? ""} />
     </div>
   );
 }
@@ -102,6 +104,172 @@ function ClaudePrivacyPanel({
           <ClaudeActivity teamId={teamId} teamName={teamName} limit={5} />
         </div>
       </div>
+    </Panel>
+  );
+}
+
+type LabFate = { id: string; name: string; blocking: boolean; solo: boolean; papers: number };
+
+/** What deleting would do to each of the user's labs, mirroring delete_my_account:
+ *  a last owner with other members blocks it; a lab they're alone in goes too. */
+function useLabFates(userId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["delete-account-labs", userId],
+    enabled,
+    queryFn: async (): Promise<LabFate[]> => {
+      const { data: mine, error } = await supabase
+        .from("team_members")
+        .select("team_id, role, teams(name)")
+        .eq("user_id", userId);
+      if (error) throw error;
+      const rows = (mine ?? []) as unknown as { team_id: string; role: string; teams: { name: string } | null }[];
+      if (!rows.length) return [];
+      const { data: all, error: err2 } = await supabase
+        .from("team_members")
+        .select("team_id, user_id, role")
+        .in("team_id", rows.map((r) => r.team_id));
+      if (err2) throw err2;
+      return Promise.all(
+        rows.map(async (r) => {
+          const others = (all ?? []).filter((m) => m.team_id === r.team_id && m.user_id !== userId);
+          const solo = others.length === 0;
+          let papers = 0;
+          if (solo) {
+            const { count } = await supabase
+              .from("paper_posts")
+              .select("paper_id", { count: "exact", head: true })
+              .eq("team_id", r.team_id);
+            papers = count ?? 0;
+          }
+          return {
+            id: r.team_id,
+            name: r.teams?.name ?? "a lab",
+            blocking: r.role === "owner" && !solo && !others.some((m) => m.role === "owner"),
+            solo,
+            papers,
+          };
+        }),
+      );
+    },
+  });
+}
+
+/**
+ * Delete the account (docs/ACCOUNT_DELETION_PLAN.md). Says plainly what goes and
+ * what stays, names any lab that blocks it or would go with it, and asks for the
+ * email as a deliberate confirmation. The server enforces all of it again.
+ */
+function DeleteAccountPanel({ userId, email }: { userId: string; email: string }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { data: labs, isLoading, isError } = useLabFates(userId, open);
+
+  const blocking = labs?.filter((l) => l.blocking) ?? [];
+  const solo = labs?.filter((l) => l.solo) ?? [];
+  const matches = typed.trim().toLowerCase() === email.toLowerCase();
+
+  async function onDelete(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAccount(typed.trim());
+      // The account is gone server-side; drop the local session and leave.
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      window.location.assign("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel title="Delete account" desc="Permanently delete your Atlas account.">
+      {!open ? (
+        <Button variant="secondary" size="sm" className="text-danger" onClick={() => setOpen(true)}>
+          Delete my account…
+        </Button>
+      ) : (
+        <form onSubmit={onDelete} className="flex flex-col gap-4 text-sm">
+          <dl className="grid gap-x-4 gap-y-2.5 rounded-control border border-border bg-surface-2 p-3.5 leading-relaxed sm:grid-cols-[5.5rem_1fr]">
+            <dt className="font-semibold">Deleted</dt>
+            <dd className="text-muted">
+              Your profile and email, lab memberships, reactions, reading list, notifications, private
+              maps and Claude connections.
+            </dd>
+            <dt className="font-semibold">Kept</dt>
+            <dd className="text-muted">
+              Papers you shared, figures and shared maps, without your name. Your comments stay as by a
+              “Former member”.
+            </dd>
+          </dl>
+          <p className="-mt-1 text-xs text-muted">
+            To have what’s kept removed too, email{" "}
+            <a href="mailto:hello@labatlas.app" className="text-accent underline underline-offset-2">
+              hello@labatlas.app
+            </a>
+            .
+          </p>
+
+          {isLoading && <p className="text-muted">Checking your labs…</p>}
+          {isError && (
+            <p className="text-danger">
+              Couldn’t check which of your labs would be affected. Reload the page and try again.
+            </p>
+          )}
+          {blocking.length > 0 && (
+            <p className="rounded-control border border-danger/40 bg-danger/5 p-3 text-danger">
+              You’re the only owner of {blocking.map((l) => l.name).join(", ")}, which other people
+              still use. Make someone else an owner in Lab management first.
+            </p>
+          )}
+          {solo.length > 0 && (
+            <p className="rounded-control border border-border-strong bg-surface-2 p-3">
+              You’re the only member of{" "}
+              {solo.map((l) => `${l.name} (${l.papers} ${l.papers === 1 ? "paper" : "papers"})`).join(", ")}.{" "}
+              {solo.length === 1 ? "It" : "They"} will be deleted with your account.
+            </p>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="delete-confirm">Type your email to confirm</Label>
+            <Input
+              id="delete-confirm"
+              type="email"
+              autoComplete="off"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={email}
+            />
+          </div>
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Filled, unlike the inline text-only danger buttons: this is the final,
+                irreversible action, and must read as a button even while disabled. */}
+            <Button
+              type="submit"
+              variant="danger"
+              className="bg-danger text-danger-fg hover:bg-danger hover:brightness-110"
+              disabled={!matches || blocking.length > 0 || isLoading || isError || busy}
+            >
+              {busy ? "Deleting…" : "Delete my account"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setOpen(false);
+                setTyped("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
     </Panel>
   );
 }

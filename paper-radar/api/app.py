@@ -26,6 +26,7 @@ from typing import Annotated, Literal
 import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field, StringConstraints
 
 from paper_radar.ingest import bibtex as bib
@@ -1205,7 +1206,7 @@ class MapOverviewResponse(OverviewResponse):
     name: str
     seed: str
     visibility: str
-    created_by: str  # so the client can gate edit controls to the creator
+    created_by: str | None  # gates edit controls to the creator; None once they've left
     new_this_week: int  # members posted in the last 7 days
     min_similarity: float  # the map's relevance floor
     below_threshold: int  # embedded papers that fall just under the floor
@@ -1604,6 +1605,52 @@ def update_profile(req: ProfileRequest, token: str = Depends(require_token)) -> 
         return ProfileResponse(ok=True, embedded=False)
     service_client().table("profiles").update({"profile_vec": vector}).eq("id", user_id).execute()
     return ProfileResponse(ok=True, embedded=True)
+
+
+class DeleteAccountRequest(BaseModel):
+    # The account's email, typed by the user, as a deliberate confirmation.
+    confirm_email: Annotated[str, StringConstraints(strip_whitespace=True, max_length=320)]
+
+
+@app.post("/account/delete", status_code=204)
+def delete_account(req: DeleteAccountRequest, token: str = Depends(require_token)) -> None:
+    """Delete the caller's account (docs/ACCOUNT_DELETION_PLAN.md).
+
+    The work is the `delete_account` SQL function, for the user id verified from
+    the token (never one from the request body): one transaction that refuses a
+    wrong email or a last owner, deletes labs the caller is alone in, and removes
+    the auth user. It is service-role only, so this route is the one way in and
+    its follow-up, removing those labs' figure files, can't be skipped."""
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    try:
+        res = service_client().rpc(
+            "delete_account", {"p_user": user_id, "p_confirm_email": req.confirm_email}
+        ).execute()
+    except APIError as exc:
+        # Both refusals are the user's to fix, and their messages are written for them.
+        if exc.code in ("22023", "P0001"):
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        raise
+    for team_id in res.data or []:
+        _remove_lab_files(team_id)
+    log.info("account %s deleted, with %d solo lab(s)", user_id, len(res.data or []))
+
+
+def _remove_lab_files(team_id: str) -> None:
+    """Remove a deleted lab's figure files (`{team_id}/…` in the figures bucket).
+    Best effort: the account is already gone, and an orphan file is invisible."""
+    bucket = service_client().storage.from_("figures")
+    try:
+        for _ in range(100):  # 10,000 files; bounded in case a remove silently no-ops
+            names = [o["name"] for o in bucket.list(team_id, {"limit": 100}) if o.get("name")]
+            if not names:
+                return
+            bucket.remove([f"{team_id}/{n}" for n in names])
+        log.warning("figure files for deleted lab %s not fully removed", team_id)
+    except Exception as exc:  # noqa: BLE001 — logged; the deletion itself succeeded
+        log.warning("removing figure files for deleted lab %s failed: %s", team_id, exc)
 
 
 class Recommendation(BaseModel):

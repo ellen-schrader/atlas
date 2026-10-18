@@ -37,7 +37,7 @@ class MapCreate(BaseModel):
 class MapOut(BaseModel):
     id: str
     team_id: str
-    created_by: str
+    created_by: str | None  # None once the creator has deleted their account
     name: str
     seed: str
     visibility: str
@@ -200,7 +200,7 @@ def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapList
     )
     if not rows:
         return []
-    owners = list({r["created_by"] for r in rows})
+    owners = list({r["created_by"] for r in rows if r["created_by"]})
     profiles = (
         uc.table("profiles").select("id, display_name").in_("id", owners).execute().data or []
     )
@@ -213,7 +213,7 @@ def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapList
             MapListItem(
                 **{k: r[k] for k in MapOut.model_fields},
                 paper_count=count,
-                owner_name=name_of.get(r["created_by"]),
+                owner_name=name_of.get(r["created_by"]) if r["created_by"] else "Former member",
             )
         )
     return out

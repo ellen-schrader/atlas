@@ -111,9 +111,10 @@ Where data leaves the UK or EU, these providers use standard contractual safegua
 
 ### How long
 
-For as long as your account exists. To delete your account, email hello@labatlas.app; your
-account details are removed within 30 days. What you posted to a lab stays with that lab, attributed to a
-deleted user, unless you ask for it to be removed too.
+For as long as your account exists. You can delete your account yourself in Settings, and your
+account details are removed at once. What you posted to a lab (papers, comments, figures, shared
+maps) stays with that lab without your name, unless you ask hello@labatlas.app for it to be
+removed too. A lab you are the only member of is deleted with your account.
 
 ### Your rights
 
