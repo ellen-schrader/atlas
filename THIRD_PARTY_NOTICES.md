@@ -1,7 +1,7 @@
 # Third-party notices
 
-Atlas is MIT-licensed (see `LICENSE`). It includes data from the projects
-below, under their own terms.
+Atlas is MIT-licensed (see `LICENSE`). It includes data and a typeface from
+the projects below, under their own terms.
 
 ## VarCon (Variant Conversion Info)
 
@@ -81,3 +81,12 @@ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
 OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 SUCH DAMAGE.
 ```
+
+## Schibsted Grotesk
+
+- **Used for:** the typeface of the web app (headings and UI).
+- **Where:** `paper-radar/web/public/fonts/schibsted-grotesk-*.woff2`, from
+  `@fontsource-variable/schibsted-grotesk` 5.3.0 (Latin and Latin Extended).
+- **Licence:** SIL Open Font License 1.1. Copyright 2023 The Schibsted-Grotesk
+  Project Authors (<https://github.com/schibsted/schibsted-grotesk>). Full text
+  in `paper-radar/web/public/fonts/OFL-schibsted-grotesk.txt`.

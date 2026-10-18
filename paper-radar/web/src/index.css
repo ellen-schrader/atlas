@@ -3,21 +3,40 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Self-hosted, not a CDN link: the CSP forbids external font hosts, and a system
-   serif stack resolves to Iowan on macOS but Georgia on Windows — a different
-   product per OS. Source Serif 4 (SIL OFL); see public/fonts/LICENSE.txt. */
+   stack is a different product per OS. Schibsted Grotesk (SIL OFL), one variable
+   family for headings and UI alike; see public/fonts/LICENSE.txt. Latin-ext only
+   downloads when a page uses those characters (accented author names). */
 @font-face {
-  font-family: "Source Serif 4";
-  src: url("/fonts/source-serif-4-600.woff2") format("woff2");
-  font-weight: 600;
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/schibsted-grotesk-latin-wght-normal.woff2") format("woff2");
+  font-weight: 400 900;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
 }
 @font-face {
-  font-family: "Source Serif 4";
-  src: url("/fonts/source-serif-4-600-italic.woff2") format("woff2");
-  font-weight: 600;
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/schibsted-grotesk-latin-wght-italic.woff2") format("woff2");
+  font-weight: 400 900;
   font-style: italic;
   font-display: swap;
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/schibsted-grotesk-latin-ext-wght-normal.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/schibsted-grotesk-latin-ext-wght-italic.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: italic;
+  font-display: swap;
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
 }
 
 /* Atlas palette. The lab studies the spatial architecture of tissue — they read
@@ -37,8 +56,9 @@
   --fg: #12181a;
   --muted: #576466;
   --faint: #7f8b8c;
-  --accent: #0e8e8a;
-  --accent-weak: rgba(14, 142, 138, 0.10);
+  /* #0e8e8a gave white button text 4.0:1; this is 6.1:1 on white, 5.4:1 on --bg. */
+  --accent: #0a6e6b;
+  --accent-weak: rgba(10, 110, 107, 0.10);
   --accent-fg: #ffffff;
   --danger: #c2412f;
   --danger-fg: #ffffff;  /* 5.13:1 on --danger */
@@ -147,10 +167,11 @@
   --color-ch-off: var(--ch-off);
 
   /* fonts */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* No serif any more. Kept as an alias so a `font-serif` class merged in from an
+     older branch stays in the brand face instead of falling back to Georgia. */
+  --font-serif: var(--font-sans);
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
-  /* display face — headings and the wordmark; the sans stays the UI voice */
-  --font-serif: "Source Serif 4", "Iowan Old Style", Charter, Georgia, serif;
 
   /* type scale (semantic roles) — use as text-display / text-heading / … */
   --text-eyebrow: 0.6875rem;

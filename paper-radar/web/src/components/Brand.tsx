@@ -39,7 +39,7 @@ export function Brand({ size = 20 }: { size?: number }) {
   return (
     <div className="flex items-center gap-2 text-fg">
       <AtlasMark size={size} className="text-accent" />
-      <span className="font-serif font-semibold tracking-tight" style={{ fontSize: size * 0.95 }}>
+      <span className="font-bold tracking-tight" style={{ fontSize: size * 0.95 }}>
         Atlas
       </span>
     </div>

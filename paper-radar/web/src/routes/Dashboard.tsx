@@ -104,8 +104,8 @@ export default function Dashboard() {
       <h1
         className={
           mobile
-            ? "font-serif text-2xl font-semibold leading-tight tracking-tight"
-            : "text-display font-serif font-semibold tracking-tight"
+            ? "text-2xl font-bold leading-tight tracking-tight"
+            : "text-display font-bold tracking-tight"
         }
       >
         {greeting()}, {firstName}

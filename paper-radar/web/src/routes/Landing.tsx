@@ -20,7 +20,7 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-bg">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <span className="flex items-center gap-2 font-serif text-xl font-semibold tracking-tight text-fg">
+        <span className="flex items-center gap-2 text-xl font-bold tracking-tight text-fg">
           <AtlasMark size={26} className="text-accent" />
           Atlas
         </span>
@@ -61,7 +61,7 @@ export default function Landing() {
           aria-hidden
         />
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center sm:py-36">
-          <h1 className="text-balance font-serif text-4xl font-semibold leading-[1.05] tracking-tight text-fg sm:text-6xl">
+          <h1 className="text-balance text-4xl font-bold leading-[1.05] tracking-tight text-fg sm:text-6xl">
             Every lab has a taste.{" "}
             <span className="text-accent">Atlas gives yours to Claude.</span>
           </h1>
@@ -150,7 +150,7 @@ export default function Landing() {
       {/* ── the close ── */}
       <section className="border-t border-border">
         <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
-          <h2 className="max-w-[18ch] text-balance font-serif text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-5xl">
+          <h2 className="max-w-[18ch] text-balance text-3xl font-bold leading-tight tracking-tight text-fg sm:text-5xl">
             When the postdoc leaves,{" "}
             <span className="text-accent">the taste stays.</span>
           </h2>
@@ -206,7 +206,7 @@ function Section({
     <section id={id} className={alt ? "border-b border-border bg-surface" : "border-b border-border"}>
       <div className="mx-auto max-w-6xl px-6 py-20">
         <p className="font-mono text-xs uppercase tracking-[0.14em] text-accent">{eyebrow}</p>
-        <h2 className="mt-3 max-w-[20ch] text-balance font-serif text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-4xl">
+        <h2 className="mt-3 max-w-[20ch] text-balance text-3xl font-bold leading-tight tracking-tight text-fg sm:text-4xl">
           {title}
         </h2>
         <div className="mt-5">{children}</div>
@@ -254,7 +254,7 @@ function Surface({ icon, title, body }: { icon: ReactNode; title: string; body: 
       <span className="grid h-9 w-9 place-items-center rounded-control bg-accent-weak text-accent">
         {icon}
       </span>
-      <h3 className="mt-1 font-serif text-lg font-semibold tracking-tight text-fg">{title}</h3>
+      <h3 className="mt-1 text-lg font-semibold tracking-tight text-fg">{title}</h3>
       <p className="text-sm leading-relaxed text-muted">{body}</p>
     </article>
   );

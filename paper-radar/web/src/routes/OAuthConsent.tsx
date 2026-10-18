@@ -158,7 +158,7 @@ export default function OAuthConsent({
   } else if (request && target?.allowed) {
     body = (
       <>
-        <h2 className="font-serif text-xl font-semibold tracking-tight">Connect Claude to Atlas</h2>
+        <h2 className="text-xl font-bold tracking-tight">Connect Claude to Atlas</h2>
         <p className="mb-5 mt-1 text-sm text-muted">
           <b className="text-fg">{target.label}</b> wants to use Atlas as{" "}
           <b className="text-fg">{email}</b>.
@@ -239,7 +239,7 @@ export default function OAuthConsent({
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
         <AtlasMark size={24} className="text-accent" />
-        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
+        <span className="text-lg font-bold tracking-tight">Atlas</span>
       </div>
       {body}
     </AuthLayout>
@@ -326,7 +326,7 @@ function Problem({
 }) {
   return (
     <div>
-      <h2 className="flex items-center gap-2 font-serif text-xl font-semibold tracking-tight">
+      <h2 className="flex items-center gap-2 text-xl font-bold tracking-tight">
         {danger && <ShieldAlert size={18} className="text-danger" aria-hidden />}
         {title}
       </h2>

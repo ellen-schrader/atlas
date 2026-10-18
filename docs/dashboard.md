@@ -201,7 +201,7 @@ These come from `index.css`; no new tokens are needed.
 - Section headings: `text-eyebrow font-bold uppercase tracking-eyebrow text-muted` (existing `Section`).
 - Card titles: `text-card font-semibold tracking-snug`.
 - Meta text: `text-meta text-muted`.
-- Display text: `font-serif` (Source Serif 4 600) for the greeting only.
+- Display text: `text-display font-bold tracking-tight` (Schibsted Grotesk) for the greeting only.
 - Numbers: `font-mono tabular-nums`.
 - Radii: cards `--radius-card` (13px), controls `--radius-control`, chips `--radius-chip`.
 

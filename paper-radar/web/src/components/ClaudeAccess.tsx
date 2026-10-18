@@ -34,7 +34,7 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
             className={cn(
               "flex items-center gap-2 text-fg",
               headingLevel === "h2"
-                ? "font-serif text-lg font-semibold tracking-tight"
+                ? "text-lg font-semibold tracking-tight"
                 : "text-sm font-semibold",
             )}
           >

@@ -94,7 +94,7 @@ export function MergeSuggestionsButton({ teamId }: { teamId: string }) {
       </Button>
       <Modal open={listing && !comparing} onClose={() => setListing(false)} label="Possible duplicates">
         <div className="border-b border-border px-6 py-5 pl-14">
-          <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">Possible duplicates</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-fg">Possible duplicates</h2>
           <p className="mt-1 text-sm text-muted">
             Preprints that look like a published paper your lab also holds. Atlas can’t be sure, so
             it asks: compare each pair and merge it, or mark it as not the same.
@@ -164,7 +164,7 @@ function CompareDialog({
       {suggestion && (
         <>
           <div className="border-b border-border px-6 py-5 pl-14">
-            <h2 className="font-serif text-lg font-semibold tracking-tight text-fg">Same paper?</h2>
+            <h2 className="text-lg font-semibold tracking-tight text-fg">Same paper?</h2>
             <p className="mt-1 text-sm text-muted">
               The titles match {Math.round(suggestion.score * 100)}% and they share an author.
             </p>

@@ -73,10 +73,10 @@ export default function Login() {
     <AuthLayout>
       <div className="mb-6 flex items-center gap-2.5 md:hidden">
         <AtlasMark size={24} className="text-accent" />
-        <span className="font-serif text-lg font-semibold tracking-tight">Atlas</span>
+        <span className="text-lg font-bold tracking-tight">Atlas</span>
       </div>
 
-      <h2 className="font-serif text-xl font-semibold tracking-tight">
+      <h2 className="text-xl font-bold tracking-tight">
         {mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}
       </h2>
       <p className="mb-5 mt-1 text-sm text-muted">

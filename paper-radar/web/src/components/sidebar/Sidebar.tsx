@@ -76,7 +76,7 @@ export function Sidebar({
   return (
     <>
       <div className="flex items-center justify-between px-1">
-        <span className="flex items-center gap-2 font-serif text-lg font-semibold tracking-tight">
+        <span className="flex items-center gap-2 text-lg font-bold tracking-tight">
           <AtlasMark size={24} className="text-accent" /> Atlas
         </span>
         {/* Not in the drawer: the top bar behind it already has one, and its

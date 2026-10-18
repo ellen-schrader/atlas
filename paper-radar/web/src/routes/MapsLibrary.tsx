@@ -44,7 +44,7 @@ export default function MapsLibrary() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <header>
-        <h1 className="font-serif text-display font-semibold tracking-tight text-fg">Topic map</h1>
+        <h1 className="text-display font-bold tracking-tight text-fg">Topic map</h1>
         <p className="mt-1.5 max-w-[64ch] text-sm text-muted">
           A topic map tracks a subject your lab cares about — a live t-SNE of its papers, the labs
           and sub-themes driving it, and an AI digest of what’s new. Start from the whole-lab
@@ -59,7 +59,7 @@ export default function MapsLibrary() {
         >
           <div className="flex items-center gap-2 text-accent">
             <MapIcon size={16} />
-            <span className="font-serif text-base font-semibold">Lab overview</span>
+            <span className="text-base font-semibold">Lab overview</span>
           </div>
           <p className="mt-1 text-sm text-muted">
             Every paper in {team.name}, mapped — the pinned whole-corpus view.
@@ -163,7 +163,7 @@ function MapCard({
       to={`/maps/${m.id}`}
       className="group relative flex min-h-[104px] flex-col rounded-card border border-border bg-surface p-4 transition hover:border-border-strong"
     >
-      <div className="font-serif text-base font-semibold text-fg">{m.name}</div>
+      <div className="text-base font-semibold text-fg">{m.name}</div>
       <p className="mt-0.5 line-clamp-2 text-sm text-muted">{m.seed}</p>
       <div className="mt-auto flex items-center gap-2 pt-2 text-xs text-faint">
         <span className="font-medium text-muted">
