@@ -10,6 +10,7 @@ import type { PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { Button } from "@/components/ui/button";
 import { deleteFigure, updateFigure, useFigureUrls } from "@/hooks/useFigures";
+import { useMyRole } from "@/hooks/useMyRole";
 import { ACCEPTED_MIME, MAX_FILE_BYTES, aspectRatio, categoryLabel } from "@/lib/figures";
 import type { Figure } from "@/lib/types";
 import { formatDate, safeHref } from "@/lib/utils";
@@ -41,6 +42,10 @@ export function FigureDetail({
 
   const uploaderName = figure.uploader?.display_name ?? null;
   const isOwner = figure.uploaded_by === userId;
+  const { data: role } = useMyRole(teamId, userId);
+  // A lab owner may remove (not edit) a figure whose uploader has left
+  // (RLS: figures_delete_orphan, figures_objects_delete_orphan).
+  const canRemove = isOwner || (figure.uploaded_by === null && role === "owner");
 
   function openLinkedPaper() {
     if (!figure.paper_id) return;
@@ -213,7 +218,7 @@ export function FigureDetail({
             <MetaLabel>Discussion</MetaLabel>
             <FigureEngagement figureId={figure.id} teamId={teamId} userId={userId} />
 
-            {isOwner && (
+            {canRemove && (
               <>
                 <hr className="my-6 border-border" />
                 {confirm ? (

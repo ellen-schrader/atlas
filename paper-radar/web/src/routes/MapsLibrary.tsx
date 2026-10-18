@@ -5,6 +5,7 @@ import { Loader2, Map as MapIcon, Plus, Trash2, X } from "lucide-react";
 
 import { createMap, deleteMap, fetchMaps } from "@/lib/api";
 import type { MapDoc } from "@/lib/types";
+import { useMyRole } from "@/hooks/useMyRole";
 import { useAppContext } from "@/routes/Layout";
 
 /**
@@ -14,6 +15,7 @@ import { useAppContext } from "@/routes/Layout";
  */
 export default function MapsLibrary() {
   const { team, userId } = useAppContext();
+  const { data: role } = useMyRole(team.id, userId);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: maps, isLoading } = useQuery({
@@ -75,7 +77,8 @@ export default function MapsLibrary() {
             key={m.id}
             m={m}
             teamName={team.name}
-            canDelete={m.created_by === userId}
+            // A lab owner may also remove a map whose creator has left (RLS: maps_delete_orphan).
+            canDelete={m.created_by === userId || (m.created_by === null && role === "owner")}
             onDelete={() => {
               if (window.confirm(`Delete the map “${m.name}”?`)) del.mutate(m.id);
             }}

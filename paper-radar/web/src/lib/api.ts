@@ -175,7 +175,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     throw new ApiError(detail, res.status);
   }
-  return res.json();
+  // 204 has no body to parse (e.g. POST /account/delete).
+  return (res.status === 204 ? undefined : res.json()) as Promise<T>;
 }
 
 /** Call the Atlas API with the user's JWT; throws the API's detail on error. */
@@ -308,6 +309,15 @@ export function updateProfile(profileMd: string): Promise<{ ok: boolean; embedde
   return authedRequest("/profile", {
     method: "POST",
     body: JSON.stringify({ profile_md: profileMd }),
+  });
+}
+
+/** Delete the caller's account (POST /account/delete). Throws the API's message
+ *  when refused: a mistyped email, or being the last owner of a lab with others. */
+export function deleteAccount(confirmEmail: string): Promise<void> {
+  return authedRequest("/account/delete", {
+    method: "POST",
+    body: JSON.stringify({ confirm_email: confirmEmail }),
   });
 }
 

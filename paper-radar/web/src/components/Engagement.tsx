@@ -5,6 +5,7 @@ import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { type Member, useMembers } from "@/hooks/useMembers";
+import { useMyRole } from "@/hooks/useMyRole";
 import { supabase } from "@/lib/supabase";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
@@ -26,8 +27,13 @@ interface CommentRow {
   id: string;
   body: string;
   created_at: string;
-  author_id: string;
+  author_id: string | null; // null once the author has deleted their account
   profiles: { display_name: string } | null;
+}
+
+/** A comment's byline. A deleted account's comments stay in the thread. */
+function authorName(c: CommentRow): string {
+  return c.author_id ? (c.profiles?.display_name ?? "Someone") : "Former member";
 }
 
 /** What differs between engaging with a paper and engaging with a figure: the
@@ -277,6 +283,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
   // Shared with Reactions (same ["members", teamId] cache key) — one source of
   // truth for names, roles, and the profile shown on an @mention hover.
   const { data: members } = useMembers(teamId);
+  const { data: role } = useMyRole(teamId, userId);
 
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -426,10 +433,10 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
 
       {list.map((c) => (
         <div key={c.id} className="flex gap-2.5">
-          <Avatar name={c.profiles?.display_name ?? "?"} size={26} />
+          <Avatar name={c.author_id ? (c.profiles?.display_name ?? "?") : "?"} size={26} />
           <div className="min-w-0 flex-1">
             <div className="text-xs">
-              <span className="font-semibold text-fg">{c.profiles?.display_name ?? "Someone"}</span>
+              <span className="font-semibold text-fg">{authorName(c)}</span>
               <span className="ml-2 font-mono text-muted" title={formatDate(c.created_at)}>
                 {formatRelative(c.created_at)}
               </span>
@@ -460,6 +467,26 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
                     className="mt-0.5 text-xs text-muted hover:text-accent"
                   >
                     Edit
+                  </button>
+                )}
+                {c.author_id === null && role === "owner" && (
+                  // A former member's comment can't be edited by anyone; a lab
+                  // owner may remove it (RLS: *_comments_delete_orphan).
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!window.confirm("Remove this comment by a former member?")) return;
+                      const { error: err } = await supabase.from(cfg.commentsTable).delete().eq("id", c.id);
+                      if (err) {
+                        setError(err.message);
+                        return;
+                      }
+                      await qc.invalidateQueries({ queryKey: commentsKey });
+                      await qc.invalidateQueries({ queryKey: [cfg.countsKey] });
+                    }}
+                    className="mt-0.5 text-xs text-muted hover:text-danger"
+                  >
+                    Remove
                   </button>
                 )}
               </>
