@@ -13,7 +13,15 @@ from mcp.server.fastmcp import Context, Image
 from . import lab, moodboard
 from . import render as card_render
 from . import spec as card_spec
-from .tools import _clamp, _elicit_confirm, _paper_title_link, _untrusted, audited, in_worker_thread
+from .tools import (
+    _clamp,
+    _elicit_confirm,
+    _paper_title_link,
+    _untrusted,
+    audited,
+    in_worker_thread,
+    links_papers,
+)
 
 
 def _provenance(f: dict, *, with_license: bool = False) -> list[str]:
@@ -53,23 +61,20 @@ def _format_figure(f: dict) -> str:
         prov = _provenance(f)
         tail = f" (style of: {'; '.join(prov)})" if prov else ""
         lines.append(
-            "style card — a synthetic recreation of an admired figure's look; the spec "
-            "is stored and the original was never copied. Reuse the style freely and "
-            "cite the inspiration." + tail
+            "origin: style card — a synthetic recreation of an admired figure's look; "
+            "the spec is stored and the original was never copied" + tail
         )
     elif f.get("origin") == "third_party":
         prov = _provenance(f, with_license=True)
         tail = f" ({'; '.join(prov)})" if prov else ""
-        lines.append(
-            "third-party — derive style/palette only, attribute the source, "
-            "don't reproduce the figure." + tail
-        )
+        lines.append("origin: third-party — someone else's published figure" + tail)
     else:
-        lines.append("own — the lab's unpublished work; treat as confidential.")
+        lines.append("origin: own — the lab's unpublished work")
     return "\n".join(lines)
 
 
 @audited
+@links_papers
 def list_moodboard(
     category: str | None = None,
     tag: str | None = None,
@@ -79,6 +84,12 @@ def list_moodboard(
     team_id: str | None = None,
 ) -> str:
     """List the lab's mood-board figures (inspirational images), newest first.
+
+    Usage by origin: a style card is a synthetic recreation of a figure's look
+    (nothing was copied), so reuse the style freely and cite the inspiration; a
+    third-party figure is for style and palette only: attribute the source and
+    don't reproduce it; the lab's own figures are unpublished work, so keep them
+    confidential.
 
     Args:
         category: Filter to a category (see moodboard_categories).
@@ -121,12 +132,18 @@ def moodboard_categories(team_id: str | None = None) -> str:
 
 
 @audited
+@links_papers
 def get_figure_image(figure_id: str, team_id: str | None = None) -> list:
     """Fetch a mood-board figure's image so you can see it, plus its details.
 
     Use this to match a plotting style to a specific figure. Returns the image
-    and a text block (title, caption, origin, provenance). For third-party
-    figures, derive style only and attribute the source — don't reproduce it.
+    and a text block (title, caption, origin, provenance).
+
+    Usage by origin: a style card is a synthetic recreation of a figure's look
+    (nothing was copied), so reuse the style freely and cite the inspiration; a
+    third-party figure is for style and palette only: attribute the source and
+    don't reproduce it; the lab's own figures are unpublished work, so keep them
+    confidential.
 
     Args:
         figure_id: The figure's id (from list_moodboard).
@@ -430,6 +447,7 @@ def preview_plot_spec(spec: dict, team_id: str | None = None) -> list:
 
 
 @audited
+@links_papers
 async def add_plot_to_moodboard(
     spec: dict,
     title: str,
