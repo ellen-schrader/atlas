@@ -273,6 +273,8 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
   switch (reason.kind) {
     case "similar_saved":
       return <>Similar to {ref}, which you saved</>;
+    case "similar_posted":
+      return <>Similar to {ref}, which you shared</>;
     case "similar_read":
       return <>Similar to {ref}, which you read</>;
     case "similar_reacted":

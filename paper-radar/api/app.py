@@ -16,9 +16,7 @@ Enrichment (summary/tags) still lands later in a worker.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -35,7 +33,15 @@ from paper_radar.ingest import url_guard
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.urls import _clean_url, _normalize_key, coerce_fetch_url, norm_doi
 
-from . import embeddings, enrichment, integrations, maps, merge_suggestions, teams_integration
+from . import (
+    embeddings,
+    enrichment,
+    integrations,
+    maps,
+    merge_suggestions,
+    taste,
+    teams_integration,
+)
 from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .backfill_metadata import _doi_owner, follow_year, plan_update
@@ -1486,11 +1492,7 @@ def make_map_summary(
 # --- profile embedding + recommendations -----------------------------------
 
 
-def _parse_vec(value: object) -> list[float] | None:
-    """PostgREST returns a `vector` column as a JSON string; normalize to a list."""
-    if value is None:
-        return None
-    return json.loads(value) if isinstance(value, str) else value  # type: ignore[return-value]
+_parse_vec = taste.parse_vec
 
 
 def _l2norm(v: np.ndarray) -> np.ndarray:
@@ -1498,189 +1500,74 @@ def _l2norm(v: np.ndarray) -> np.ndarray:
     return v / n if n > 0 else v
 
 
-# Engagement weights for the taste centroid. Not all engagement is endorsement:
-# an explicit save or a reaction is a strong "I want more like this"; a plain
-# `read` only means "consumed" (preference unknown), so it barely nudges taste; a
-# 🤔 reaction is skeptical, not enthusiastic. Weights are decayed by age so recent
-# interests outweigh old ones.
-_W_REACTION = 1.0
-_W_SKEPTIC = 0.3  # 🤔
-_W_COMMENT = 0.75
-_W_BOOKMARK = 1.5  # paper_status.saved — an explicit, deliberate save
-_W_READ = 0.25  # read / reading — consumed, but says little about preference
-_HALFLIFE_DAYS = 90.0
+# The recommendation signals live in api/taste.py, shared with the Claude
+# connector; these names are kept for the code and tests that use them here.
+_W_REACTION = taste.W_REACTION
+_W_SKEPTIC = taste.W_SKEPTIC
+_W_COMMENT = taste.W_COMMENT
+_W_BOOKMARK = taste.W_BOOKMARK
+_W_POSTED = taste.W_POSTED
+_W_READ = taste.W_READ
+_HALFLIFE_DAYS = taste.HALFLIFE_DAYS
+_parse_ts = taste.parse_ts
+_recency_decay = taste.recency_decay
+_engagement_weights = taste.engagement_weights
 
 
-def _parse_ts(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _recency_decay(ts: datetime | None, now: datetime) -> float:
-    """Half-life decay: a signal loses half its weight every _HALFLIFE_DAYS."""
-    if ts is None:
-        return 1.0
-    age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
-    return 0.5 ** (age_days / _HALFLIFE_DAYS)
-
-
-def _engagement_weights(
-    uc, user_id: str, team_id: str, anchors: dict[str, str] | None = None
-) -> dict[str, float]:
-    """Per-paper positive-interest weight for the user in this lab, blending signal
-    strength (save > reaction > comment > read) with recency decay.
-
-    Pass ``anchors`` to also collect, from the same rows, each paper's strongest
-    kind of engagement for the recommendation reasons (see _ANCHOR_RANK)."""
-    now = datetime.now(UTC)
-    weights: dict[str, float] = {}
-
-    def add(paper_id: str, w: float) -> None:
-        weights[paper_id] = weights.get(paper_id, 0.0) + w
-
-    def anchor(paper_id: str, kind: str) -> None:
-        if anchors is None:
-            return
-        if paper_id not in anchors or _ANCHOR_RANK[kind] < _ANCHOR_RANK[anchors[paper_id]]:
-            anchors[paper_id] = kind
-
-    for r in (
-        uc.table("reactions")
-        .select("paper_id, emoji, created_at")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
+def _profile_row(uc, user_id: str) -> dict | None:
+    """The caller's profile: what taste and the reasons read from it, and the
+    display name their Teams posts carry as text. Read once per request."""
+    rows = (
+        uc.table("profiles")
+        .select("display_name, profile_vec, profile_md, profile_md_us, interests")
+        .eq("id", user_id)
+        .limit(1)
         .execute()
         .data
-        or []
-    ):
-        base = _W_SKEPTIC if r.get("emoji") == "🤔" else _W_REACTION
-        add(r["paper_id"], base * _recency_decay(_parse_ts(r.get("created_at")), now))
-        # 🤔 is skeptical: it nudges taste, but "which you reacted to" would read
-        # as an endorsement.
-        if r.get("emoji") != "🤔":
-            anchor(r["paper_id"], "similar_reacted")
-    for c in (
-        uc.table("comments")
-        .select("paper_id, created_at")
-        .eq("team_id", team_id)
-        .eq("author_id", user_id)
-        .execute()
-        .data
-        or []
-    ):
-        add(c["paper_id"], _W_COMMENT * _recency_decay(_parse_ts(c.get("created_at")), now))
-        anchor(c["paper_id"], "similar_discussed")
-    for s in (
-        uc.table("paper_status")
-        .select("paper_id, saved, status, updated_at")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
-        .execute()
-        .data
-        or []
-    ):
-        # Not saved and never started means the row says nothing — it is what
-        # un-saving a paper, or un-marking it read, leaves behind. Scoring it as
-        # _W_READ would let *discarding* a paper feed the taste vector as though
-        # it had been consumed. Harmless while the client deleted those rows on
-        # the way past; since 20261007130000 they are kept on purpose, so the
-        # same question has to be asked here.
-        if not s.get("saved") and s.get("status") == "unread":
-            continue
-        # Keyed off `saved`, not a status value. Since the two-axis split
-        # (20261006120000) a save is a boolean that survives being read, so the
-        # old `status == "to_read"` test would never fire again and every saved
-        # paper would quietly collapse to the much weaker _W_READ.
-        base = _W_BOOKMARK if s.get("saved") else _W_READ
-        add(s["paper_id"], base * _recency_decay(_parse_ts(s.get("updated_at")), now))
-        if s.get("saved"):
-            anchor(s["paper_id"], "similar_saved")
-        elif s.get("status") == "read":
-            anchor(s["paper_id"], "similar_read")
-        elif s.get("status") == "reading":
-            anchor(s["paper_id"], "similar_reading")
-    return weights
+    )
+    return rows[0] if rows else None
+
+
+# Ids per `in.(…)` filter: PostgREST takes them in the URL, and a user credited
+# with hundreds of posts would otherwise build one too long for the gateway.
+_IN_CHUNK = 150
+
+
+def _papers_by_id(uc, ids: list[str], columns: str) -> list[dict]:
+    rows: list[dict] = []
+    for i in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[i : i + _IN_CHUNK]
+        rows.extend(uc.table("papers").select(columns).in_("id", chunk).execute().data or [])
+    return rows
 
 
 def _taste_vector(
-    uc, user_id: str, weights: dict[str, float], loaded: dict | None = None
+    uc,
+    user_id: str,
+    weights: dict[str, float],
+    loaded: dict | None = None,
+    profile: dict | None = None,
 ) -> list[float] | None:
-    """Per-user taste vector: a confidence-weighted blend of the profile embedding
-    and a recency-/strength-weighted engagement centroid over ``weights``
-    (the caller's `_engagement_weights`, computed once per request).
-
-    The engagement side's weight grows with how many papers the user has actually
-    engaged with, so a single incidental interaction can't hijack the feed while
-    the profile carries a sparse user. Missing either side falls back to the other;
-    missing both returns None (cold start → recency fallback).
+    """Per-user taste vector (taste.blend_taste) from the caller's profile and
+    ``weights`` (the caller's `_engagement_weights`, computed once per request).
+    Pass ``profile`` (the caller's `_profile_row`) if it has been read already.
 
     Pass ``loaded`` (a dict) to keep what was fetched for the recommendation
     reasons, instead of fetching it again: "vecs" (paper id → unit vector),
     "titles", "profile_md", "profile_md_us", "follows", and the per-signal query vectors
     "profile_q" / "engagement_q" that Discover searches with."""
-    prof = (
-        uc.table("profiles")
-        .select("profile_vec, profile_md, profile_md_us, interests")
-        .eq("id", user_id)
-        .limit(1)
-        .execute().data or []
-    )
-    profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
+    if profile is None:
+        profile = _profile_row(uc, user_id)
+    prof = [profile] if profile else []
     if loaded is not None:
         loaded["profile_md"] = (prof[0].get("profile_md") or "") if prof else ""
         # The profile in American spelling (a computed column over us_spelling),
         # so "tumour microenvironment" names tumor-microenvironment too.
         loaded["profile_md_us"] = (prof[0].get("profile_md_us") or "") if prof else ""
         loaded["follows"] = _follows(prof[0] if prof else None)
-        loaded.setdefault("vecs", {})
-        loaded.setdefault("titles", {})
-    profile_np = (
-        _l2norm(np.asarray(profile_vec, dtype=np.float32)) if profile_vec is not None else None
-    )
-
-    centroid_np = None
-    n_engaged = 0
-    if weights:
-        rows = (
-            uc.table("papers").select("id, title, embedding").in_("id", list(weights))
-            .execute().data or []
-        )
-        acc: np.ndarray | None = None
-        wsum = 0.0
-        for r in rows:
-            w = weights.get(r["id"], 0.0)
-            if w <= 0 or not r.get("embedding"):
-                continue
-            v = _l2norm(np.asarray(_parse_vec(r["embedding"]), dtype=np.float32))
-            if loaded is not None:
-                loaded["vecs"][r["id"]] = v
-                loaded["titles"][r["id"]] = r.get("title")
-            acc = w * v if acc is None else acc + w * v
-            wsum += w
-            n_engaged += 1
-        if acc is not None and wsum > 0:
-            centroid_np = _l2norm(acc / wsum)
-
-    if loaded is not None:
-        # Discover searches with each signal on its own (_discover_sources).
-        loaded["profile_q"] = profile_np.tolist() if profile_np is not None else None
-        loaded["engagement_q"] = centroid_np.tolist() if centroid_np is not None else None
-
-    if profile_np is None and centroid_np is None:
-        return None
-    if centroid_np is None:
-        return profile_np.tolist()  # type: ignore[union-attr]
-    if profile_np is None:
-        return centroid_np.tolist()
-
-    # Both present: trust engagement more the more of it there is (capped so the
-    # profile always keeps a voice). n=1 → ~0.2, n=4 → 0.5, large → 0.7.
-    eng_conf = min(0.7, n_engaged / (n_engaged + 4.0))
-    return _l2norm((1 - eng_conf) * profile_np + eng_conf * centroid_np).tolist()
+    papers = _papers_by_id(uc, list(weights), "id, title, embedding")
+    profile_vec = _parse_vec(prof[0]["profile_vec"]) if prof else None
+    return taste.blend_taste(profile_vec, weights, papers, loaded)
 
 
 class ProfileRequest(BaseModel):
@@ -1813,18 +1700,16 @@ def _follows(profile: dict | None) -> list[str]:
     return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
 
 
-def _followed_hits(post: dict, follows: list[str]) -> list[str]:
-    """The followed tags this post carries, by post_tags(): its lab tags if it
-    has any, else the paper's own — the rule every tag surface uses."""
-    if not follows:
-        return []
-    tags = post.get("tags") or (post.get("papers") or {}).get("tags") or []
-    wanted = set(follows)
-    return [t for t in tags if t in wanted]
+_followed_hits = taste.followed_hits
 
 
 def _recency_fallback(
-    uc, team_id: str, seen: set[str], limit: int, follows: list[str] | None = None
+    uc,
+    team_id: str,
+    seen: set[str],
+    limit: int,
+    follows: list[str] | None = None,
+    exclude: frozenset[str] = frozenset(),
 ) -> RecommendationsResponse:
     """Cold start (no profile, no engagement): recent unseen posts, newest first —
     led by the newest posts carrying a followed tag, however old, if the caller
@@ -1832,8 +1717,9 @@ def _recency_fallback(
 
     ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
     this server-side; here it comes from the request's `_engagement_weights` keys —
-    every engagement row gets a nonzero weight, so the keys are exactly the seen set)."""
-    lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit)]
+    every engagement row gets a nonzero weight, so the keys are exactly the seen set).
+    ``exclude``: the caller's Teams posts, which recommend_tagged can't tell are theirs."""
+    lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit, exclude)]
     rows = (
         uc.table("paper_posts")
         .select("id, paper_id, posted_at")
@@ -1851,8 +1737,8 @@ def _recency_fallback(
 # Every recommendation says why it is there (docs/dashboard.md §3.4): the signal
 # whose search found it (see _DISCOVER_SOURCES, _source_reasons):
 #
-#   engagement  "Similar to X, which you saved / reacted to / discussed / read /
-#               are reading" — the engaged paper nearest to it, if genuinely
+#   engagement  "Similar to X, which you saved / shared / reacted to / discussed /
+#               read / are reading" — the engaged paper nearest to it, if genuinely
 #               close (below _REASON_MIN_SIMILARITY, naming one paper would be a
 #               claim the embeddings don't support; then "In line with your
 #               activity in Atlas"). Most engagement is in Teams today, so this
@@ -1863,48 +1749,10 @@ def _recency_fallback(
 #               research profile".
 #   new         "New in {lab} · shared by Sara" — the cold-start fallback, which
 #               is newest-first (followed-tag posts first, and they say so).
-_REASON_MIN_SIMILARITY = 0.5
-# When one paper carries several kinds of engagement, the strongest names it.
-_ANCHOR_RANK = {
-    "similar_saved": 0,
-    "similar_reacted": 1,
-    "similar_discussed": 2,
-    "similar_read": 3,
-    "similar_reading": 4,
-}
-
-
-def _pick_reason(
-    vec: np.ndarray, anchors: list[tuple[str, str, str, np.ndarray]]
-) -> dict | None:
-    """The anchor (kind, paper_id, title, unit vector) nearest to ``vec`` (a unit
-    vector), as a reason dict — or None when none clears _REASON_MIN_SIMILARITY."""
-    best: tuple[float, tuple[str, str, str, np.ndarray]] | None = None
-    for a in anchors:
-        sim = float(np.dot(vec, a[3]))
-        if best is None or sim > best[0]:
-            best = (sim, a)
-    if best is None or best[0] < _REASON_MIN_SIMILARITY:
-        return None
-    kind, paper_id, title, _ = best[1]
-    return {"kind": kind, "ref_id": paper_id, "ref_label": title}
-
-
-def _profile_tags(profile_md: str, tags: list[str]) -> list[str]:
-    """The tags the profile text names as a phrase: "spatial-transcriptomics"
-    matches "spatial transcriptomic(s)", "t-cell-exhaustion" matches "T cell
-    exhaustion" but not "B cell … exhaustion", and "cell" doesn't match
-    "cellular". Each word may take a plural "s" either way round."""
-    text = profile_md.lower()
-    out: list[str] = []
-    for tag in tags:
-        words = [w for w in re.split(r"[-_\s/]+", tag.lower()) if w]
-        if not words:
-            continue
-        phrase = r"[\s\-/]+".join(re.escape(w.removesuffix("s")) + "s?" for w in words)
-        if re.search(r"(?<![a-z0-9])" + phrase + r"(?![a-z0-9])", text):
-            out.append(tag)
-    return out
+_REASON_MIN_SIMILARITY = taste.REASON_MIN_SIMILARITY
+_ANCHOR_RANK = taste.ANCHOR_RANK
+_pick_reason = taste.pick_reason
+_profile_tags = taste.profile_tags
 
 
 def _source_reasons(
@@ -2025,90 +1873,67 @@ def _attach_reasons(result: RecommendationsResponse, reasons: dict[str, dict]) -
         r.reason = reasons.get(r.post["papers"]["id"])
 
 
-# Discover runs one search per signal and interleaves them, rather than one search
-# with a blended vector: in a blend, a few saved papers took 50–70% of the
-# weight and followed tags only nudged papers that were already close, so a
-# researcher's description and tags could vanish from the feed. Each signal the
-# caller has gets an equal, round-robin share of the slots, in this order.
-_DISCOVER_SOURCES = ("profile", "tags", "engagement")
+_DISCOVER_SOURCES = taste.DISCOVER_SOURCES
 
 
-def _rpc_recommend(uc, team_id: str, query: list[float], limit: int) -> list[tuple[str, float]]:
-    rows = (
-        uc.rpc("recommend_papers", {"p_team": team_id, "p_query": query, "p_limit": limit})
-        .execute()
-        .data
-        or []
-    )
+def _rpc_recommend(
+    uc, team_id: str, query: list[float], limit: int, exclude: frozenset[str] = frozenset()
+) -> list[tuple[str, float]]:
+    """recommend_papers, leaving out the papers in ``exclude`` (in the database,
+    before its candidate pool is cut, so nobody else's ranking moves)."""
+    params = {"p_team": team_id, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = uc.rpc("recommend_papers", params).execute().data or []
     return [(r["post_id"], r["similarity"]) for r in rows]
 
 
 def _rpc_tagged(
-    uc, team_id: str, follows: list[str], query: list[float] | None, limit: int
+    uc,
+    team_id: str,
+    follows: list[str],
+    query: list[float] | None,
+    limit: int,
+    exclude: frozenset[str] = frozenset(),
 ) -> list[tuple[str, float]]:
     """recommend_tagged: unseen posts carrying a followed tag — nearest to
     ``query`` first, or newest first without one. Only tagged posts are ranked,
-    so a followed tag far from the caller's other interests still surfaces."""
+    so a followed tag far from the caller's other interests still surfaces.
+    Papers in ``exclude`` are left out, as in _rpc_recommend."""
     if not follows:
         return []
-    rows = (
-        uc.rpc(
-            "recommend_tagged",
-            {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit},
-        )
-        .execute()
-        .data
-        or []
-    )
+    params = {"p_team": team_id, "p_tags": follows, "p_query": query, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    rows = uc.rpc("recommend_tagged", params).execute().data or []
     return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
 
 
 def _discover_sources(
-    uc, team_id: str, loaded: dict, limit: int
+    uc, team_id: str, loaded: dict, limit: int, exclude: frozenset[str] = frozenset()
 ) -> dict[str, list[tuple[str, float]]]:
     """The caller's signals, each searched on its own: post ids with similarity,
-    best first. A signal the caller doesn't have is simply absent."""
+    best first. A signal the caller doesn't have is simply absent.
+
+    ``exclude`` is the papers the caller posted from Teams. The RPCs drop the
+    rest of their engagement themselves, but a Teams post has no user id, only
+    their name (see taste.own_posts)."""
     profile_q = loaded.get("profile_q")
     engagement_q = loaded.get("engagement_q")
     follows: list[str] = loaded.get("follows") or []
     sources: dict[str, list[tuple[str, float]]] = {}
     if profile_q is not None:
-        sources["profile"] = _rpc_recommend(uc, team_id, profile_q, limit)
+        sources["profile"] = _rpc_recommend(uc, team_id, profile_q, limit, exclude)
     if engagement_q is not None:
-        sources["engagement"] = _rpc_recommend(uc, team_id, engagement_q, limit)
+        sources["engagement"] = _rpc_recommend(uc, team_id, engagement_q, limit, exclude)
     if follows:
         # Nearest to the profile if there is one, else to engagement.
         query = profile_q if profile_q is not None else engagement_q
-        sources["tags"] = _rpc_tagged(uc, team_id, follows, query, limit)
+        sources["tags"] = _rpc_tagged(uc, team_id, follows, query, limit, exclude)
     return sources
 
 
-def _interleave(
-    sources: dict[str, list[tuple[str, float]]], limit: int
-) -> tuple[list[str], dict[str, float], dict[str, str]]:
-    """Round-robin over the sources in _DISCOVER_SOURCES order, skipping a post
-    another source already placed; a source that runs dry yields its turns.
-    Returns (post ids in order, post id → similarity, post id → source)."""
-    lists = [(name, sources[name]) for name in _DISCOVER_SOURCES if sources.get(name)]
-    pos = {name: 0 for name, _ in lists}
-    order: list[str] = []
-    sims: dict[str, float] = {}
-    origin: dict[str, str] = {}
-    while len(order) < limit:
-        placed = False
-        for name, items in lists:
-            while pos[name] < len(items) and items[pos[name]][0] in origin:
-                pos[name] += 1
-            if pos[name] < len(items) and len(order) < limit:
-                post_id, sim = items[pos[name]]
-                pos[name] += 1
-                order.append(post_id)
-                sims[post_id] = sim
-                origin[post_id] = name
-                placed = True
-        if not placed:
-            break
-    return order, sims, origin
+_interleave = taste.interleave
 
 
 @app.get("/recommendations", response_model=RecommendationsResponse)
@@ -2133,15 +1958,25 @@ def recommendations(
     uc = user_client(token)
     anchors: dict[str, str] = {}
     loaded: dict = {}
-    weights = _engagement_weights(uc, user_id, team_id, anchors)
-    taste = _taste_vector(uc, user_id, weights, loaded)
+    profile = _profile_row(uc, user_id)
+    teams_posts: set[str] = set()
+    weights = _engagement_weights(
+        uc,
+        user_id,
+        team_id,
+        anchors,
+        display_name=(profile or {}).get("display_name"),
+        teams_posts=teams_posts,
+    )
+    taste_vec = _taste_vector(uc, user_id, weights, loaded, profile=profile)
+    exclude = frozenset(teams_posts)
 
     if scope == "reading_list":
-        return _reading_list_ranked(uc, user_id, team_id, taste, limit)
+        return _reading_list_ranked(uc, user_id, team_id, taste_vec, limit)
 
-    if taste is None:
+    if taste_vec is None:
         follows = loaded.get("follows") or []
-        result = _recency_fallback(uc, team_id, set(weights), limit, follows)
+        result = _recency_fallback(uc, team_id, set(weights), limit, follows, exclude)
         try:
             _attach_reasons(
                 result, _new_reasons(uc, user_id, [r.post for r in result.results], follows)
@@ -2150,7 +1985,8 @@ def recommendations(
             log.warning("recommendation reasons failed for %s: %s", user_id, exc)
         return result
 
-    order, sims, origin = _interleave(_discover_sources(uc, team_id, loaded, limit), limit)
+    sources = _discover_sources(uc, team_id, loaded, limit, exclude)
+    order, sims, origin = _interleave(sources, limit)
     result = _hydrate(uc, order, sims, cold=False)
     # Best-effort: a failure to explain must not cost the recommendations.
     try:
