@@ -11,6 +11,7 @@ import { CollapsedBar, Sidebar } from "@/components/sidebar/Sidebar";
 import { FOCUS_RING } from "@/components/sidebar/nav";
 import { ToastProvider } from "@/components/Toast";
 import { useElementWidth } from "@/hooks/useElementWidth";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useProfile } from "@/hooks/useProfile";
 import type { Team } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,10 @@ export interface AppContext {
   displayName: string;
   /** Width of the whole app shell (nav included) — Home's breakpoints key off it. */
   shellWidth: number;
+  /** Features on for the user in this lab (public.my_features); empty while loading. */
+  features: readonly string[];
+  /** Whether `features` has loaded: an empty list before then means "not yet". */
+  featuresLoaded: boolean;
 }
 
 export function useAppContext() {
@@ -59,7 +64,16 @@ export default function Layout({
   // flash of the mobile nav on a desktop load.
   const shellWidth = useElementWidth(shellRef) || window.innerWidth;
   const mode = navModeFor(shellWidth);
-  const ctx: AppContext = { session, team, userId: session.user.id, displayName, shellWidth };
+  const { features, loaded: featuresLoaded } = useFeatures(team.id);
+  const ctx: AppContext = {
+    session,
+    team,
+    userId: session.user.id,
+    displayName,
+    shellWidth,
+    features,
+    featuresLoaded,
+  };
   const sidebar = {
     userId: session.user.id,
     email: session.user.email ?? "",
@@ -67,6 +81,7 @@ export default function Layout({
     team,
     labs,
     onSwitchLab,
+    features,
   };
 
   return (

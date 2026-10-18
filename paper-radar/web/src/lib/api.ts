@@ -445,3 +445,33 @@ export function deleteTeamsInboundSecret(teamId: string): Promise<TeamsIntegrati
     { method: "DELETE" },
   );
 }
+
+// --- clinical trials (dark unless the feature is on; see lib/trials.ts) -------
+
+export interface TrialHit {
+  nct_id: string;
+  title: string;
+  acronym: string | null;
+  phases: string[];
+  status: string | null;
+  conditions: string[];
+  in_lab: boolean;
+}
+
+/** Breast cancer trials on ClinicalTrials.gov matching an NCT ID, a trial name
+ *  or free text. */
+export async function searchTrials(teamId: string, q: string): Promise<TrialHit[]> {
+  const params = new URLSearchParams({ team_id: teamId, q });
+  return authedRequest<TrialHit[]>(`/trials/search?${params}`);
+}
+
+/** Add a trial to the lab by NCT ID. */
+export async function addTrial(
+  teamId: string,
+  nctId: string,
+): Promise<{ trial: { id: string; nct_id: string }; already_in_lab: boolean }> {
+  return authedRequest("/trials", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, nct_id: nctId }),
+  });
+}

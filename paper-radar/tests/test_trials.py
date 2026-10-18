@@ -405,3 +405,91 @@ def test_add_rejects_bad_ids_and_non_breast_trials(monkeypatch):
     )
     r = client.post("/trials", json={"team_id": "lab", "nct_id": "NCT00000001"}, headers=AUTH)
     assert r.status_code == 422
+
+
+# --- classification (PR 2) ----------------------------------------------------------
+
+trial_classify = pytest.importorskip("api.trial_classify")
+
+
+def test_registry_digest_carries_what_classification_needs():
+    digest = json.loads(trial_classify.registry_digest(_fixture("NCT03036488")["protocolSection"]))
+    assert digest["conditions"] == ["Triple Negative Breast Neoplasms"]
+    assert {a["type"] for a in digest["arms"]} == {"EXPERIMENTAL", "ACTIVE_COMPARATOR"}
+    assert any(i["name"] == "Pembrolizumab" for i in digest["interventions"])
+    assert "eligibility" in digest
+
+
+class _FakeAnthropic:
+    def __init__(self, parsed, stop_reason="end_turn"):
+        self.parsed, self.stop_reason, self.calls = parsed, stop_reason, []
+        self.messages = self
+
+    def __call__(self, **_k):
+        return self
+
+    def parse(self, **kw):
+        self.calls.append(kw)
+        return SimpleNamespace(parsed_output=self.parsed, stop_reason=self.stop_reason)
+
+
+def _with_claude(monkeypatch, fake):
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "Anthropic", fake)
+    monkeypatch.setattr(
+        trial_classify,
+        "get_settings",
+        lambda: SimpleNamespace(anthropic_api_key="k", anthropic_model="m"),
+    )
+
+
+def test_classify_orders_and_dedupes(monkeypatch):
+    C = trial_classify.Classification
+    fake = _FakeAnthropic(
+        C(
+            settings=["adjuvant", "neoadjuvant", "adjuvant"],
+            patient_groups=["tnbc"],
+            therapy_classes=["chemotherapy", "immunotherapy"],
+        )
+    )
+    _with_claude(monkeypatch, fake)
+    out = trial_classify.classify(_fixture("NCT03036488")["protocolSection"])
+    assert out.settings == ["neoadjuvant", "adjuvant"]
+    assert out.therapy_classes == ["immunotherapy", "chemotherapy"]
+    (call,) = fake.calls
+    assert call["output_format"] is C
+    assert "<registry_record>" in call["messages"][0]["content"]
+
+
+def test_classify_gives_up_quietly(monkeypatch):
+    _with_claude(monkeypatch, _FakeAnthropic(None, stop_reason="max_tokens"))
+    assert trial_classify.classify({}) is None
+    monkeypatch.setattr(
+        trial_classify, "get_settings", lambda: SimpleNamespace(anthropic_api_key="")
+    )
+    assert trial_classify.classify({}) is None
+
+
+def test_classify_lab_skips_trials_already_classified(monkeypatch):
+    svc = _FakeSvc(
+        {
+            "trial_posts": [
+                {"trial_id": "t1", "trials": {"acronym": "A", "registry": {}}},
+                {"trial_id": "t2", "trials": {"acronym": "B", "registry": {}}},
+            ],
+            "trial_facts": [{"trial_id": "t1"}],  # a person (or Claude) did t1
+        }
+    )
+    monkeypatch.setattr(trial_classify, "service_client", lambda: svc)
+    C = trial_classify.Classification
+    seen = []
+
+    def classify(reg):
+        seen.append(reg)
+        return C(settings=["metastatic"], patient_groups=[], therapy_classes=["adc"])
+
+    monkeypatch.setattr(trial_classify, "classify", classify)
+    assert trial_classify.classify_lab("lab") == 1
+    assert len(seen) == 1
+    assert svc.upserts == [("trial_facts", {"team_id": "lab", "trial_id": "t2", "acronym": "B"})]
