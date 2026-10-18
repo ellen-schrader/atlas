@@ -38,7 +38,6 @@ def _row(**kw) -> dict:
         "data_url": None,
         "metadata_source": "citation_meta",
         "published_at": "2024-01-01",
-        "edited_by": None,
         "edited_at": None,
         "edited_fields": [],
     }

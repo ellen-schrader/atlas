@@ -218,7 +218,7 @@ export function PaperDetail({
             </span>
           </span>
         </div>
-        {p.edited_at && <EditedLine paper={p} userId={userId} />}
+        {p.edited_at && <EditedLine paper={p} />}
         {post.note && (
           <div className="mt-2 rounded-md border border-border bg-surface-2 p-2.5 text-sm text-muted">
             “{post.note}”
@@ -624,33 +624,32 @@ function MetadataEditor({
   );
 }
 
-/** "Edited by Ellen · 2 Oct". The editor's name is read under the
- *  caller's own RLS: profiles are visible only to people who share a lab, so for
- *  an editor elsewhere the row simply isn't there, and the line says so rather
- *  than fetching the name with the service role — which would leak who they are
- *  across exactly the boundary that policy draws. */
-function EditedLine({ paper, userId }: { paper: Paper; userId: string }) {
-  const editor = paper.edited_by;
-  const { data: name, isLoading } = useQuery({
-    queryKey: ["profile-name", editor],
-    enabled: !!editor && editor !== userId,
+/** "Edited by Ellen · 2 Oct". Who edited comes from paper_editor(), which names
+ *  the editor only to people who share a lab with them — the line profiles RLS
+ *  draws — and otherwise says "outside your lab" without handing out their id,
+ *  which would let a lab tell that one person corrected several papers. */
+function EditedLine({ paper }: { paper: Paper }) {
+  const { data: editor, isLoading } = useQuery({
+    queryKey: ["paper-editor", paper.id, paper.edited_at],
     staleTime: 5 * 60_000,
+    retry: 1,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("profiles")
-        .select("display_name")
-        .eq("id", editor!)
-        .maybeSingle();
-      return (data?.display_name as string | undefined) ?? null;
+      const { data, error } = await supabase
+        .rpc("paper_editor", { p_paper: paper.id })
+        .maybeSingle<{ is_you: boolean; in_your_lab: boolean; display_name: string | null }>();
+      if (error) throw error;
+      return data;
     },
   });
   if (isLoading) return null;
+  // No row: no person made the last edit. A failed lookup also lands here, and
+  // the line still shows when, just not who.
   const who = !editor
     ? ""
-    : editor === userId
+    : editor.is_you
       ? " by you"
-      : name
-        ? ` by ${name}`
+      : editor.in_your_lab
+        ? ` by ${editor.display_name ?? "someone in your lab"}`
         : " outside your lab";
   return (
     <p className="mt-1.5 text-xs text-muted" title={formatDate(paper.edited_at)}>

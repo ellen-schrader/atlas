@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useMergedInto } from "@/hooks/usePreprintLinks";
 import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
-import type { PaperPost } from "@/lib/types";
+import { PAPER_COLUMNS, type PaperPost } from "@/lib/types";
 import { useAppContext } from "@/routes/Layout";
 
 /**
@@ -52,7 +52,7 @@ export default function PaperPage() {
       const { data, error } = await supabase
         .from("paper_posts")
         .select(
-          "id, posted_at, note, posted_by, posted_by_label, source, tags, papers(*), poster:profiles!paper_posts_posted_by_fkey(display_name)",
+          `id, posted_at, note, posted_by, posted_by_label, source, tags, papers(${PAPER_COLUMNS}), poster:profiles!paper_posts_posted_by_fkey(display_name)`,
         )
         .eq("team_id", team.id)
         .eq("paper_id", paperId!)
