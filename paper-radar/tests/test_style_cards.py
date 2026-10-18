@@ -288,9 +288,7 @@ def test_spec_version_rejects_bool_and_float():
 
 
 def test_hydrate_is_idempotent_on_a_validated_spec():
-    norm = card_spec.validate_spec(
-        {"chart": {"type": "scatter"}, "data_hints": {"n_points": 50}}
-    )
+    norm = card_spec.validate_spec({"chart": {"type": "scatter"}, "data_hints": {"n_points": 50}})
     assert card_spec.hydrate(norm) == norm  # so a validated spec renders identically
 
 
@@ -336,8 +334,8 @@ def test_format_figure_style_card_cites_and_flags_synthetic(monkeypatch):
     assert "style card" in text
     assert "synthetic" in text
     assert "Krieger et al., Nat Methods 2025" in text
-    # and it must NOT carry the third-party don't-reproduce warning
-    assert "don't reproduce" not in text
+    # The origin is data; the usage rules live in the tool descriptions.
+    assert "third-party" not in text and "reproduce" not in text
 
 
 class _FakeCtx:

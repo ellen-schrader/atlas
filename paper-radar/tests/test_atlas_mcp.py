@@ -525,7 +525,7 @@ def _drive_digest(
 def test_digest_points_to_the_next_page_in_the_same_lab(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20)
     assert "35 new paper(s)" in out and "(1–20 of 35)" in out
-    assert '15 more: call lab_digest(days=10, offset=20, team_id="t1")' in out
+    assert "Next page: offset 20, team_id t1 (15 more)." in out
     assert "4 new comment(s)" in out
 
 
@@ -540,7 +540,7 @@ def test_digest_last_page_has_no_pointer_or_repeated_comments(monkeypatch):
 def test_digest_next_offset_counts_posts_not_readable_papers(monkeypatch):
     # Two of the page's posts have no readable paper; the next page still starts at 20.
     out = _drive_digest(monkeypatch, n_papers=35, offset=0, page=20, unreadable=2)
-    assert "offset=20," in out
+    assert "Next page: offset 20," in out
 
 
 def test_digest_single_page_and_past_the_end(monkeypatch):
@@ -591,28 +591,54 @@ def test_paper_titles_are_ready_made_atlas_links(monkeypatch):
     assert blank.startswith("[https://doi.org/1](")
 
 
+# Phrases that address the model: a careful client treats them inside a result as
+# a possible injection, ignores them and says so (claude.ai did, and dropped every
+# link with them). How to present papers lives in the tool descriptions instead.
+_DIRECTIVES = (
+    "how to present",
+    "call lab_digest",
+    "when you mention",
+    "tell the user",
+    "keep a paper's link",
+    "don't reproduce",
+    "do not",
+)
+
+
 def test_results_are_data_only(monkeypatch):
-    """No instructions in a result: a careful client treats them as a possible
-    injection and ignores them (claude.ai did, and dropped every link with them).
-    How to present papers lives in the tool descriptions instead."""
-    for page in (
-        _drive_digest(monkeypatch, n_papers=3, offset=0, page=3),
+    pick = _digest_hit("p7", "A close paper.")
+    pick["reason"] = {"kind": "tag", "ref_label": "ffpe"}
+    for out in (
+        _drive_digest(monkeypatch, n_papers=150, offset=0, page=100, for_you=[pick]),
         _drive_digest(monkeypatch, n_papers=150, offset=100, page=50),
+        _drive_digest(monkeypatch, n_papers=0, offset=0, page=0),
     ):
-        assert page.endswith("</lab activity>")
+        # All of it inside the untrusted-data wrapper, nothing before or after.
+        assert out.startswith("<lab activity") and out.endswith("</lab activity>")
+        body = out.split(">", 1)[1].lower()  # past the wrapper's own label
+        assert not [d for d in _DIRECTIVES if d in body], out
 
 
-def test_every_paper_tool_says_its_titles_are_atlas_links():
+def test_paper_tools_carry_the_link_note_in_their_descriptions():
     pytest.importorskip("mcp")
-    from atlas_mcp import papers
+    from atlas_mcp import figures, papers, tools
 
-    tools = [t for t in papers.READ_TOOLS if getattr(t, "__name__", "") != "list_labs"]
-    assert tools
-    for t in tools:
+    linking = [t for t in papers.READ_TOOLS if t.__name__ != "list_labs"]
+    linking += [
+        papers.post_paper,
+        figures.list_moodboard,
+        figures.get_figure_image,
+        figures.add_plot_to_moodboard,
+    ]
+    for t in linking:
         doc = " ".join((t.__doc__ or "").split())
-        assert "markdown link to its page in Atlas" in doc or "Atlas link" in doc, t.__name__
+        assert tools.LINK_NOTE in doc, t.__name__
+        # Once, and before the Args section a client shows as the parameter list.
+        assert doc.count(tools.LINK_NOTE) == 1, t.__name__
+        if "Args:" in doc:
+            assert doc.index(tools.LINK_NOTE) < doc.index("Args:"), t.__name__
     digest = " ".join((papers.lab_digest.__doc__ or "").split())
-    assert "grouped by theme" in digest and "For you" in digest
+    assert "grouped by theme" in digest and "next page" in digest
 
 
 def test_every_engagement_kind_has_words():
