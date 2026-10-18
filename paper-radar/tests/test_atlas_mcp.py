@@ -550,15 +550,12 @@ def test_digest_single_page_and_past_the_end(monkeypatch):
     assert "None left from offset 40" in out
 
 
-def test_digest_leads_with_the_picks_and_says_how_to_present(monkeypatch):
+def test_digest_leads_with_the_picks(monkeypatch):
     pick = _digest_hit("p7", "A close paper.")
     pick["reason"] = {"kind": "tag", "ref_label": "ffpe"}
     out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3, for_you=[pick])
     assert out.index("### For you") < out.index("### All new papers")
     assert "Why: Tagged ffpe, which you follow" in out
-    # The guide is ours: outside the untrusted wrapper, before the link reminder.
-    assert out.index("</lab activity>") < out.index("How to present this digest")
-    assert out.index("How to present this digest") < out.index("link its title")
 
 
 def test_digest_says_why_there_are_no_picks(monkeypatch):
@@ -594,15 +591,28 @@ def test_paper_titles_are_ready_made_atlas_links(monkeypatch):
     assert blank.startswith("[https://doi.org/1](")
 
 
-def test_paper_results_end_with_the_link_reminder(monkeypatch):
-    out = _drive_digest(monkeypatch, n_papers=3, offset=0, page=3)
-    assert out.endswith("link its title to its Atlas page as given above.")
-    # The reminder is ours, so it sits outside the untrusted-data wrapper.
-    assert out.index("</lab activity>") < out.index("link its title")
+def test_results_are_data_only(monkeypatch):
+    """No instructions in a result: a careful client treats them as a possible
+    injection and ignores them (claude.ai did, and dropped every link with them).
+    How to present papers lives in the tool descriptions instead."""
+    for page in (
+        _drive_digest(monkeypatch, n_papers=3, offset=0, page=3),
+        _drive_digest(monkeypatch, n_papers=150, offset=100, page=50),
+    ):
+        assert page.endswith("</lab activity>")
 
-    # No papers, no reminder about "these papers".
-    quiet = _drive_digest(monkeypatch, n_papers=0, offset=0, page=0)
-    assert "link its title" not in quiet
+
+def test_every_paper_tool_says_its_titles_are_atlas_links():
+    pytest.importorskip("mcp")
+    from atlas_mcp import papers
+
+    tools = [t for t in papers.READ_TOOLS if getattr(t, "__name__", "") != "list_labs"]
+    assert tools
+    for t in tools:
+        doc = " ".join((t.__doc__ or "").split())
+        assert "markdown link to its page in Atlas" in doc or "Atlas link" in doc, t.__name__
+    digest = " ".join((papers.lab_digest.__doc__ or "").split())
+    assert "grouped by theme" in digest and "For you" in digest
 
 
 def test_every_engagement_kind_has_words():
@@ -615,10 +625,9 @@ def test_every_engagement_kind_has_words():
     assert set(tools._ANCHOR_VERBS) == set(taste.ANCHOR_RANK)
 
 
-def test_later_pages_dont_ask_for_picks(monkeypatch):
+def test_later_pages_have_no_picks_section(monkeypatch):
     out = _drive_digest(monkeypatch, n_papers=150, offset=100, page=50)
-    assert "How to present this digest" not in out
-    assert "group them by theme with the earlier ones" in out
+    assert "### For you" not in out
 
 
 def test_top_share_keeps_each_signals_best_quarter_above_the_floor():

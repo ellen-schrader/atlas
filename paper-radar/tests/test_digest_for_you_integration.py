@@ -153,7 +153,7 @@ def test_the_digest_reads_as_designed(world):
     assert p["close1"] in for_you and "which you shared" in for_you
     assert "Tagged ffpe, which you follow" in for_you
     assert p["far"] not in for_you and p["far"] in rest
-    assert "How to present this digest" in out
+    assert out.endswith("</lab activity>")  # data only; guidance is in the description
 
 
 def test_recommend_reading_uses_the_same_signals(world):
