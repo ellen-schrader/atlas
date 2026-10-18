@@ -3,7 +3,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useOutletContext } from "react-router-dom";
 import { Menu } from "lucide-react";
 
-import { AtlasMark } from "@/components/Brand";
+import { Brand } from "@/components/Brand";
 import { FigureModalProvider } from "@/components/FigureModal";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
@@ -173,9 +173,7 @@ function MobileNav(p: Parameters<typeof Sidebar>[0]) {
         >
           <Menu size={18} />
         </button>
-        <span className="flex items-center gap-2 text-lg font-bold tracking-tight">
-          <AtlasMark size={21} className="text-accent" /> Atlas
-        </span>
+        <Brand size={24} />
         <NotificationsBell userId={p.userId} align="right" className="ml-auto" />
       </header>
 

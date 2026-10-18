@@ -229,3 +229,30 @@ body {
     transform: translate(-50%, -50%);
   }
 }
+
+/* Landing page reveals (hooks/useInViewOnce). A section carries
+   data-reveal="static" | "armed" | "played". Only "armed" hides anything, and
+   only while motion is allowed, so the page is complete without JS or motion. */
+@keyframes reveal-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+@keyframes reveal-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes reveal-blink {
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-reveal="armed"] .reveal-bar { transform: scaleY(0); }
+  [data-reveal="played"] .reveal-bar {
+    transform-origin: bottom;
+    animation: reveal-grow 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  [data-reveal="armed"] .reveal-item { opacity: 0; }
+  [data-reveal="played"] .reveal-item {
+    animation: reveal-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .reveal-caret { animation: reveal-blink 1s steps(1) infinite; }
+}
