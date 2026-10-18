@@ -13,7 +13,7 @@ from mcp.server.fastmcp import Context, Image
 from . import lab, moodboard
 from . import render as card_render
 from . import spec as card_spec
-from .tools import _clamp, _elicit_confirm, _untrusted, audited, in_worker_thread
+from .tools import _clamp, _elicit_confirm, _paper_title_link, _untrusted, audited, in_worker_thread
 
 
 def _provenance(f: dict, *, with_license: bool = False) -> list[str]:
@@ -24,8 +24,8 @@ def _provenance(f: dict, *, with_license: bool = False) -> list[str]:
     if f.get("attribution"):
         prov.append(f["attribution"])
     paper = f.get("papers")
-    if paper and paper.get("title"):
-        prov.append(paper["title"])
+    if paper and paper.get("id"):
+        prov.append(_paper_title_link(paper))
     if f.get("source_url"):
         prov.append(f["source_url"])
     if with_license and f.get("license"):
@@ -518,7 +518,7 @@ async def add_plot_to_moodboard(
     if attribution:
         detail.append(f"style of: {attribution}")
     if anchor:
-        detail.append(f"linked paper: {anchor['paper'].get('title') or paper_id}")
+        detail.append(f"linked paper: {_paper_title_link({'id': paper_id, **anchor['paper']})}")
     if source_url:
         detail.append(source_url)
     lines = [

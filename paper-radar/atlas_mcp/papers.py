@@ -17,7 +17,6 @@ from .tools import (
     _elicit_confirm,
     _format_digest_hit,
     _format_hit,
-    _lab_papers,
     _paper_title_link,
     _papers_result,
     _render,
@@ -96,7 +95,7 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         team = lab.resolve_team(team_id)
         hits = lab.recommend(team, _clamp(limit))
         if hits:
-            return _lab_papers(
+            return _untrusted(
                 "lab papers",
                 f"Recommended for you in {team['name']} (by your reading history):\n\n"
                 + _render(hits, ""),
@@ -108,7 +107,7 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         return f"Error: {exc}"
     if not recent:
         return f"No papers in {team['name']} yet to recommend from."
-    return _lab_papers(
+    return _untrusted(
         "lab papers",
         f"No personalised recommendations in {team['name']} right now (no reading "
         "history yet, or you've already seen every paper) — here are the most recent "
@@ -132,6 +131,7 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
         team = lab.resolve_team(team_id)
         anchor = lab.get_post(team, paper_id)  # validates membership + gives the title
         title = anchor["paper"].get("title") or paper_id
+        anchor_link = _paper_title_link(anchor["paper"])
         hits = lab.similar(team, paper_id, _clamp(limit))
         note = ""
         if hits is None:  # no embedding on the anchor → keyword fallback
@@ -145,7 +145,9 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
         return f"Error: {exc}"
     if not hits:
         return f"No other papers similar to “{title}” in {team['name']} yet."
-    return _lab_papers("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
+    return _untrusted(
+        "lab papers", f"Papers similar to {anchor_link}{note}:\n\n" + _render(hits, "")
+    )
 
 
 @audited
@@ -190,13 +192,13 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
         parts.append("No new papers.")
     if d["n_comments"] is None:
         # A later page: comments and mentions were reported with the first one.
-        return _lab_papers("lab activity", "\n".join(parts))
+        return _untrusted("lab activity", "\n".join(parts))
     parts.append("")
     parts.append(f"{d['n_comments']} new comment(s) across the lab.")
     if d["mentions"]:
         titles = "; ".join(_paper_title_link(m) for m in d["mentions"])
         parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
-    return _lab_papers("lab activity", "\n".join(parts))
+    return _untrusted("lab activity", "\n".join(parts))
 
 
 @audited
@@ -232,7 +234,7 @@ def novelty_check(
         verdict = "Adjacent work exists in your lab — partially covered."
     else:
         verdict = "Only loosely related work found — this looks novel to your lab."
-    return _lab_papers(
+    return _untrusted(
         "lab papers",
         f"{verdict} (closest similarity {top:.2f}, lab corpus only)\n\n"
         "Closest existing papers:\n\n" + _render(hits, ""),
@@ -260,11 +262,13 @@ def draft_related_work(
     """
     n = max(1, min(int(limit), 20))
     anchor_title = None  # external (paper title) — must not enter the trusted guide
+    anchor_link = None
     try:
         team = lab.resolve_team(team_id)
         if paper_id:
             anchor = lab.get_post(team, paper_id)  # validate membership + get the title
             anchor_title = anchor["paper"].get("title") or paper_id
+            anchor_link = _paper_title_link(anchor["paper"])
             subject = "the paper you selected"
             hits = lab.similar(team, paper_id, n)
             if hits is None:  # no embedding → keyword fallback on the title
@@ -308,9 +312,9 @@ def draft_related_work(
     )
     # The anchor title is externally authored — expose it as data, never as part of
     # the instruction above.
-    body = _lab_papers("lab papers", "\n\n".join(sources))
-    if anchor_title:
-        body = _untrusted("anchor paper title", anchor_title) + "\n\n" + body
+    body = _untrusted("lab papers", "\n\n".join(sources))
+    if anchor_link:
+        body = _untrusted("anchor paper title", anchor_link) + "\n\n" + body
     return guide + body
 
 
@@ -333,7 +337,7 @@ def get_paper(paper_id: str, team_id: str | None = None) -> str:
     parts = [block, "", "Abstract:", abstract or "(no abstract available)"]
     if note:
         parts += ["", f"Lab note: “{note}”"]
-    return _lab_papers("paper", "\n".join(parts))
+    return _untrusted("paper", "\n".join(parts))
 
 
 @audited
@@ -413,7 +417,8 @@ async def post_paper(
 
     head = f"Already in {team['name']}" if already else f"Shared to {team['name']}"
     tail = f" — tagged @{member['display_name']}" if member else ""
-    body = f"{head}: {title}{tail}\n{lab.paper_link(paper_id)}"
+    linked = _paper_title_link({"id": paper_id, "title": title})
+    body = f"{head}{tail}:\n" + _untrusted("paper", linked)
     if preprint:
         body += "\n(The published version of the preprint you linked.)"
     return f"{body}\n{warn}" if warn else body
