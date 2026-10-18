@@ -108,6 +108,7 @@ export interface Recommendation {
 export interface RecommendationReason {
   kind:
     | "similar_saved"
+    | "similar_posted"
     | "similar_read"
     | "similar_reacted"
     | "similar_discussed"

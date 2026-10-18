@@ -1116,3 +1116,23 @@ def test_unreadable_tokens_are_left_to_supabase():
     assert _is_connector_token("not-a-jwt") is False
     assert _is_connector_token("a.!!!.c") is False
     assert _is_connector_token(_jwt({"client_id": None})) is False
+
+
+def test_discover_drops_papers_you_posted_from_teams():
+    """recommend_papers drops posts with your user id, but a Teams post carries
+    only your name, so the app drops those papers itself — without losing slots."""
+    from api.app import _rpc_recommend
+
+    uc = _FakeClient(
+        **{
+            "rpc:recommend_papers": [
+                {"post_id": "a", "paper_id": "pa", "similarity": 0.9},
+                {"post_id": "mine", "paper_id": "teams-mine", "similarity": 0.8},
+                {"post_id": "b", "paper_id": "pb", "similarity": 0.7},
+            ]
+        }
+    )
+    assert _rpc_recommend(uc, "t1", [1.0], 2, frozenset({"teams-mine"})) == [
+        ("a", 0.9),
+        ("b", 0.7),
+    ]
