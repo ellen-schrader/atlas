@@ -32,8 +32,8 @@ A new **Clinical trials** section in the sidebar (badge "New") with two entries:
 
 Atlas has no feature flags today; "Beta" is only a label in `nav.ts`. So this adds a small per-lab switch:
 
-- Migration: `teams.features text[] not null default '{}'` plus a SQL helper `public.team_has_feature(team_id, feature)`. The flag name is `clinical_trials`.
-- **Shipped dark.** PRs merge to `main` with the flag off for every lab, including the Ali Lab, so no user sees anything. Locally the seed turns it on for the seeded lab. When you're happy, one small data migration (`update teams set features = features || '{clinical_trials}' where slug = '<ali-lab slug>'`) turns it on for the Ali Lab through the normal merge-to-main deploy. Nothing gets run against prod by hand.
+- Migration: `team_features` (whole lab) and `user_features` (one person) tables, written only by the service role, plus `public.has_feature(team_id, feature)`. The flag name is `clinical_trials`.
+- **Shipped dark.** PRs merge to `main` with the flag off for every lab, including the Ali Lab, so no user sees anything. Locally the seed turns it on for the seeded lab. When you're happy, one small data migration (`insert into public.team_features (team_id, feature) select id, 'clinical_trials' from public.teams where slug = '<ali-lab slug>'`) turns it on for the Ali Lab through the normal merge-to-main deploy. Nothing gets run against prod by hand.
 - **Database:** every RLS policy on the new trial tables requires both `is_team_member(team_id)` and `team_has_feature(team_id, 'clinical_trials')`. So another lab gets nothing even by calling Supabase directly.
 - **API:** the `api/trials.py` router checks the flag for the active lab and returns 404, not 403, so it doesn't advertise the feature.
 - **Frontend:** the lab's `features` come back with the team, the Clinical trials nav group only renders when the flag is set, and the `/trials/*` routes redirect home otherwise.

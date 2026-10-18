@@ -66,6 +66,7 @@ class TrialRecord:
             "has_results": self.has_results,
             "registry": self.registry,
             "registry_updated_at": self.registry_updated_at,
+            "breast_cancer": self.is_breast_cancer,
         }
 
     @property
@@ -153,7 +154,9 @@ def search(query: str, *, limit: int = 8, condition: str | None = "breast") -> l
     nct = normalise_nct(query)
     if nct:
         rec = fetch(nct)
-        return [_hit_from_record(rec)] if rec else []
+        if rec is None or (condition == "breast" and not rec.is_breast_cancer):
+            return []
+        return [_hit_from_record(rec)]
 
     hits: dict[str, SearchHit] = {}
     for key in ("query.id", "query.term"):

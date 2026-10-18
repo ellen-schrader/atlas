@@ -814,6 +814,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
     from .app import _embed_and_store, _enrich_and_store, _upsert_paper
     from .merge_suggestions import suggest_for_post
     from .paper_identity import swap_to_published
+    from .trial_links import link_paper
 
     try:
         url = _clean_url(url)
@@ -868,6 +869,7 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
         if needs_embedding:
             _enrich_and_store(paper_id, meta.title, meta.abstract)
         suggest_for_post(team_id, paper_id)
+        link_paper(team_id, paper_id)  # clinical trials; never raises
         return paper_id
     except Exception as exc:
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)

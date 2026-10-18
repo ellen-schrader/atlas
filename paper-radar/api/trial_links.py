@@ -25,11 +25,11 @@ from typing import Any
 
 from paper_radar.trials import FEATURE, ctgov
 
+from .merge_suggestions import lab_papers
 from .supa import service_client
 
 log = logging.getLogger(__name__)
 
-_PAGE = 500
 _MIN_ACRONYM = 4  # shorter names ("BEST", "ACE" aside) match too much
 
 
@@ -84,28 +84,50 @@ def _decided(svc, team_id: str, paper_ids: list[str]) -> set[tuple[str, str]]:
     return have
 
 
-def ensure_trial(svc, nct_id: str, *, cache: dict[str, str | None] | None = None) -> str | None:
-    """The trials.id for `nct_id`, fetching it from the registry if Atlas doesn't
-    have it. None if there's no such trial, it isn't breast cancer, or the
-    registry is down (the next run tries again)."""
-    if cache is not None and nct_id in cache:
-        return cache[nct_id]
-    found: str | None = None
-    rows = svc.table("trials").select("id, title, conditions").eq("nct_id", nct_id).execute().data
+def _removed(svc, team_id: str) -> set[str]:
+    """Trials a member took off the lab's list: never added back automatically,
+    and no new links to them (public.trial_removals)."""
+    rows = svc.table("trial_removals").select("trial_id").eq("team_id", team_id).execute().data
+    return {r["trial_id"] for r in rows or []}
+
+
+class Lookup:
+    """Registry answers for one run, so an NCT ID is looked up once however many
+    papers name it. Once the registry fails, the rest of the run doesn't ask
+    again: each attempt could wait out the full timeout."""
+
+    def __init__(self) -> None:
+        self.answers: dict[str, str | None] = {}
+        self.down = False
+
+
+def ensure_trial(svc, nct_id: str, lookup: Lookup) -> str | None:
+    """The trials.id for `nct_id` if it is a breast cancer trial, fetching it
+    from the registry if Atlas doesn't have it yet. None if there's no such
+    trial, it isn't breast cancer, or the registry is down (the next run tries
+    again)."""
+    if nct_id in lookup.answers:
+        return lookup.answers[nct_id]
+    rows = svc.table("trials").select("id, breast_cancer").eq("nct_id", nct_id).execute().data
     if rows:
-        row = rows[0]
-        text = " ".join([row.get("title") or "", *(row.get("conditions") or [])]).lower()
-        found = row["id"] if "breast" in text else None
+        found = rows[0]["id"] if rows[0]["breast_cancer"] else None
     else:
+        if lookup.down:
+            return None
         try:
             rec = ctgov.fetch(nct_id)
         except ctgov.RegistryError as exc:
-            log.warning("could not fetch %s: %s", nct_id, exc)
-            return None  # not cached: try again next time
-        if rec and rec.is_breast_cancer:
-            found = upsert_trial(svc, rec)
-    if cache is not None:
-        cache[nct_id] = found
+            log.warning(
+                "ClinicalTrials.gov failed on %s; skipping lookups this run: %s", nct_id, exc
+            )
+            lookup.down = True
+            return None
+        # Stored even when it isn't breast cancer, so it isn't fetched again on
+        # every run. Only a lab's list makes a trial visible, and only breast
+        # cancer trials go on one.
+        trial_id = upsert_trial(svc, rec) if rec else None
+        found = trial_id if rec and rec.is_breast_cancer else None
+    lookup.answers[nct_id] = found
     return found
 
 
@@ -119,7 +141,7 @@ def link_papers(
     team_id: str,
     papers: Iterable[dict[str, Any]],
     *,
-    cache: dict[str, str | None] | None = None,
+    lookup: Lookup | None = None,
 ) -> int:
     """Link these lab papers ({id, title, abstract}) to trials. Returns the
     number of new links."""
@@ -127,8 +149,9 @@ def link_papers(
     papers = [p for p in papers if p.get("id")]
     if not papers:
         return 0
-    cache = {} if cache is None else cache
+    lookup = lookup or Lookup()
     trials = _lab_trials(svc, team_id)
+    removed = _removed(svc, team_id)
     have = _decided(svc, team_id, [p["id"] for p in papers])
     posted: set[str] = {t["id"] for t in trials.values()}
     patterns = [(t["id"], acronym_pattern(t.get("acronym"))) for t in trials.values()]
@@ -137,8 +160,8 @@ def link_papers(
     for p in papers:
         text = f"{p.get('title') or ''}\n{p.get('abstract') or ''}"
         for nct in ctgov.find_nct_ids(text):
-            trial_id = trials[nct]["id"] if nct in trials else ensure_trial(svc, nct, cache=cache)
-            if not trial_id:
+            trial_id = trials[nct]["id"] if nct in trials else ensure_trial(svc, nct, lookup)
+            if not trial_id or trial_id in removed:
                 continue
             if trial_id not in posted:
                 svc.table("trial_posts").upsert(
@@ -193,23 +216,7 @@ def link_paper(team_id: str, paper_id: str) -> None:
 
 
 def _lab_papers(svc, team_id: str) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    start = 0
-    while True:
-        page = (
-            svc.table("paper_posts")
-            .select("papers(id, title, abstract)")
-            .eq("team_id", team_id)
-            .order("id")
-            .range(start, start + _PAGE - 1)
-            .execute()
-            .data
-            or []
-        )
-        out.extend(r["papers"] for r in page if r.get("papers"))
-        if len(page) < _PAGE:
-            return out
-        start += _PAGE
+    return lab_papers(svc, team_id, columns="id, title, abstract")
 
 
 def link_lab(team_id: str) -> None:
@@ -224,14 +231,23 @@ def link_lab(team_id: str) -> None:
 
 
 def run() -> int:
-    """Every active lab, every paper. Returns the number of new links."""
+    """Every active lab, every paper. Returns the number of new links. A lab
+    that fails is logged and skipped; the others still run."""
     svc = service_client()
-    cache: dict[str, str | None] = {}
+    lookup = Lookup()
     total = 0
+    failed = 0
     for team_id in sorted(active_teams()):
-        n = link_papers(team_id, _lab_papers(svc, team_id), cache=cache)
+        try:
+            n = link_papers(team_id, _lab_papers(svc, team_id), lookup=lookup)
+        except Exception as exc:  # noqa: BLE001 — one lab must not stop the rest
+            log.warning("lab %s: linking failed: %s", team_id, exc)
+            failed += 1
+            continue
         log.info("lab %s: %d new trial links", team_id, n)
         total += n
+    if failed:
+        raise SystemExit(f"{failed} lab(s) failed; see the log")
     return total
 
 

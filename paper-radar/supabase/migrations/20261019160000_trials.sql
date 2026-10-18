@@ -25,6 +25,9 @@ create table public.trials (
     start_date          text,           -- the registry's partial dates ("2017-03", "2017-03-07")
     completion_date     text,
     has_results         boolean not null default false,  -- results posted on ClinicalTrials.gov
+    -- The MVP covers breast cancer only. Other trials are stored too (so a paper
+    -- citing one doesn't fetch it again every day) but never go on a lab's list.
+    breast_cancer       boolean not null default false,
     -- The registry's protocolSection, as fetched. Later PRs read arms,
     -- eligibility and outcomes from it.
     registry            jsonb not null,
@@ -46,6 +49,16 @@ create table public.trial_posts (
 );
 create index trial_posts_team_idx on public.trial_posts (team_id);
 create index trial_posts_added_by_idx on public.trial_posts (added_by);
+
+-- Trials a member took off the lab's list. Linking never puts them back or
+-- links papers to them; adding one by hand again clears the row. Written only
+-- by the triggers below.
+create table public.trial_removals (
+    team_id    uuid not null references public.teams (id) on delete cascade,
+    trial_id   uuid not null references public.trials (id) on delete cascade,
+    removed_at timestamptz not null default now(),
+    primary key (team_id, trial_id)
+);
 
 create table public.paper_trials (
     id          uuid primary key default gen_random_uuid(),
@@ -72,6 +85,7 @@ create index paper_trials_reviewed_by_idx on public.paper_trials (reviewed_by);
 alter table public.trials enable row level security;
 alter table public.trial_posts enable row level security;
 alter table public.paper_trials enable row level security;
+alter table public.trial_removals enable row level security;
 
 -- === trials: read if one of your labs has it ================================
 
@@ -101,6 +115,45 @@ create policy trial_posts_insert on public.trial_posts for insert
 -- Any member can take a trial off the lab's list.
 create policy trial_posts_delete on public.trial_posts for delete
     to authenticated using (public.has_feature(team_id, 'clinical_trials'));
+
+create policy trial_removals_select on public.trial_removals for select
+    to authenticated using (public.has_feature(team_id, 'clinical_trials'));
+
+-- Taking a trial off the list remembers that, and drops the links nobody
+-- decided on (automatic and suggested); a person's decisions stay. Putting it
+-- back by hand forgets the removal. A list emptied because the lab or the
+-- trial itself is being deleted records nothing.
+create function public.trial_posts_track_removal()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if tg_op = 'DELETE' then
+        if exists (select 1 from public.teams where id = old.team_id)
+           and exists (select 1 from public.trials where id = old.trial_id) then
+            insert into public.trial_removals (team_id, trial_id)
+            values (old.team_id, old.trial_id)
+            on conflict do nothing;
+            delete from public.paper_trials
+             where team_id = old.team_id and trial_id = old.trial_id
+               and status in ('auto', 'suggested');
+        end if;
+        return old;
+    end if;
+    if new.source = 'manual' then
+        delete from public.trial_removals where team_id = new.team_id and trial_id = new.trial_id;
+    end if;
+    return new;
+end;
+$$;
+
+revoke execute on function public.trial_posts_track_removal() from public, anon, authenticated;
+
+create trigger trial_posts_track_removal
+    after insert or delete on public.trial_posts
+    for each row execute function public.trial_posts_track_removal();
 
 -- === paper_trials: the lab's links ==========================================
 
@@ -135,17 +188,21 @@ create policy paper_trials_delete on public.paper_trials for delete
     to authenticated using (public.has_feature(team_id, 'clinical_trials'));
 
 -- Named roles too (see 20261010140000).
-revoke all on public.trials, public.trial_posts, public.paper_trials from public, anon, authenticated;
+revoke all on public.trials, public.trial_posts, public.paper_trials, public.trial_removals
+    from public, anon, authenticated;
 grant select on public.trials to authenticated;
 grant select, insert, delete on public.trial_posts to authenticated;
 grant select, insert, delete on public.paper_trials to authenticated;
 grant update (status, role, reviewed_by, reviewed_at) on public.paper_trials to authenticated;
-grant select, insert, update, delete on public.trials, public.trial_posts, public.paper_trials to service_role;
+grant select on public.trial_removals to authenticated;
+grant select, insert, update, delete on public.trials, public.trial_posts, public.paper_trials,
+    public.trial_removals to service_role;
 
 -- Closed to Claude connectors for now; MCP trial tools come in a later PR.
 select public.close_to_connectors('public.trials');
 select public.close_to_connectors('public.trial_posts');
 select public.close_to_connectors('public.paper_trials');
+select public.close_to_connectors('public.trial_removals');
 
 -- === merges keep their links ================================================
 --
@@ -153,7 +210,8 @@ select public.close_to_connectors('public.paper_trials');
 -- links with it. It records the merge in paper_aliases (old_paper_id) while
 -- the old row still exists, so the links move to the kept paper here, without
 -- touching merge_papers itself. Where the lab already links the kept paper to
--- the same trial, the person's decision wins over an automatic one.
+-- the same trial, the stronger link wins: a person's decision over anything
+-- automatic, and an NCT ID match ('auto') over a name match ('suggested').
 create function public.paper_aliases_move_trial_links()
 returns trigger
 language plpgsql
@@ -174,7 +232,10 @@ begin
       from public.paper_trials s
      where s.paper_id = new.old_paper_id and d.paper_id = new.paper_id
        and d.team_id = s.team_id and d.trial_id = s.trial_id
-       and d.status in ('auto', 'suggested') and s.status in ('confirmed', 'rejected');
+       and (
+            (d.status in ('auto', 'suggested') and s.status in ('confirmed', 'rejected'))
+         or (d.status = 'suggested' and s.status = 'auto')
+       );
 
     delete from public.paper_trials s
      where s.paper_id = new.old_paper_id

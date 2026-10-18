@@ -156,6 +156,16 @@ def test_search_tries_ids_first_then_free_text(monkeypatch):
     assert "query.term=" in seen[1]
 
 
+def test_search_by_nct_leaves_out_other_cancers(monkeypatch):
+    lung = _fixture("NCT02685059")
+    lung["protocolSection"]["conditionsModule"] = {"conditions": ["NSCLC"]}
+    ident = lung["protocolSection"]["identificationModule"]
+    ident["briefTitle"] = ident["officialTitle"] = "A lung study"
+    _respond(monkeypatch, lambda url: _Body(json.dumps(lung).encode()))
+    assert ctgov.search("NCT02685059") == []
+    assert [h.nct_id for h in ctgov.search("NCT02685059", condition=None)] == ["NCT02685059"]
+
+
 def test_search_by_nct_fetches_that_trial(monkeypatch):
     _respond(monkeypatch, lambda url: _Body(json.dumps(_fixture("NCT02685059")).encode()))
     hits = ctgov.search("nct02685059")
@@ -183,7 +193,8 @@ def test_acronym_pattern():
 
 
 class _FakeSvc:
-    """Records upserts; answers reads from canned rows per table."""
+    """Records upserts; answers reads from canned rows per table. An upsert of
+    one row answers with that row and an id."""
 
     def __init__(self, reads=None):
         self.reads = reads or {}
@@ -193,14 +204,19 @@ class _FakeSvc:
         svc = self
 
         class Q:
+            upserted = None
+
             def __getattr__(self, _attr):
                 return lambda *a, **k: self
 
             def upsert(self, rows, **_k):
                 svc.upserts.append((name, rows))
+                self.upserted = rows
                 return self
 
             def execute(self):
+                if isinstance(self.upserted, dict):
+                    return SimpleNamespace(data=[{"id": f"{name}-id", **self.upserted}])
                 return SimpleNamespace(data=svc.reads.get(name, []))
 
         return Q()
@@ -216,13 +232,14 @@ def test_link_papers(monkeypatch):
             "NCT03036488": {"id": "t-kn", "nct_id": "NCT03036488", "acronym": "KEYNOTE-522"}
         },
     )
-    # The lab already rejected p3's suggestion.
+    # The lab already rejected p3's suggestion, and took t-gone off its list.
     monkeypatch.setattr(trial_links, "_decided", lambda _s, _t, _ids: {("p3", "t-kn")})
+    monkeypatch.setattr(trial_links, "_removed", lambda _s, _t: {"t-gone"})
     fetched = []
 
-    def ensure(_s, nct, cache=None):
+    def ensure(_s, nct, _lookup):
         fetched.append(nct)
-        return {"NCT02620280": "t-neo", "NCT09999999": None}[nct]
+        return {"NCT02620280": "t-neo", "NCT09999999": None, "NCT01111111": "t-gone"}[nct]
 
     monkeypatch.setattr(trial_links, "ensure_trial", ensure)
 
@@ -237,13 +254,14 @@ def test_link_papers(monkeypatch):
             {
                 "id": "p2",
                 "title": "KEYNOTE-522 overall survival",
-                "abstract": "Also NCT02620280 and NCT09999999.",
+                "abstract": "Also NCT02620280, NCT09999999 and NCT01111111.",
             },
             {"id": "p3", "title": "KEYNOTE-522 again", "abstract": None},
         ],
     )
 
-    assert fetched == ["NCT02620280", "NCT09999999"]  # the lab's own trial isn't fetched
+    # The lab's own trial isn't fetched; the removed one is neither re-added nor linked.
+    assert fetched == ["NCT02620280", "NCT09999999", "NCT01111111"]
     posts = [rows for name, rows in svc.upserts if name == "trial_posts"]
     assert posts == [{"trial_id": "t-neo", "team_id": "lab", "source": "paper"}]
     (links,) = [rows for name, rows in svc.upserts if name == "paper_trials"]
@@ -256,7 +274,7 @@ def test_link_papers(monkeypatch):
     assert n == 3
 
 
-def test_ensure_trial_skips_non_breast_and_caches(monkeypatch):
+def test_ensure_trial_stores_non_breast_trials_once(monkeypatch):
     svc = _FakeSvc()
     calls = []
 
@@ -265,21 +283,55 @@ def test_ensure_trial_skips_non_breast_and_caches(monkeypatch):
         return ctgov.TrialRecord(nct_id=nct, title="Lung", conditions=["NSCLC"])
 
     monkeypatch.setattr(ctgov, "fetch", fetch)
-    cache: dict = {}
-    assert trial_links.ensure_trial(svc, "NCT00000001", cache=cache) is None
-    assert trial_links.ensure_trial(svc, "NCT00000001", cache=cache) is None
+    lookup = trial_links.Lookup()
+    assert trial_links.ensure_trial(svc, "NCT00000001", lookup) is None
+    assert trial_links.ensure_trial(svc, "NCT00000001", lookup) is None
     assert calls == ["NCT00000001"]
-    assert not svc.upserts
+    # Stored, flagged, so tomorrow's run reads it instead of fetching it.
+    [(table, row)] = svc.upserts
+    assert table == "trials" and row["breast_cancer"] is False
 
 
-def test_ensure_trial_does_not_cache_registry_failures(monkeypatch):
-    def down(_nct):
+def test_ensure_trial_reads_the_stored_flag(monkeypatch):
+    monkeypatch.setattr(ctgov, "fetch", lambda _n: pytest.fail("must not fetch"))
+    lookup = trial_links.Lookup()
+    stored = _FakeSvc({"trials": [{"id": "t1", "breast_cancer": True}]})
+    assert trial_links.ensure_trial(stored, "NCT00000001", lookup) == "t1"
+    other = _FakeSvc({"trials": [{"id": "t2", "breast_cancer": False}]})
+    assert trial_links.ensure_trial(other, "NCT00000002", lookup) is None
+
+
+def test_ensure_trial_stops_asking_once_the_registry_fails(monkeypatch):
+    calls = []
+
+    def down(nct):
+        calls.append(nct)
         raise ctgov.RegistryError("down")
 
     monkeypatch.setattr(ctgov, "fetch", down)
-    cache: dict = {}
-    assert trial_links.ensure_trial(_FakeSvc(), "NCT00000001", cache=cache) is None
-    assert cache == {}
+    lookup = trial_links.Lookup()
+    assert trial_links.ensure_trial(_FakeSvc(), "NCT00000001", lookup) is None
+    assert trial_links.ensure_trial(_FakeSvc(), "NCT00000002", lookup) is None
+    assert calls == ["NCT00000001"]
+    assert lookup.answers == {}  # not remembered: the next run tries again
+
+
+def test_run_carries_on_past_a_failing_lab(monkeypatch):
+    monkeypatch.setattr(trial_links, "service_client", lambda: _FakeSvc())
+    monkeypatch.setattr(trial_links, "active_teams", lambda: {"a", "b", "c"})
+    monkeypatch.setattr(trial_links, "_lab_papers", lambda _s, team: team)
+    done = []
+
+    def link(team, _papers, lookup):
+        if team == "b":
+            raise RuntimeError("PostgREST 503")
+        done.append(team)
+        return 1
+
+    monkeypatch.setattr(trial_links, "link_papers", link)
+    with pytest.raises(SystemExit, match="1 lab"):
+        trial_links.run()
+    assert done == ["a", "c"]
 
 
 def test_link_paper_does_nothing_for_labs_without_the_feature(monkeypatch):

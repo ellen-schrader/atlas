@@ -31,7 +31,7 @@ router = APIRouter(prefix="/trials", tags=["trials"])
 _NOT_FOUND = "Not Found"  # FastAPI's own wording for an unknown route
 _TRIAL_COLUMNS = (
     "id, nct_id, acronym, title, phases, status, sponsor, conditions, enrollment, "
-    "start_date, completion_date, has_results, registry_updated_at"
+    "start_date, completion_date, has_results, registry_updated_at, breast_cancer"
 )
 
 
@@ -125,6 +125,10 @@ def add_trial(
     rows = svc.table("trials").select(_TRIAL_COLUMNS).eq("nct_id", nct).execute().data
     if rows:
         trial = rows[0]
+        if not trial["breast_cancer"]:
+            raise HTTPException(
+                status_code=422, detail="Atlas covers breast cancer trials for now."
+            )
     else:
         _limit(user_id)
         try:

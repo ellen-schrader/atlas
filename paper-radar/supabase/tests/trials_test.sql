@@ -3,7 +3,7 @@
 -- Isolated `f1…` id space so it rolls back cleanly anywhere.
 
 begin;
-select plan(24);
+select plan(32);
 
 -- Ada: Lab A, which has the feature switched on.
 -- Bob and Cara: Lab B, which doesn't. Cara has it switched on just for her.
@@ -53,7 +53,8 @@ insert into public.paper_trials (id, team_id, paper_id, trial_id, source, status
      'f1000000-0000-0000-0000-0000000000c3', 'f1000000-0000-0000-0000-0000000000e2', 'nct_in_abstract', 'auto');
 
 select set_eq(
-    $$ select public.feature_teams('clinical_trials') $$,
+    $$ select t from public.feature_teams('clinical_trials') t
+        where t in ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000b2') $$,
     $$ values ('f1000000-0000-0000-0000-0000000000b1'::uuid), ('f1000000-0000-0000-0000-0000000000b2'::uuid) $$,
     'feature_teams: Lab A by its switch, Lab B by Cara''s');
 
@@ -139,17 +140,24 @@ reset role;
 --   T1: P1 rejected by Ada, P2 confirmed by Ada  -> both decisions; the kept paper's stays
 --   T2: P1 rejected, P2 automatic                -> the decision beats the automatic link
 --   T3: P1 automatic only                         -> moves to P2
+--   T4: P1 automatic, P2 suggested               -> the NCT match beats the name match
 insert into public.trials (id, nct_id, title, registry) values
-    ('f1000000-0000-0000-0000-0000000000e3', 'NCT90000003', 'Trial three', '{}');
+    ('f1000000-0000-0000-0000-0000000000e3', 'NCT90000003', 'Trial three', '{}'),
+    ('f1000000-0000-0000-0000-0000000000e4', 'NCT90000004', 'Trial four', '{}');
 insert into public.trial_posts (trial_id, team_id, added_by, source) values
-    ('f1000000-0000-0000-0000-0000000000e3', 'f1000000-0000-0000-0000-0000000000b1', null, 'paper');
+    ('f1000000-0000-0000-0000-0000000000e3', 'f1000000-0000-0000-0000-0000000000b1', null, 'paper'),
+    ('f1000000-0000-0000-0000-0000000000e4', 'f1000000-0000-0000-0000-0000000000b1', null, 'paper');
 insert into public.paper_trials (team_id, paper_id, trial_id, source, status, reviewed_by) values
     ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000c1',
      'f1000000-0000-0000-0000-0000000000e2', 'acronym_in_title', 'rejected', 'f1000000-0000-0000-0000-0000000000a1'),
     ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000c2',
      'f1000000-0000-0000-0000-0000000000e2', 'nct_in_abstract', 'auto', null),
     ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000c1',
-     'f1000000-0000-0000-0000-0000000000e3', 'nct_in_abstract', 'auto', null);
+     'f1000000-0000-0000-0000-0000000000e3', 'nct_in_abstract', 'auto', null),
+    ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000c1',
+     'f1000000-0000-0000-0000-0000000000e4', 'nct_in_abstract', 'auto', null),
+    ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000c2',
+     'f1000000-0000-0000-0000-0000000000e4', 'acronym_in_title', 'suggested', null);
 
 select lives_ok($$ select public.merge_papers('f1000000-0000-0000-0000-0000000000c1',
     'f1000000-0000-0000-0000-0000000000c2', 'manual') $$, 'merge_papers runs');
@@ -158,11 +166,48 @@ select set_eq(
         where paper_id = 'f1000000-0000-0000-0000-0000000000c2' $$,
     $$ values ('f1000000-0000-0000-0000-0000000000e1'::uuid, 'confirmed'),
               ('f1000000-0000-0000-0000-0000000000e2'::uuid, 'rejected'),
-              ('f1000000-0000-0000-0000-0000000000e3'::uuid, 'auto') $$,
-    'the kept paper has one link per trial: kept decision, decision over automatic, moved');
+              ('f1000000-0000-0000-0000-0000000000e3'::uuid, 'auto'),
+              ('f1000000-0000-0000-0000-0000000000e4'::uuid, 'auto') $$,
+    'the kept paper has one link per trial: kept decision, decision over automatic, moved, auto over suggested');
 select is((select count(*)::int from public.paper_trials
             where paper_id = 'f1000000-0000-0000-0000-0000000000c1'), 0,
     'nothing is left on the merged-away paper');
+
+-- === taking a trial off the list ===========================================
+-- Lab A: P2–T1 confirmed (a decision), P2–T4 auto. Ada takes both trials off.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"f1000000-0000-0000-0000-0000000000a1"}';
+
+select lives_ok($$ delete from public.trial_posts
+    where team_id = 'f1000000-0000-0000-0000-0000000000b1'
+      and trial_id in ('f1000000-0000-0000-0000-0000000000e1', 'f1000000-0000-0000-0000-0000000000e4') $$,
+    'Ada takes two trials off the list');
+select set_eq($$ select trial_id from public.trial_removals where team_id = 'f1000000-0000-0000-0000-0000000000b1' $$,
+    $$ values ('f1000000-0000-0000-0000-0000000000e1'::uuid), ('f1000000-0000-0000-0000-0000000000e4'::uuid) $$,
+    'the lab remembers both removals');
+select set_eq($$ select trial_id, status from public.paper_trials
+                  where team_id = 'f1000000-0000-0000-0000-0000000000b1'
+                    and trial_id in ('f1000000-0000-0000-0000-0000000000e1', 'f1000000-0000-0000-0000-0000000000e4') $$,
+    $$ values ('f1000000-0000-0000-0000-0000000000e1'::uuid, 'confirmed') $$,
+    'the automatic link goes, the confirmed one stays');
+select throws_ok($$ insert into public.trial_removals (team_id, trial_id)
+    values ('f1000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000e2') $$,
+    '42501', null, 'members cannot write removals directly');
+select lives_ok($$ insert into public.trial_posts (trial_id, team_id, added_by, source)
+    values ('f1000000-0000-0000-0000-0000000000e1', 'f1000000-0000-0000-0000-0000000000b1',
+            'f1000000-0000-0000-0000-0000000000a1', 'manual') $$,
+    'Ada puts T1 back by hand');
+select set_eq($$ select trial_id from public.trial_removals where team_id = 'f1000000-0000-0000-0000-0000000000b1' $$,
+    $$ values ('f1000000-0000-0000-0000-0000000000e4'::uuid) $$,
+    'putting it back forgets that removal only');
+
+reset role;
+
+-- Deleting a whole lab empties its list without recording removals.
+select lives_ok($$ delete from public.teams where id = 'f1000000-0000-0000-0000-0000000000b2' $$,
+    'a lab with trials can still be deleted');
+select is((select count(*)::int from public.trial_removals where team_id = 'f1000000-0000-0000-0000-0000000000b2'), 0,
+    'and leaves no removals behind');
 
 select * from finish();
 rollback;
