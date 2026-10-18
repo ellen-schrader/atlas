@@ -17,6 +17,8 @@ from .tools import (
     _elicit_confirm,
     _format_digest_hit,
     _format_hit,
+    _lab_papers,
+    _paper_title_link,
     _papers_result,
     _render,
     _untrusted,
@@ -94,7 +96,7 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         team = lab.resolve_team(team_id)
         hits = lab.recommend(team, _clamp(limit))
         if hits:
-            return _untrusted(
+            return _lab_papers(
                 "lab papers",
                 f"Recommended for you in {team['name']} (by your reading history):\n\n"
                 + _render(hits, ""),
@@ -106,7 +108,7 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
         return f"Error: {exc}"
     if not recent:
         return f"No papers in {team['name']} yet to recommend from."
-    return _untrusted(
+    return _lab_papers(
         "lab papers",
         f"No personalised recommendations in {team['name']} right now (no reading "
         "history yet, or you've already seen every paper) — here are the most recent "
@@ -143,7 +145,7 @@ def similar_papers(paper_id: str, limit: int = 8, team_id: str | None = None) ->
         return f"Error: {exc}"
     if not hits:
         return f"No other papers similar to “{title}” in {team['name']} yet."
-    return _untrusted("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
+    return _lab_papers("lab papers", f"Papers similar to “{title}”{note}:\n\n" + _render(hits, ""))
 
 
 @audited
@@ -188,13 +190,13 @@ def lab_digest(days: int = 7, offset: int = 0, team_id: str | None = None) -> st
         parts.append("No new papers.")
     if d["n_comments"] is None:
         # A later page: comments and mentions were reported with the first one.
-        return _untrusted("lab activity", "\n".join(parts))
+        return _lab_papers("lab activity", "\n".join(parts))
     parts.append("")
     parts.append(f"{d['n_comments']} new comment(s) across the lab.")
     if d["mentions"]:
-        titles = "; ".join(m["title"] for m in d["mentions"])
+        titles = "; ".join(_paper_title_link(m) for m in d["mentions"])
         parts.append(f"You were tagged on {len(d['mentions'])} paper(s): {titles}")
-    return _untrusted("lab activity", "\n".join(parts))
+    return _lab_papers("lab activity", "\n".join(parts))
 
 
 @audited
@@ -230,7 +232,7 @@ def novelty_check(
         verdict = "Adjacent work exists in your lab — partially covered."
     else:
         verdict = "Only loosely related work found — this looks novel to your lab."
-    return _untrusted(
+    return _lab_papers(
         "lab papers",
         f"{verdict} (closest similarity {top:.2f}, lab corpus only)\n\n"
         "Closest existing papers:\n\n" + _render(hits, ""),
@@ -289,24 +291,24 @@ def draft_related_work(
     sources = []
     for i, h in enumerate(hits, 1):
         p = h["paper"]
-        block = [f"[{i}] ({_citation_key(p)}) {p.get('title') or p.get('url')}"]
+        block = [f"[{i}] ({_citation_key(p)}) {_paper_title_link(p)}"]
         authors = ", ".join(p.get("authors") or [])
         if authors:
             block.append(authors)
         if p.get("abstract"):
             block.append(f"Abstract: {p['abstract']}")
-        block.append(lab.paper_link(p["id"]))
         sources.append("\n".join(block))
 
     guide = (
         f"Draft a Related Work section on {subject} for {team['name']} using ONLY the "
-        f"{len(sources)} sources below. Cite each as (Author, Year) with its deep link; "
+        f"{len(sources)} sources below. Cite each as (Author, Year) with its title linked "
+        "to its Atlas page as given; "
         "group related work by theme; for each, state its contribution and how it "
         "relates. Do not introduce any reference that isn't listed here.\n\n"
     )
     # The anchor title is externally authored — expose it as data, never as part of
     # the instruction above.
-    body = _untrusted("lab papers", "\n\n".join(sources))
+    body = _lab_papers("lab papers", "\n\n".join(sources))
     if anchor_title:
         body = _untrusted("anchor paper title", anchor_title) + "\n\n" + body
     return guide + body
@@ -331,7 +333,7 @@ def get_paper(paper_id: str, team_id: str | None = None) -> str:
     parts = [block, "", "Abstract:", abstract or "(no abstract available)"]
     if note:
         parts += ["", f"Lab note: “{note}”"]
-    return _untrusted("paper", "\n".join(parts))
+    return _lab_papers("paper", "\n".join(parts))
 
 
 @audited

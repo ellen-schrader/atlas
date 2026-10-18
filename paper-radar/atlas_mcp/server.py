@@ -24,12 +24,13 @@ from mcp.server.fastmcp import FastMCP
 from . import lab
 from .figures import FIGURE_TOOLS
 from .papers import READ_TOOLS, WRITE_TOOLS
+from .tools import SERVER_INSTRUCTIONS
 
 # stderr only — a single stray write to stdout would corrupt the JSON-RPC stream.
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("atlas_mcp")
 
-mcp = FastMCP("atlas")
+mcp = FastMCP("atlas", instructions=SERVER_INSTRUCTIONS)
 for _tool in READ_TOOLS + WRITE_TOOLS + FIGURE_TOOLS:
     mcp.add_tool(_tool)
 

@@ -38,6 +38,7 @@ from api.ratelimit import PerUserRateLimiter
 
 from . import lab
 from .papers import READ_TOOLS
+from .tools import SERVER_INSTRUCTIONS
 
 log = logging.getLogger("atlas_mcp.http")
 
@@ -187,6 +188,7 @@ def build_mcp(public_url: str, supabase_url: str, verifier: TokenVerifier | None
     host = urlparse(public).netloc
     mcp = FastMCP(
         "atlas",
+        instructions=SERVER_INSTRUCTIONS,
         token_verifier=verifier or SupabaseTokenVerifier(supabase_url),
         auth=AuthSettings(
             issuer_url=f"{supabase_url.rstrip('/')}/auth/v1",
