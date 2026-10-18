@@ -3,7 +3,7 @@
 -- (issue #133, 20261018200000_cross_lab_leaks.sql). Run with `supabase test db`.
 
 begin;
-select plan(24);
+select plan(25);
 
 -- Ada in lab L1 corrected the preprint, merged it into the published paper and
 -- corrected that too. Cy is in her lab. Bo in lab L2 holds only the published
@@ -71,6 +71,14 @@ select is((select string_agg(attname, ', ' order by attname) from pg_attribute
             where attrelid = 'public.paper_aliases'::regclass and attnum > 0 and not attisdropped
               and not has_column_privilege('authenticated', attrelid, attname, 'SELECT')),
     'merged_by, reason, snapshot', 'members can read every paper_aliases column except these');
+select is((select string_agg(c.relname || '.' || a.attname, ', ' order by c.relname, a.attname)
+             from pg_attribute a join pg_class c on c.oid = a.attrelid
+            where (c.relname, a.attname) in (('paper_edits', 'edited_by'), ('paper_aliases', 'snapshot'),
+                                             ('paper_aliases', 'merged_by'), ('paper_aliases', 'reason'),
+                                             ('paper_editors', 'edited_by'))
+              and c.relnamespace = 'public'::regnamespace
+              and has_column_privilege('anon', a.attrelid, a.attname, 'SELECT')),
+    null, 'anon cannot read the hidden columns either');
 
 -- === Bo, in the other lab ====================================================
 
@@ -97,8 +105,7 @@ select throws_ok($$ select * from public.paper_aliases $$, '42501', null,
 select is((select venue || ' ' || (edited_at is not null)::text from public.papers
             where id = 'e8000000-0000-0000-0000-0000000000c2'),
     'Nature Methods true', 'the paper and when it was edited are readable');
-select is((select edited_by from public.papers where id = 'e8000000-0000-0000-0000-0000000000c2'), null,
-    'papers.edited_by is no longer written');
+select hasnt_column('public', 'papers', 'edited_by', 'papers no longer has an edited_by column');
 select lives_ok($$ select * from public.papers $$, 'select * on papers still works');
 select throws_ok($$ select * from public.paper_editors $$, '42501', null,
     'who edited each paper is not readable');
@@ -140,9 +147,10 @@ select is((select edited_by from public.paper_editors where paper_id = 'e8000000
 select is((select merged_by from public.paper_aliases
             where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
     'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the merge recorded who confirmed it');
-select is((select snapshot ->> 'title' from public.paper_aliases
+select is((select snapshot ->> 'title' || ' / ' || (snapshot ->> 'edited_by') from public.paper_aliases
             where old_paper_id = 'e8000000-0000-0000-0000-0000000000c1'),
-    'Preprint, fixed', 'the service role still reads the snapshot');
+    'Preprint, fixed / e8000000-0000-0000-0000-0000000000a1',
+    'the service role still reads the snapshot, with who last edited the old row');
 select is((select edited_by from public.paper_edits
             where paper_id = 'e8000000-0000-0000-0000-0000000000c2' and after ? 'title'),
     'e8000000-0000-0000-0000-0000000000a1'::uuid, 'the service role still reads who edited');

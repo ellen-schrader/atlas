@@ -633,6 +633,9 @@ function EditedLine({ paper }: { paper: Paper }) {
     queryKey: ["paper-editor", paper.id, paper.edited_at],
     staleTime: 5 * 60_000,
     retry: 1,
+    // A save moves edited_at, so the key changes: keep showing the last answer
+    // for this paper meanwhile rather than blinking the line out.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === paper.id ? prev : undefined),
     queryFn: async () => {
       const { data, error } = await supabase
         .rpc("paper_editor", { p_paper: paper.id })
