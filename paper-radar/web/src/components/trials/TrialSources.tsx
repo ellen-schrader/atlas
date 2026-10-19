@@ -18,6 +18,7 @@ import { formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 const MODEL_NAMES: Record<string, string> = {
+  "claude (your account)": "a lab member’s Claude (no cost to Atlas)",
   "claude-opus-5-5": "Claude Opus 5.5",
   "claude-opus-4-8": "Claude Opus 4.8",
 };

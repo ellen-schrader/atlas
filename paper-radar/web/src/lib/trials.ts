@@ -104,7 +104,7 @@ export interface TrialFacts {
   extraction: import("@/lib/extraction").Extraction | null;
   extraction_status: "queued" | "batched" | "running" | "done" | "failed" | null;
   extraction_queued_at: string | null;
-  extraction_mode: "batch" | "now" | null;
+  extraction_mode: "batch" | "now" | "claude" | null;
   extraction_error: string | null;
   extraction_started_at: string | null;
   extracted_at: string | null;

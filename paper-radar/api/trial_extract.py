@@ -539,7 +539,13 @@ def store(
     mode: str,
 ) -> None:
     """Save a finished extraction. It replaces the values people checked: clear
-    the checks first, so no moment shows old "verified" marks on new values."""
+    the checks first, so no moment shows old "verified" marks on new values.
+    Creates the lab's row for the trial if there isn't one yet."""
+    svc.table("trial_facts").upsert(
+        {"team_id": team_id, "trial_id": trial_id},
+        on_conflict="team_id,trial_id",
+        ignore_duplicates=True,
+    ).execute()
     svc.table("trial_fact_reviews").delete().eq("team_id", team_id).eq(
         "trial_id", trial_id
     ).execute()

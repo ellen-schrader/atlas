@@ -28,6 +28,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from postgrest import SyncPostgrestClient
 from starlette.middleware.cors import CORSMiddleware
@@ -36,7 +37,7 @@ from starlette.responses import PlainTextResponse
 from api.config import get_api_settings
 from api.ratelimit import PerUserRateLimiter
 
-from . import lab
+from . import lab, trials
 from .papers import READ_TOOLS
 from .tools import SERVER_INSTRUCTIONS
 
@@ -181,12 +182,40 @@ def as_caller(tool: Callable) -> Callable:
     return wrapper
 
 
+class AtlasMCP(FastMCP):
+    """FastMCP that lists (and runs) the clinical trials tools only for people
+    who have the feature, so the labs that don't never see them. A hidden tool
+    called by name gets the same answer as one that doesn't exist."""
+
+    async def _trials_allowed(self) -> bool:
+        token = get_access_token()
+        if token is None or not token.subject:
+            return False
+        try:
+            return await anyio.to_thread.run_sync(trials.entitled, token.subject)
+        except Exception:  # noqa: BLE001 — when in doubt, hide them
+            log.warning("couldn't check clinical trials access; hiding the tools", exc_info=True)
+            return False
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        if await self._trials_allowed():
+            return tools
+        return [t for t in tools if t.name not in trials.TRIAL_TOOL_NAMES]
+
+    async def call_tool(self, name, arguments):
+        if name in trials.TRIAL_TOOL_NAMES and not await self._trials_allowed():
+            raise ToolError(f"Unknown tool: {name}")
+        return await super().call_tool(name, arguments)
+
+
 def build_mcp(public_url: str, supabase_url: str, verifier: TokenVerifier | None = None) -> FastMCP:
-    """The hosted server: read-only paper tools, each run as the caller. `verifier`
+    """The hosted server: read-only paper tools, and the clinical trials tools
+    for people who have that feature, each run as the caller. `verifier`
     defaults to Supabase's; tests pass a stub."""
     public = public_url.rstrip("/")
     host = urlparse(public).netloc
-    mcp = FastMCP(
+    mcp = AtlasMCP(
         "atlas",
         instructions=SERVER_INSTRUCTIONS,
         token_verifier=verifier or SupabaseTokenVerifier(supabase_url),
@@ -203,7 +232,7 @@ def build_mcp(public_url: str, supabase_url: str, verifier: TokenVerifier | None
             allowed_origins=[public, *_BROWSER_ORIGINS],
         ),
     )
-    for tool in READ_TOOLS:
+    for tool in READ_TOOLS + trials.READ_TRIAL_TOOLS + trials.WRITE_TRIAL_TOOLS:
         mcp.add_tool(as_caller(tool))
     return mcp
 
