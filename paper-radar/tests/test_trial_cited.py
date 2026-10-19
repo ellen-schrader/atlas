@@ -1,0 +1,118 @@
+"""Finding what an extraction's source points at, in a JATS article."""
+
+from __future__ import annotations
+
+import pytest
+
+from paper_radar.trials import jats
+from paper_radar.trials.cited import Article
+
+# Shaped like a Nature Medicine article in Europe PMC: sections with
+# subsections, a table with row groups, a figure with panels, and Extended Data
+# in the back matter.
+XML = b"""<article xmlns:xlink="http://www.w3.org/1999/xlink">
+<front><article-meta>
+  <abstract id="Abs1"><title>Abstract</title><p>Atezolizumab improved EFS.</p></abstract>
+</article-meta></front>
+<body>
+  <sec id="Sec1"><title>Main</title><p>The primary analysis showed a pCR benefit.</p></sec>
+  <sec id="Sec2"><title>Results</title>
+    <sec id="Sec3"><title>Patient disposition</title>
+      <p>333 patients were randomised (Table 1).
+        <table-wrap id="Tab1"><label>Table 1</label>
+          <caption><p>Baseline characteristics</p></caption>
+          <table>
+            <thead><tr><th colspan="2" rowspan="2">Characteristic</th><th colspan="2">ITT</th></tr>
+                   <tr><th>Atezolizumab</th><th>Placebo</th></tr></thead>
+            <tbody>
+              <tr><td>Age, years</td><td>&lt;65</td><td>148 (90)</td><td>139 (83)</td></tr>
+              <tr><td/><td>&#8805;65</td><td>17 (10)</td><td>29 (17)</td></tr>
+              <tr><td>ECOG PS</td><td>0</td><td>157 (95)</td><td>154 (92)</td></tr>
+              <tr><td/><td>1</td><td>8 (5)</td><td>14 (8)</td></tr>
+            </tbody>
+          </table>
+          <table-wrap-foot>
+            <fn><p>aRoad traffic accident.</p></fn><fn><p>bPneumonia.</p></fn>
+          </table-wrap-foot>
+        </table-wrap>
+      </p>
+    </sec>
+    <sec id="Sec4"><title>Secondary outcomes</title><p>EFS HR 0.76.</p>
+      <fig id="Fig2"><label>Fig. 2</label><caption><p>EFS, DFS and OS.</p></caption>
+        <graphic xlink:href="Fig2_HTML.jpg"/></fig>
+    </sec>
+  </sec>
+  <sec id="Sec8"><title>Discussion</title><p>Benefit held.</p></sec>
+  <sec id="Sec9"><title>Methods</title><p>Randomised 1:1.</p>
+    <sec id="Sec10"><title>Patients and treatment</title><p>Stage II-III TNBC.</p></sec>
+  </sec>
+</body>
+<back><app-group><app><sec id="Sec15"><title>Extended data</title>
+  <table-wrap id="Tab4"><label>Extended Data Table 3</label>
+    <caption><p>Summary of safety</p></caption>
+    <table><tbody><tr><td>Grade 3/4 AE</td><td>103 (63)</td></tr></tbody></table></table-wrap>
+</sec></app></app-group></back>
+</article>"""
+
+
+@pytest.fixture
+def article():
+    return Article(XML)
+
+
+def test_a_table_and_the_rows_its_note_names(article):
+    c = article.cite("Table 1 (ECOG PS)")
+    assert c.element.id == "Tab1"
+    assert c.element.caption == "Baseline characteristics"
+    assert [r[0].text for r in c.element.rows][:3] == [
+        "Characteristic",
+        "Atezolizumab",
+        "Age, years",
+    ]
+    assert c.element.rows[0][0].header and c.element.rows[0][0].colspan == 2
+    assert c.rows == [4, 5]  # "ECOG PS" and its category row under it
+    assert article.cite("Table 1 (Age)").rows == [2, 3]
+    assert article.cite("Table 1").rows == []
+
+
+def test_footnotes_stay_apart(article):
+    assert article.cite("Table 1").element.footnotes == ["aRoad traffic accident.", "bPneumonia."]
+
+
+def test_tables_and_figures_by_label_however_written(article):
+    assert article.cite("Extended Data Table 3").element.id == "Tab4"
+    fig = article.cite("Fig. 2d")
+    assert (fig.element.id, fig.panel, fig.element.graphic) == ("Fig2", "d", "Fig2_HTML.jpg")
+    assert article.cite("Figure 2").element.id == "Fig2"
+    # Extended Data Table 3 isn't Table 3, and a missing label matches nothing.
+    assert article.cite("Table 3").element is None
+    assert article.cite("Extended Data Table 1").element is None
+
+
+def test_sections_and_their_subsections(article):
+    c = article.cite("Results (Patient disposition)")
+    assert (c.element.kind, c.element.id) == ("section", "Sec3")
+    # The table inside the paragraph is an element of its own.
+    assert c.element.paragraphs == ["333 patients were randomised (Table 1)."]
+    results = article.cite("Results").element
+    assert results.paragraphs[0] == "## Patient disposition"
+    # A note that isn't a subsection is Claude's comment: the section itself.
+    assert article.cite("Main (introduction, citing primary analysis)").element.id == "Sec1"
+    assert article.cite("Discussion for definition").element.id == "Sec8"
+    assert article.cite("Methods (Patients and treatment)").element.id == "Sec10"
+    assert article.cite("Abstract").element.paragraphs == ["Atezolizumab improved EFS."]
+    assert article.cite("Conclusions").element is None
+
+
+def test_every_part_of_a_source_once(article):
+    cites = article.cite_all(
+        "Results (Secondary outcomes); Fig. 2a; Extended Data Table 3; Fig. 2a"
+    )
+    assert [c.element.id for c in cites] == ["Sec4", "Fig2", "Tab4"]
+
+
+def test_refuses_entities_and_junk():
+    with pytest.raises(jats.NotJats):
+        Article(b'<!DOCTYPE a [<!ENTITY x "xx">]><article/>')
+    with pytest.raises(jats.NotJats):
+        Article(b"%PDF-1.7")
