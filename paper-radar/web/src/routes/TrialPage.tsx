@@ -1,17 +1,19 @@
 import { type ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Check, ChevronDown, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from "lucide-react";
 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { ExtractionView } from "@/components/trials/ExtractionView";
 import { PubMedHint } from "@/components/trials/PubMedHint";
-import { TrialSources } from "@/components/trials/TrialSources";
+import { TrialSources, extractionSummary } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
-import { extractionRunning, fetchSources } from "@/lib/extraction";
+import { extractionRunning, extractionState, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { useJustAdded } from "@/hooks/useJustAdded";
 import { Input } from "@/components/ui/input";
 import {
   type FactsEdit,
@@ -19,6 +21,7 @@ import {
   SETTINGS,
   THERAPY_CLASSES,
   THERAPY_COLOR,
+  type Registry,
   type TrialDetail,
   type TrialLink,
   classification,
@@ -29,10 +32,18 @@ import {
   phaseLabel,
   removeTrial,
   saveFacts,
+  siteCountries,
   statusLabel,
   trialName,
 } from "@/lib/trials";
+import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
+
+/** Where the trial was opened from (a collection's page passes itself), so
+ *  "back" goes there rather than always to All trials. */
+export interface TrialFrom {
+  from?: { to: string; label: string };
+}
 
 export default function TrialPage() {
   return (
@@ -45,6 +56,7 @@ export default function TrialPage() {
 function Trial() {
   const { nct = "" } = useParams();
   const { team } = useAppContext();
+  const back = (useLocation().state as TrialFrom | null)?.from ?? { to: "/trials", label: "All trials" };
   const { data, isLoading, error } = useQuery({
     queryKey: ["trial", team.id, nct],
     queryFn: () => fetchTrialDetail(team.id, nct),
@@ -66,10 +78,11 @@ function Trial() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 sm:p-8">
       <Link
-        to="/trials"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted hover:text-fg"
+        to={back.to}
+        className="inline-flex w-fit max-w-full items-center gap-1.5 text-sm text-muted hover:text-fg"
       >
-        <ArrowLeft size={14} aria-hidden /> All trials
+        <ArrowLeft size={14} aria-hidden className="shrink-0" />
+        <span className="truncate">{back.label}</span>
       </Link>
       {isLoading && (
         <p className="flex items-center gap-2 text-sm text-muted">
@@ -106,6 +119,7 @@ function TrialBody({ d }: { d: TrialDetail }) {
     queryFn: () => fetchSources(team.id, t.id),
   });
   const name = trialName(t, d.facts);
+  const [confirm, confirmDialog] = useConfirm();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["trial", team.id, t.nct_id] });
     qc.invalidateQueries({ queryKey: ["lab-trials", team.id] });
@@ -141,49 +155,43 @@ function TrialBody({ d }: { d: TrialDetail }) {
             variant="ghost"
             size="sm"
             disabled={remove.isPending}
-            onClick={() => {
-              if (window.confirm(`Take ${name} off ${team.name}’s list?`)) remove.mutate();
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: `Take ${name} off ${team.name}’s list?`,
+                  body: "It leaves the lab’s collections too, and Atlas won’t add it back from papers. You can add it again by hand.",
+                  confirmLabel: "Remove from lab",
+                  danger: true,
+                })
+              )
+                remove.mutate();
             }}
           >
             Remove from lab
           </Button>
         </div>
-        <p className="max-w-[80ch] text-sm text-muted">{t.title}</p>
+        {/* The header's full width: the registry title is one long line of facts. */}
+        <p className="text-sm text-muted">{t.title}</p>
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-meta text-muted">
-          <span>{facts.join(" · ")} ·</span>
+          {/* Who it is (the registry record) and where it stands first, then its design. */}
           <a
             href={ctgovUrl(t.nct_id)}
             target="_blank"
             rel="noreferrer"
+            title="Open on ClinicalTrials.gov"
             className="inline-flex items-center gap-1 text-accent hover:underline"
           >
             {t.nct_id} <ExternalLink size={12} aria-hidden />
           </a>
           <span>
-            · {statusLabel(t.status)}
-            {t.sponsor && ` · ${t.sponsor}`}
+            · {[statusLabel(t.status), ...facts, t.sponsor].filter(Boolean).join(" · ")}
           </span>
         </div>
+        <SiteCountries registry={t.registry} />
+        <Classification d={d} onSaved={refresh} />
       </header>
 
-      <Classification d={d} onSaved={refresh} />
-
-      <Section title="Papers in Atlas">
-        <Papers d={d} onChange={refresh} />
-        <PubMedHint trialId={t.id} onAdded={refresh} />
-      </Section>
-
-      <Section title="Data from the papers">
-        <TrialSources
-          trialId={t.id}
-          facts={d.facts}
-          papers={d.links
-            .filter((l) => (l.status === "auto" || l.status === "confirmed") && l.papers)
-            .map((l) => ({ id: l.paper_id, title: l.papers?.title ?? "Untitled paper" }))}
-          onExtractionChange={refresh}
-        />
-      </Section>
-
+      {/* The answer first; the plumbing that produced it after. */}
       {d.facts?.extraction && (
         <ExtractionView
           trialId={t.id}
@@ -201,6 +209,30 @@ function TrialBody({ d }: { d: TrialDetail }) {
           }}
         />
       )}
+
+      <Collapsible
+        title="Sources & extraction"
+        summary={extractionSummary(d.facts, sources.data?.length ?? 0)}
+        // Open while there's something to do here: no data yet, or a run that
+        // failed or stopped.
+        defaultOpen={
+          !d.facts?.extraction || ["failed", "stalled"].includes(extractionState(d.facts))
+        }
+      >
+        <TrialSources
+          trialId={t.id}
+          facts={d.facts}
+          papers={d.links
+            .filter((l) => (l.status === "auto" || l.status === "confirmed") && l.papers)
+            .map((l) => ({ id: l.paper_id, title: l.papers?.title ?? "Untitled paper" }))}
+          onExtractionChange={refresh}
+        />
+      </Collapsible>
+
+      <Section title="Papers in Atlas">
+        <Papers d={d} onChange={refresh} />
+        <PubMedHint trialId={t.id} onAdded={refresh} />
+      </Section>
 
       <Section
         title="From ClinicalTrials.gov"
@@ -251,7 +283,89 @@ function TrialBody({ d }: { d: TrialDetail }) {
           )}
         </div>
       </Section>
+      {confirmDialog}
     </>
+  );
+}
+
+/** "68 sites in 13 countries · Germany, United States, Japan +10", and the
+ *  full list a click away. Sites, not participants: the registry doesn't say
+ *  how many each enrolled. */
+function SiteCountries({ registry }: { registry: Registry | null }) {
+  const [open, setOpen] = useState(false);
+  // From the record the page already has, not the lab-wide count.
+  const countries = siteCountries(registry);
+  if (!countries.length) return null;
+  const sites = countries.reduce((n, c) => n + c.sites, 0);
+  const lead = countries.slice(0, 3).map((c) => c.country);
+  const more = countries.length - lead.length;
+  return (
+    <div className="flex flex-col gap-2 text-meta text-muted">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex w-fit flex-wrap items-center gap-x-1.5 text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <span className="font-medium text-fg">
+          {sites} {sites === 1 ? "site" : "sites"} in{" "}
+          {countries.length === 1 ? countries[0].country : `${countries.length} countries`}
+        </span>
+        {countries.length > 1 && (
+          <span>
+            · {lead.join(", ")}
+            {more > 0 && ` +${more}`}
+          </span>
+        )}
+        <ChevronDown size={14} aria-hidden className={cn("transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1.5">
+          <ul className="flex flex-wrap gap-1.5">
+            {countries.map((c) => (
+              <li key={c.country} className="rounded-full border border-border px-2.5 py-0.5 text-fg">
+                {c.country} <span className="font-mono text-muted">{c.sites}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-faint">
+            Sites listed on ClinicalTrials.gov. The registry doesn’t say how many people each enrolled.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A section that can fold away to one line. */
+function Collapsible({
+  title,
+  summary,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  summary: string;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="rounded-card border border-border bg-surface">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-card p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <h2 className="text-heading font-semibold text-fg">{title}</h2>
+        <span className="flex min-w-0 items-center gap-2 text-meta text-muted">
+          {summary}
+          <ChevronDown size={16} aria-hidden className={cn("shrink-0 transition", open && "rotate-180")} />
+        </span>
+      </button>
+      {open && <div className="px-5 pb-5">{children}</div>}
+    </section>
   );
 }
 
@@ -405,36 +519,25 @@ function Classification({ d, onSaved }: { d: TrialDetail; onSaved: () => void })
     );
   }
 
-  return (
-    <Section
-      title="Classification"
-      aside={
-        <Button variant="ghost" size="sm" onClick={start}>
-          <Pencil size={14} aria-hidden /> Edit
-        </Button>
-      }
-    >
-      <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-        <Fact label="Setting">
-          {f?.settings.length ? f.settings.map((s) => SETTINGS[s]).join(", ") : "—"}
-        </Fact>
-        <Fact label="Patient group">
-          {f?.patient_groups.length ? f.patient_groups.map((g) => PATIENT_GROUPS[g]).join(", ") : "—"}
-        </Fact>
-        <Fact label="Therapy">
-          <TherapyList therapies={f?.therapy_classes ?? []} />
-        </Fact>
-      </dl>
-      <p className="text-meta text-faint">{source}</p>
-    </Section>
+  const chip = (label: string) => (
+    <span key={label} className="rounded-full border border-border px-2.5 py-0.5 text-muted">
+      {label}
+    </span>
   );
-}
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
-      <dt className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">{label}</dt>
-      <dd className="mt-1 text-fg">{children}</dd>
+    <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
+      {f?.classified_by ? (
+        <>
+          {f.settings.map((v) => chip(SETTINGS[v]))}
+          {f.patient_groups.map((v) => chip(PATIENT_GROUPS[v]))}
+          <TherapyList therapies={f.therapy_classes} />
+        </>
+      ) : (
+        <span className="text-faint">{source}</span>
+      )}
+      <Button variant="ghost" size="sm" onClick={start} title={f?.classified_by ? source : undefined}>
+        <Pencil size={13} aria-hidden /> Edit classification
+      </Button>
     </div>
   );
 }
@@ -459,21 +562,24 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
-  const [picked, setPicked] = useState<PickedPaper | null>(null);
+  const { justAdded, markAdded, rowRef } = useJustAdded();
+  const [addedTitle, setAddedTitle] = useState("");
   const decide = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "confirmed" | "rejected" }) =>
       decideLink(id, userId, status),
     onSuccess: onChange,
   });
   const link = useMutation({
-    mutationFn: (paperId: string) => {
+    mutationFn: (p: PickedPaper) => {
       // A paper the lab once said "not this trial" to comes back by confirming.
-      const old = d.links.find((l) => l.paper_id === paperId);
-      return old ? decideLink(old.id, userId, "confirmed") : linkPaper(team.id, d.trial.id, paperId, userId);
+      const old = d.links.find((l) => l.paper_id === p.id);
+      return old ? decideLink(old.id, userId, "confirmed") : linkPaper(team.id, d.trial.id, p.id, userId);
     },
-    onSuccess: () => {
-      setPicked(null);
+    // The search closes, and the paper shows in the list marked "Linked".
+    onSuccess: (_r, p) => {
       setPicking(false);
+      setAddedTitle(p.title);
+      markAdded(p.id);
       onChange();
     },
   });
@@ -483,8 +589,20 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
   const rejected = d.links.filter((l) => l.status === "rejected");
 
   const row = (l: TrialLink, actions: ReactNode) => (
-    <li key={l.id} className="flex flex-wrap items-start gap-3 py-3">
+    <li
+      key={l.id}
+      ref={l.paper_id === justAdded ? rowRef(l.paper_id) : undefined}
+      className={cn(
+        "flex flex-wrap items-start gap-3 py-3 transition-colors duration-700",
+        l.paper_id === justAdded && "-mx-2 rounded-control bg-accent-weak px-2",
+      )}
+    >
       <div className="min-w-0 flex-1">
+        {l.paper_id === justAdded && (
+          <span className="mb-0.5 inline-flex items-center gap-1 text-meta font-semibold text-accent">
+            <Check size={12} aria-hidden /> Linked
+          </span>
+        )}
         <button
           type="button"
           onClick={() => openPaper(l.paper_id)}
@@ -504,6 +622,9 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
 
   return (
     <div className="flex flex-col gap-2">
+      <p className="sr-only" aria-live="polite">
+        {justAdded ? `Linked ${addedTitle} to this trial.` : ""}
+      </p>
       {d.links.length === 0 && (
         <p className="text-sm text-muted">
           No lab papers linked yet. Papers that name {d.trial.nct_id} in their abstract are linked
@@ -532,7 +653,7 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
                     disabled={decide.isPending}
                     onClick={() => decide.mutate({ id: l.id, status: "rejected" })}
                   >
-                    <X size={14} aria-hidden /> No
+                    <X size={14} aria-hidden /> Not this trial
                   </Button>
                 </>,
               ),
@@ -588,24 +709,23 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
 
       {picking ? (
         <div className="flex flex-col gap-2 rounded-control border border-border p-3">
-          <PaperPicker teamId={team.id} value={picked} onChange={setPicked} />
+          {/* One click on a result links it: no second "Link" step. */}
+          <PaperPicker
+            teamId={team.id}
+            value={null}
+            onChange={(p) => p && link.mutate(p)}
+            exclude={linked.map((l) => l.paper_id)}
+            busy={link.isPending}
+            autoFocus
+          />
           {link.error && (
             <p role="alert" className="text-sm text-danger">
               Couldn’t link that paper. Try again.
             </p>
           )}
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              disabled={!picked || link.isPending}
-              onClick={() => picked && link.mutate(picked.id)}
-            >
-              Link paper
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setPicking(false)}>
-              Cancel
-            </Button>
-          </div>
+          <Button size="sm" variant="ghost" className="w-fit" onClick={() => setPicking(false)}>
+            Cancel
+          </Button>
         </div>
       ) : (
         <Button variant="ghost" size="sm" className="w-fit" onClick={() => setPicking(true)}>

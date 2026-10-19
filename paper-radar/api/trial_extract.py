@@ -674,6 +674,58 @@ def queue(team_id: str, trial_id: str) -> bool:
     return bool(taken)
 
 
+MAX_GET_DATA = 30  # trials per "Get data" click (a collection's worth)
+
+
+def get_data(team_id: str, trial_ids: list[str]) -> dict[str, list[str]]:
+    """Get data for several trials at once (a collection's "Get data"): for
+    each without data yet, fetch the open-access full text if it has no files,
+    then queue it for the next batch. Trials with data, or already on the way,
+    are left alone: re-extracting would cost money and wipe the lab's checks.
+    Returns trial ids: {"queued": [...], "need_pdf": [...], "skipped": [...]}."""
+    svc = service_client()
+    done = {
+        r["trial_id"]
+        for r in svc.table("trial_facts")
+        .select("trial_id, extracted_at")
+        .eq("team_id", team_id)
+        .in_("trial_id", trial_ids)
+        .execute()
+        .data
+        or []
+        if r.get("extracted_at")
+    }
+    out: dict[str, list[str]] = {"queued": [], "need_pdf": [], "skipped": sorted(done)}
+    todo = [t for t in trial_ids if t not in done]
+    if not todo:
+        return out
+    with_files = {
+        r["trial_id"]
+        for r in svc.table("trial_sources")
+        .select("trial_id")
+        .eq("team_id", team_id)
+        .in_("trial_id", todo)
+        .execute()
+        .data
+        or []
+    }
+
+    def one(trial_id: str) -> str:
+        if trial_id not in with_files:
+            found = fetch_open_access(team_id, trial_id)
+            if not (found["fetched"] or found["have"]):
+                return "need_pdf"
+        # False: queued, in a batch or running meanwhile, which is what we wanted.
+        return "queued" if queue(team_id, trial_id) else "skipped"
+
+    # A few at a time: each lookup is itself up to four requests to Europe PMC.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(one, todo))
+    for trial_id, result in zip(todo, results, strict=True):
+        out[result].append(trial_id)
+    return out
+
+
 # --- open access, daily ------------------------------------------------------------------
 
 

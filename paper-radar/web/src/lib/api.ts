@@ -500,6 +500,22 @@ export async function startExtraction(
   });
 }
 
+/** At most this many trials per getTrialsData request (api/trial_extract.py). */
+export const MAX_GET_DATA = 30;
+
+/** Get data for several trials in one request (a collection's "Get data"):
+ *  the server fetches open-access full text for those with no files and
+ *  queues them for the next batch. Trials with data are left alone. */
+export async function getTrialsData(
+  teamId: string,
+  trialIds: string[],
+): Promise<{ queued: string[]; need_pdf: string[]; skipped: string[] }> {
+  return authedRequest("/trials/get-data", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, trial_ids: trialIds }),
+  });
+}
+
 /** This month's extraction spend for the lab, and its cap. */
 export async function fetchExtractionBudget(
   teamId: string,

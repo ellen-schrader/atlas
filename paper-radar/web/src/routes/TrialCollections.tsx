@@ -26,7 +26,13 @@ import {
   sharedHrEndpoint,
 } from "@/lib/compare";
 import type { Endpoint, Extraction } from "@/lib/extraction";
-import { type LabTrial, THERAPY_CLASSES, THERAPY_COLOR, fetchLabTrials } from "@/lib/trials";
+import {
+  type LabTrial,
+  THERAPY_CLASSES,
+  THERAPY_COLOR,
+  type TherapyClass,
+  fetchLabTrials,
+} from "@/lib/trials";
 import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
@@ -65,6 +71,13 @@ function useDismissed(teamId: string): [Set<string>, (key: string) => void] {
   return [dismissed, dismiss];
 }
 
+/** A collection's therapy classes: its own tags, else its trials' (a
+ *  collection made without tags still gets its colour and its chip). */
+function therapiesOf(c: Collection, byId: Map<string, LabTrial>): TherapyClass[] {
+  if (c.therapy_classes.length) return c.therapy_classes;
+  return [...new Set(c.trial_ids.flatMap((id) => byId.get(id)?.facts?.therapy_classes ?? []))];
+}
+
 function Collections() {
   const { team } = useAppContext();
   const [query, setQuery] = useState("");
@@ -88,14 +101,14 @@ function Collections() {
 
   const all = collections.data ?? [];
   // Quick chips: the therapy classes the lab's collections are about.
-  const chips = [...new Set(all.flatMap((c) => c.therapy_classes))].filter(
+  const chips = [...new Set(all.flatMap((c) => therapiesOf(c, byId)))].filter(
     (c) => c !== "chemotherapy",
   );
   const needle = query.trim().toLowerCase();
   const shown = all.filter((c) => {
     const names = c.trial_ids.map((id) => byId.get(id)?.name ?? "").join(" ");
     const hay = `${c.title} ${c.question ?? ""} ${questionCaps(c)} ${names}`.toLowerCase();
-    return (!needle || hay.includes(needle)) && (!chip || c.therapy_classes.includes(chip as never));
+    return (!needle || hay.includes(needle)) && (!chip || therapiesOf(c, byId).includes(chip as never));
   });
   // Only once both have loaded: before the collections arrive, every group
   // would look new and a quick click could duplicate a collection.
@@ -216,6 +229,7 @@ function Collections() {
             <CollectionTile
               key={c.id}
               c={c}
+              therapies={therapiesOf(c, byId)}
               trials={c.trial_ids.map((id) => byId.get(id))}
               endpoints={endpoints.data}
             />
@@ -247,15 +261,18 @@ function Collections() {
 
 function CollectionTile({
   c,
+  therapies,
   trials,
   endpoints,
 }: {
   c: Collection;
+  therapies: TherapyClass[];
   trials: (LabTrial | undefined)[];
   endpoints?: Map<string, Endpoint[]>;
 }) {
-  const lead = c.therapy_classes.find((t) => t !== "chemotherapy") ?? c.therapy_classes[0];
+  const lead = therapies.find((t) => t !== "chemotherapy") ?? therapies[0];
   const known = trials.filter(Boolean) as LabTrial[];
+  const withData = known.filter((t) => t.facts?.extracted_at).length;
   return (
     <Link
       to={`/trials/collections/${c.id}`}
@@ -278,6 +295,11 @@ function CollectionTile({
           colour={lead ? THERAPY_COLOR[lead] : "var(--ch-1)"}
         />
       )}
+      {known.length > 0 && withData === 0 && (
+        <p className="rounded-control border border-dashed border-border px-3 py-2 text-meta text-muted">
+          No results yet. Open the collection to get its trials’ data.
+        </p>
+      )}
       {known.length > 0 ? (
         <ul className="mt-1 flex flex-wrap gap-1.5">
           {known.map((t) => (
@@ -294,6 +316,7 @@ function CollectionTile({
       )}
       <div className="mt-auto pt-2 text-meta text-muted">
         {known.length} {known.length === 1 ? "trial" : "trials"}
+        {known.length > 0 && ` · ${withData === known.length ? "all" : withData} with data`}
         {c.creator?.display_name && ` · created by ${c.creator.display_name}`} · updated{" "}
         {formatRelative(c.updated_at)}
       </div>
@@ -333,7 +356,7 @@ function MiniPlot({
   const pP = (v: number) => ((v - pLo) / (pHi - pLo)) * 100;
   const hP = (v: number) => ((Math.log(v) - Math.log(hLo)) / (Math.log(hHi) - Math.log(hLo))) * 100;
   const label = pcr.length
-    ? `pCR · control ○ → experimental ● · ${pLo}–${pHi}%`
+    ? `pCR, control ○ to experimental ● (axis ${pLo}–${pHi}%)`
     : `${hrLabel(hrName!)} hazard ratio (95% CI)`;
 
   return (

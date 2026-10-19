@@ -225,6 +225,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* No word left alone on a last line ("…Triple Negative Breast / Cancer"):
+   headings even out their lines, paragraphs just avoid an orphan. The
+   longhand only picks where lines break, so `truncate` still holds, and in the
+   base layer any utility wins. Browsers without support wrap as before. */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap-style: balance;
+  }
+  p,
+  li,
+  dd {
+    text-wrap-style: pretty;
+  }
+}
+
 /* A 44×44px hit area for small controls on touch screens, without changing
    their layout: an invisible box centred on the control. */
 @media (pointer: coarse) {

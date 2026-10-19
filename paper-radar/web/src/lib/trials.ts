@@ -146,7 +146,8 @@ export function classification(
 
 const FACT_COLUMNS =
   "trial_id, acronym, settings, patient_groups, therapy_classes, classified_by, " +
-  "classify_attempts, classify_claimed_at, extraction_status, extracted_at, updated_by, updated_at";
+  "classify_attempts, classify_claimed_at, extraction_status, extraction_started_at, extracted_at, " +
+  "updated_by, updated_at";
 
 export const TRIAL_COLUMNS =
   "id, nct_id, acronym, title, phases, status, sponsor, conditions, enrollment, " +
@@ -239,6 +240,7 @@ export interface Registry {
     secondaryOutcomes?: { measure: string; timeFrame?: string }[];
   };
   eligibilityModule?: { eligibilityCriteria?: string; sex?: string; minimumAge?: string };
+  contactsLocationsModule?: { locations?: { country?: string; status?: string }[] };
 }
 
 /** null when the trial isn't on the lab's list (or the feature is off). */
@@ -349,4 +351,46 @@ export async function removeTrial(teamId: string, trialId: string) {
     .eq("team_id", teamId)
     .eq("trial_id", trialId);
   if (error) throw error;
+}
+
+/** A country a trial has sites in, and how many. */
+export type SiteCountry = { country: string; sites: number };
+/** Where each of the lab's trials (by id) has sites, most sites first. */
+export type SiteCountries = Record<string, SiteCountry[]>;
+
+const bySites = (a: SiteCountry, b: SiteCountry) =>
+  b.sites - a.sites || a.country.localeCompare(b.country);
+
+/** Countries one registry record has sites in, most sites first. Sites, not
+ *  participants: the registry doesn't say how many each enrolled. Withdrawn
+ *  sites (never opened) don't count. trial_site_countries() in the database
+ *  counts the lab's trials the same way. */
+export function siteCountries(registry: Registry | null | undefined): SiteCountry[] {
+  const counts = new Map<string, number>();
+  const locations = registry?.contactsLocationsModule?.locations;
+  for (const loc of Array.isArray(locations) ? locations : []) {
+    if (!loc || typeof loc !== "object" || loc.status === "WITHDRAWN") continue;
+    const country = typeof loc.country === "string" ? loc.country.trim() : "";
+    if (country) counts.set(country, (counts.get(country) ?? 0) + 1);
+  }
+  return [...counts].map(([country, sites]) => ({ country, sites })).sort(bySites);
+}
+
+/** Where each of the lab's trials has sites, counted in the database from the
+ *  stored registry records (no call to ClinicalTrials.gov). */
+export async function fetchTrialCountries(teamId: string): Promise<SiteCountries> {
+  const { data, error } = await supabase.rpc("trial_site_countries", { p_team: teamId });
+  if (error) throw error;
+  const out: SiteCountries = {};
+  for (const r of (data ?? []) as { trial_id: string; country: string; sites: number }[])
+    (out[r.trial_id] ??= []).push({ country: r.country, sites: r.sites });
+  for (const list of Object.values(out)) list.sort(bySites);
+  return out;
+}
+
+/** "13 countries", "Germany only": where a trial's sites are, in a few words. */
+export function countriesSummary(countries: SiteCountry[]): string {
+  if (countries.length === 0) return "No sites listed";
+  if (countries.length === 1) return `${countries[0].country} only`;
+  return `${countries.length} countries`;
 }

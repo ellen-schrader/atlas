@@ -157,6 +157,18 @@ export async function deleteCollection(id: string) {
   if (!data.length) throw new Error("Only the person who made it, or a lab owner, can delete it.");
 }
 
+/** The collections each trial is in, by trial id. */
+export function collectionsByTrial(collections: Collection[]): Map<string, Collection[]> {
+  const out = new Map<string, Collection[]>();
+  for (const c of collections)
+    for (const id of c.trial_ids) {
+      const list = out.get(id);
+      if (list) list.push(c);
+      else out.set(id, [c]);
+    }
+  return out;
+}
+
 export async function addCollectionTrials(id: string, trialIds: string[], userId: string) {
   const { error } = await supabase
     .from("collection_trials")

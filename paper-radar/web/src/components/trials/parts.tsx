@@ -2,6 +2,7 @@ import { type ReactNode, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Check, ChevronDown } from "lucide-react";
 
+import { Input } from "@/components/ui/input";
 import { useDismissable } from "@/hooks/useDismissable";
 import { THERAPY_CLASSES, THERAPY_COLOR, TRIALS_FEATURE, type TherapyClass } from "@/lib/trials";
 import { cn } from "@/lib/utils";
@@ -126,38 +127,151 @@ export function FilterMenu({
         <div
           role="group"
           aria-label={label}
-          className="absolute left-0 top-full z-30 mt-1.5 min-w-60 rounded-card border border-border bg-surface p-1.5 shadow-lg"
+          className="absolute left-0 top-full z-30 mt-1.5 max-h-80 min-w-60 overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-lg"
         >
-          {options.map((o) => {
-            const on = selected.includes(o.value);
-            return (
-              <button
-                key={o.value}
-                type="button"
-                role="checkbox"
-                aria-checked={on}
-                onClick={() => onToggle(o.value)}
-                className={cn(
-                  "flex min-h-9 w-full items-center gap-2.5 rounded-control px-2 text-left text-sm transition",
-                  "hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                  o.count === 0 && !on && "text-faint",
-                )}
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    "grid h-4 w-4 shrink-0 place-items-center rounded-[4px]",
-                    on ? "bg-accent text-accent-fg" : "border border-border-strong",
-                  )}
-                >
-                  {on && <Check size={12} strokeWidth={3} />}
-                </span>
-                {o.swatch && <TherapySwatch therapy={o.swatch} />}
-                <span className="flex-1">{o.label}</span>
-                <span className="font-mono text-meta text-muted">{o.count}</span>
-              </button>
-            );
-          })}
+          {options.map((o) => (
+            <OptionRow key={o.value} o={o} on={selected.includes(o.value)} onToggle={() => onToggle(o.value)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OptionRow({ o, on, onToggle }: { o: FilterOption; on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      onClick={onToggle}
+      className={cn(
+        "flex min-h-9 w-full items-center gap-2.5 rounded-control px-2 text-left text-sm transition",
+        "hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        o.count === 0 && !on && "text-faint",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "grid h-4 w-4 shrink-0 place-items-center rounded-[4px]",
+          on ? "bg-accent text-accent-fg" : "border border-border-strong",
+        )}
+      >
+        {on && <Check size={12} strokeWidth={3} />}
+      </span>
+      {o.swatch && <TherapySwatch therapy={o.swatch} />}
+      <span className="flex-1">{o.label}</span>
+      <span className="font-mono text-meta text-muted">{o.count}</span>
+    </button>
+  );
+}
+
+export interface FilterGroup {
+  key: string;
+  label: string;
+  options: FilterOption[];
+  selected: string[];
+  /** A long list (countries): a typeahead. Only a search box until someone
+   *  types; then the matches. */
+  searchable?: boolean;
+}
+
+/** A searchable group (a typeahead facet): what's ticked stays listed so it
+ *  can be unticked; everything else waits for a search. */
+function SearchableGroup({ g, onToggle }: { g: FilterGroup; onToggle: (value: string) => void }) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const ticked = g.options.filter((o) => g.selected.includes(o.value));
+  const shown = needle ? g.options.filter((o) => o.label.toLowerCase().includes(needle)) : ticked;
+  return (
+    <>
+      <div className="px-1 pb-1">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Find a ${g.label.toLowerCase()}`}
+          aria-label={`Find a ${g.label.toLowerCase()}`}
+          className="h-8 text-sm"
+        />
+      </div>
+      {shown.map((o) => (
+        <OptionRow key={o.value} o={o} on={g.selected.includes(o.value)} onToggle={() => onToggle(o.value)} />
+      ))}
+      {needle && shown.length === 0 && (
+        <p className="px-2 py-1.5 text-meta text-muted">No {g.label.toLowerCase()} matches “{q.trim()}”.</p>
+      )}
+      {!needle && g.options.length > ticked.length && (
+        <p className="px-2 py-1.5 text-meta text-faint">
+          Type to search {g.options.length} {g.label === "Country" ? "countries" : "options"}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** "More": the less used filters (phase, country) in one menu, each under
+ *  its own heading, so the filter row stays one line. */
+export function MoreFilters({
+  groups,
+  onToggle,
+}: {
+  groups: FilterGroup[];
+  onToggle: (key: string, value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useDismissable(ref, open, (reason) => {
+    setOpen(false);
+    if (reason === "escape") buttonRef.current?.focus();
+  });
+  const active = groups.reduce((n, g) => n + g.selected.length, 0);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "inline-flex min-h-10 items-center gap-2 rounded-control border px-3 text-sm font-medium transition",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+          active || open
+            ? "border-accent/50 bg-accent-weak text-fg"
+            : "border-border bg-surface text-fg hover:border-border-strong",
+        )}
+      >
+        More
+        {active > 0 && (
+          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-fg">
+            {active}
+          </span>
+        )}
+        <ChevronDown size={14} aria-hidden className="text-muted" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1.5 max-h-[30rem] w-64 overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-lg">
+          {groups.map((g) => (
+            <div key={g.key} role="group" aria-label={g.label} className="pb-1">
+              <div className="px-2 pb-1 pt-2 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+                {g.label}
+              </div>
+              {g.searchable ? (
+                <SearchableGroup g={g} onToggle={(v) => onToggle(g.key, v)} />
+              ) : (
+                g.options.map((o) => (
+                  <OptionRow
+                    key={o.value}
+                    o={o}
+                    on={g.selected.includes(o.value)}
+                    onToggle={() => onToggle(g.key, o.value)}
+                  />
+                ))
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

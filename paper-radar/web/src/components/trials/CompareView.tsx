@@ -27,6 +27,7 @@ import {
   DIMENSION_LABELS,
   type Phase,
 } from "@/lib/extraction";
+import { type SiteCountries, countriesSummary } from "@/lib/trials";
 import { cn } from "@/lib/utils";
 
 // What makes trials hard to compare, most consequential first.
@@ -71,7 +72,14 @@ export function TrialMark({
 }
 
 /** Side-by-side view of 2–4 trials' extracted data. Descriptive only. */
-export function CompareView({ available }: { available: CompareTrial[] }) {
+export function CompareView({
+  available,
+  countries,
+}: {
+  available: CompareTrial[];
+  /** Where each trial has sites (registry), by trial id. */
+  countries?: SiteCountries;
+}) {
   // Each picked trial holds a slot (0–3): its colour and shape. A slot stays
   // with its trial while it's picked, and a newly added trial takes a free one,
   // so no two trials ever share a mark and none is repainted.
@@ -118,9 +126,10 @@ export function CompareView({ available }: { available: CompareTrial[] }) {
         <p className="text-sm text-muted">Pick at least two trials with extracted data.</p>
       ) : (
         <>
-          <Schedules trials={trials} indexOf={slotOf} />
+          {/* What differs first: it says how far the numbers below can be compared. */}
+          <Differences trials={trials} indexOf={slotOf} countries={countries} />
           <Results trials={trials} indexOf={slotOf} />
-          <Differences trials={trials} indexOf={slotOf} />
+          <Schedules trials={trials} indexOf={slotOf} />
           <EnrolmentTable trials={trials} indexOf={slotOf} />
         </>
       )}
@@ -513,8 +522,25 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
 
 // --- what differs ------------------------------------------------------------------------------
 
-function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: string) => number }) {
+function Differences({
+  trials,
+  indexOf,
+  countries,
+}: {
+  trials: CompareTrial[];
+  indexOf: (id: string) => number;
+  countries?: SiteCountries;
+}) {
   const [all, setAll] = useState(false);
+  // Where they enrolled, from the registry: standard of care and patients vary
+  // by country, so it bears on how comparable the results are.
+  const where = countries ? trials.map((t) => countries[t.id] ?? []) : null;
+  const shared =
+    where && where.every((w) => w.length)
+      ? where
+          .map((w) => new Set(w.map((c) => c.country)))
+          .reduce((a, b) => new Set([...a].filter((x) => b.has(x))))
+      : null;
   const items = diffItems(trials, DIFF_KEYS);
   // Real disagreements first, then items only some trials report; items no
   // trial reports are just listed at the end.
@@ -527,6 +553,35 @@ function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id
   const shown = all ? notable : notable.slice(0, 3);
   return (
     <Card title="What differs">
+      {where && (
+        <div className="grid gap-2 sm:grid-cols-[180px_1fr]">
+          <span className="text-sm text-fg">
+            Countries
+            <span className="block text-meta text-muted">with trial sites</span>
+          </span>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap gap-1.5">
+              {trials.map((t, k) => (
+                <span
+                  key={t.id}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-0.5 text-meta text-fg"
+                  title={where[k].map((c) => `${c.country} (${c.sites})`).join(", ") || "No sites listed"}
+                >
+                  <TrialMark index={indexOf(t.id)} size={9} />
+                  {t.name}: {countriesSummary(where[k])}
+                </span>
+              ))}
+            </div>
+            {shared && (
+              <p className="text-meta text-muted">
+                {shared.size === 0
+                  ? "No country in common."
+                  : `In common: ${[...shared].slice(0, 6).join(", ")}${shared.size > 6 ? ` +${shared.size - 6}` : ""}`}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
       {notable.length === 0 ? (
         <p className="text-sm text-muted">No differences in what was extracted.</p>
       ) : (

@@ -156,6 +156,59 @@ const BUCKET = "trial-sources";
 /** PDFs travel base64-encoded in a 32 MB request: 24 MB is the most one can be. */
 export const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 
+/** What one trial's batch extraction costs, for the estimate before asking:
+ *  measured at $0.13 a trial in October 2026 (papers plus supplements). */
+export const EST_BATCH_USD = 0.13;
+
+// A word that starts a dose or schedule: "125", "1200mg", "mg/m²", "AUC5",
+// "q3w", "×4", "weekly". Only these end a name, so "anti-HER2", "T-DM1" and
+// "(dual HER2 blockade)" are kept whole.
+const DOSE_WORD =
+  /^(\d+([.,]\d+)?(mg|g|µg|mcg|iu|%)?$|(mg|µg|mcg|g|iu)(\/(m²|m2|kg))?$|auc\d|q\d+[wdh]?$|[×x]\d+$|weekly|daily|biweekly|every)/i;
+
+/** A treatment's name without its dose and schedule, for a label too narrow
+ *  for the whole thing: "Dose-dense doxorubicin 60 mg/m² + cyclophosphamide
+ *  600 mg/m² q2w ×4" → "Dose-dense doxorubicin + cyclophosphamide". Combined
+ *  ("+") and sequential ("then") parts are shortened one by one; text with no
+ *  dose in it comes back as it was. */
+export function treatmentName(label: string): string {
+  const shorten = (part: string) => {
+    const words = part.trim().split(/\s+/);
+    // A dose follows a name: one in first place ("Cycles 1–4: …") isn't one.
+    const dose = words.findIndex((w, i) => i > 0 && DOSE_WORD.test(w));
+    // Never cut inside brackets: keep the name whole instead.
+    const kept = dose > 0 ? words.slice(0, dose).join(" ") : part.trim();
+    const open = (kept.match(/\(/g) ?? []).length;
+    const close = (kept.match(/\)/g) ?? []).length;
+    return open === close ? kept : part.trim();
+  };
+  return label
+    .split(/\s+then\s+/i)
+    .map((seq) => seq.split(/\s+\+\s+/).map(shorten).join(" + "))
+    .join(" then ");
+}
+
+/** Where a trial's latest extraction stands. "stalled": it said running but
+ *  went quiet past 30 minutes (a deploy, a crash) and can be started again. */
+export type ExtractionState = "none" | "queued" | "batched" | "running" | "stalled" | "failed" | "done";
+
+export function extractionState(
+  f: {
+    extraction_status: string | null;
+    extraction_started_at: string | null;
+    extracted_at: string | null;
+  } | null,
+): ExtractionState {
+  const s = f?.extraction_status ?? null;
+  if (s === "queued" || s === "batched" || s === "failed") return s;
+  if (s === "running") return extractionRunning(s, f?.extraction_started_at ?? null) ? "running" : "stalled";
+  return f?.extracted_at ? "done" : "none";
+}
+
+/** On its way: nothing to do but wait (and nothing to start again). */
+export const inFlight = (state: ExtractionState) =>
+  state === "queued" || state === "batched" || state === "running";
+
 /** A run is "running" for 30 minutes at most: past that it crashed (a deploy,
  *  a restart), and the API lets a new one start. Mirrors api/trial_extract.py. */
 export function extractionRunning(status: string | null, startedAt: string | null): boolean {

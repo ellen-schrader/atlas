@@ -9,19 +9,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useFollowedTags } from "@/hooks/useFollowedTags";
+import { useMyRole } from "@/hooks/useMyRole";
 import { useProfile } from "@/hooks/useProfile";
 import { useTeamTags } from "@/hooks/useTeamTags";
-import { deleteAccount, updateProfile } from "@/lib/api";
+import { deleteAccount, fetchExtractionBudget, updateProfile } from "@/lib/api";
 import { RESET_PATH, useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
+import { TRIALS_FEATURE } from "@/lib/trials";
 import { cn, normaliseTag } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 type Note = { ok: boolean; text: string } | null;
 
 export default function Settings() {
-  const { team, userId, session } = useAppContext();
+  const { team, userId, session, features } = useAppContext();
   const { data: profile } = useProfile(userId);
+  const { data: role } = useMyRole(team.id, userId);
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
@@ -48,6 +51,10 @@ export default function Settings() {
       <ClaudePrivacyPanel teamId={team.id} teamName={team.name} userId={userId} />
 
       <LabManagement teamId={team.id} teamName={team.name} teamCode={team.join_code} userId={userId} />
+
+      {role === "owner" && features.includes(TRIALS_FEATURE) && (
+        <TrialSpendPanel teamId={team.id} teamName={team.name} />
+      )}
 
       <DeleteAccountPanel userId={userId} email={session.user.email ?? ""} />
     </div>
@@ -269,6 +276,52 @@ function DeleteAccountPanel({ userId, email }: { userId: string; email: string }
             </Button>
           </div>
         </form>
+      )}
+    </Panel>
+  );
+}
+
+/** What Claude's trial extractions have cost the lab this month: for owners,
+ *  who pay for it, and the only people the trial pages show it to. */
+function TrialSpendPanel({ teamId, teamName }: { teamId: string; teamName: string }) {
+  const budget = useQuery({
+    queryKey: ["extraction-budget", teamId],
+    queryFn: () => fetchExtractionBudget(teamId),
+    staleTime: 60_000,
+  });
+  const b = budget.data;
+  const share = b && b.cap_usd > 0 ? Math.min(1, b.spent_usd / b.cap_usd) : 0;
+  return (
+    <Panel
+      title="Clinical trials spend"
+      desc={`What Claude’s reading of trial papers has cost ${teamName} this month.`}
+    >
+      {budget.isLoading && <p className="text-sm text-muted">Loading…</p>}
+      {budget.error && <p className="text-sm text-danger">Couldn’t load the spend. Try again.</p>}
+      {b && (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-fg">
+            <span className="font-mono font-semibold">${b.spent_usd.toFixed(2)}</span> of the $
+            {b.cap_usd.toFixed(0)} monthly cap
+          </p>
+          <div
+            role="meter"
+            aria-label="Share of the monthly cap used"
+            aria-valuemin={0}
+            aria-valuemax={b.cap_usd}
+            aria-valuenow={b.spent_usd}
+            className="h-2 overflow-hidden rounded-full bg-surface-2"
+          >
+            <div
+              className={cn("h-full rounded-full", share >= 1 ? "bg-danger" : "bg-accent")}
+              style={{ width: `${share * 100}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted">
+            The cap resets on the 1st. Over it, members can still extract a trial with their own
+            Claude (no cost to the lab).
+          </p>
+        </div>
       )}
     </Panel>
   );
