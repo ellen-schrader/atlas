@@ -505,6 +505,8 @@ export interface CitedElement {
   /** A section's text; "## " starts a subheading. */
   paragraphs: string[];
   footnotes: string[];
+  /** A figure's image on PMC (served from NCBI's image host). */
+  image: string | null;
 }
 
 /** One part of an extracted value's source ("Table 1 (ECOG PS)"), and what

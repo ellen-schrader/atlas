@@ -92,6 +92,7 @@ def test_tables_and_figures_by_label_however_written(article):
     assert article.cite_one("Extended Data Table 3").element.id == "Tab4"
     fig = article.cite_one("Fig. 2d")
     assert (fig.element.id, fig.panel) == ("Fig2", "d")
+    assert fig.element.image is None  # no PMC id, so no PMC address
     assert article.cite_one("Figure 2").element.id == "Fig2"
     # Extended Data Table 3 isn't Table 3, and a missing label matches nothing.
     assert article.cite_one("Table 3").element is None
@@ -140,6 +141,21 @@ def test_every_table_and_figure_a_part_names(article):
         ("Table 1", "Tab1"),
         ("Table 3", None),
     ]
+
+
+def test_a_figures_image_on_pmc():
+    with_id = XML.replace(
+        b"<article-meta>", b'<article-meta><article-id pub-id-type="pmcid">PMC123</article-id>'
+    )
+    fig = _Article(with_id).cite_one("Fig. 2")
+    assert (
+        fig.element.image == "https://pmc.ncbi.nlm.nih.gov/articles/instance/123/bin/Fig2_HTML.jpg"
+    )
+    # JATS may leave off the extension; a path is never followed.
+    bare = with_id.replace(b'"Fig2_HTML.jpg"', b'"Fig2_HTML"')
+    assert _Article(bare).cite_one("Fig. 2").element.image.endswith("/bin/Fig2_HTML.jpg")
+    sneaky = with_id.replace(b'"Fig2_HTML.jpg"', b'"../../x.jpg"')
+    assert _Article(sneaky).cite_one("Fig. 2").element.image is None
 
 
 def test_every_part_of_a_source_once(article):
