@@ -11,9 +11,10 @@ A value the papers don't report is null, never a guess.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Source(BaseModel):
@@ -30,8 +31,22 @@ class Source(BaseModel):
         description="A few words copied exactly from that place that show the main value: "
         'a table row as shown ("ECOG PS | 0 | 157 (95) | 154 (92)") or part of a sentence; '
         "at most 25 words",
-        max_length=300,
     )
+
+    # Both only help find the value: a malformed one is dropped or cut, never
+    # a reason to fail (and pay again for) the whole extraction.
+    @field_validator("anchor")
+    @classmethod
+    def _plain_anchor(cls, v: str | None) -> str | None:
+        if not v:
+            return None
+        m = re.fullmatch(r"\s*(\w[\w.-]{0,63})\s*", v) or re.search(r"\bid=(\w[\w.-]{0,63})", v)
+        return m.group(1) if m else None
+
+    @field_validator("quote")
+    @classmethod
+    def _short_quote(cls, v: str | None) -> str | None:
+        return v.strip()[:300] or None if v else None
 
 
 class Pico(BaseModel):

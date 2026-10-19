@@ -14,15 +14,6 @@ export interface Source {
   quote?: string | null;
 }
 
-/** Finds a source's quote in the paper's text however its spacing or table
- *  cell breaks fall: words in order, separated by spaces or " | ". */
-export function quoteMatcher(quote: string | null | undefined): RegExp | null {
-  const words = (quote ?? "").replace(/[|…]/g, " ").split(/\s+/).filter(Boolean);
-  if (words.length === 0) return null;
-  const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(words.map(esc).join("[\\s|]+"), "i");
-}
-
 export interface Endpoint {
   name: string;
   role: "primary" | "co_primary" | "key_secondary" | "secondary" | "exploratory";

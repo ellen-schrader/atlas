@@ -294,3 +294,70 @@ def test_cited_endpoint_404s_when_the_file_is_gone(monkeypatch):
         "/trials/t1/sources/s1/cited", params={"team_id": "lab", "where": "Table 1"}, headers=AUTH
     )
     assert r.status_code == 404
+
+
+# --- finding a source's quote -------------------------------------------------------------
+
+
+def test_a_quoted_table_row_however_its_cells_are_separated(article):
+    (c,) = article.cite_all("Table 1 (ECOG PS)", quote="ECOG PS | 0 | 157 (95)")
+    assert (c.quote.where, c.quote.index) == ("row", 4)
+    (c,) = article.cite_all("Table 1", quote="ECOG PS 0 157 (95)")
+    assert c.quote.index == 4
+
+
+def test_a_quote_isnt_matched_inside_a_longer_number(article):
+    (c,) = article.cite_all("Table 1", quote="157 (9")
+    assert c.quote is None
+    (c,) = article.cite_all("Table 1", quote="57 (95)")
+    assert c.quote is None
+
+
+def test_quotes_from_footnotes_headings_and_with_gaps(article):
+    (c,) = article.cite_all("Table 1", quote="bPneumonia.")
+    assert (c.quote.where, c.quote.index) == ("footnote", 1)
+    (c,) = article.cite_all("Table 1", quote="Table 1 Baseline characteristics")
+    assert c.quote.where == "heading"
+    (c,) = article.cite_all("Results (Patient disposition)", quote="333 patients … (Table 1)")
+    assert (c.quote.where, c.quote.start) == ("paragraph", 0)
+
+
+def test_quotes_with_other_dashes_and_dots():
+    xml = XML.replace(b"EFS HR 0.76.", "EFS HR 0.76 (0.61–0.94); P&lt;0·001.".encode())
+    (c,) = _Article(xml).cite_all("Results (Secondary outcomes)", quote="0.76 (0.61-0.94); P<0.001")
+    para = c.element.paragraphs[0]
+    assert para[c.quote.start : c.quote.end] == "0.76 (0.61–0.94); P<0·001"
+
+
+def test_an_anchored_subsection_isnt_shown_twice(article):
+    cites = article.cite_all("Results", "Sec3")
+    assert [c.element.id for c in cites] == ["Sec3"]
+    # A table inside a cited section isn't in its text: both stay.
+    assert [c.element.id for c in article.cite_all("Results", "Tab1")] == ["Tab1", "Sec2"]
+
+
+def test_a_source_keeps_a_malformed_anchor_or_long_quote_out_of_the_way():
+    from paper_radar.trials.extraction import Source
+
+    s = Source(doc=1, where="Table 1", anchor="[Table id=Tab1] Baseline", quote="x " * 400)
+    assert s.anchor == "Tab1"
+    assert len(s.quote) == 300
+    assert Source(doc=1, where="x", anchor="no anchor here!").anchor is None
+    assert Source(doc=1, where="x", anchor=" Sec3 ", quote="  ").model_dump()["quote"] is None
+
+
+def test_cited_endpoint_says_whether_the_quote_was_found(monkeypatch):
+    _source(monkeypatch)
+    params = {"team_id": "lab", "where": "Table 1", "anchor": "x" * 200}
+    r = client.get(
+        "/trials/t1/sources/s1/cited", params={**params, "quote": "ECOG PS | 0"}, headers=AUTH
+    )
+    assert r.status_code == 200  # the over-long anchor is ignored
+    assert r.json()["quote_found"] is True
+    assert r.json()["parts"][0]["quote"]["index"] == 4
+    r = client.get(
+        "/trials/t1/sources/s1/cited", params={**params, "quote": "ECOG PS | 9"}, headers=AUTH
+    )
+    assert r.json()["quote_found"] is False
+    r = client.get("/trials/t1/sources/s1/cited", params=params, headers=AUTH)
+    assert r.json()["quote_found"] is None

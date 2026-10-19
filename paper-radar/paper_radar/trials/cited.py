@@ -60,6 +60,17 @@ class Element:
 
 
 @dataclass
+class QuoteHit:
+    """Where a source's quote is in an element: a table row, footnote,
+    paragraph or caption by index, and the characters it covers there."""
+
+    where: Literal["row", "footnote", "paragraph", "caption", "heading"]
+    index: int
+    start: int
+    end: int
+
+
+@dataclass
 class Citation:
     """One part of a source, and what it points at (None: nothing matched)."""
 
@@ -67,6 +78,7 @@ class Citation:
     element: Element | None
     rows: list[int] = field(default_factory=list)  # a table's rows the part names
     panel: str | None = None  # a figure's panel ("d")
+    quote: QuoteHit | None = None  # where the source's quote is in it
 
 
 def _text(el: ET.Element | None) -> str:
@@ -306,19 +318,44 @@ class Article:
             return None
         return None
 
-    def cite_all(self, where: str, anchor: str | None = None) -> list[Citation]:
+    def _contains(self, outer_id: str, inner_id: str) -> bool:
+        outer = next((el for el in self.root.iter() if el.get("id") == outer_id), None)
+        return outer is not None and any(el.get("id") == inner_id for el in outer.iter())
+
+    def cite_all(
+        self, where: str, anchor: str | None = None, quote: str | None = None
+    ) -> list[Citation]:
         """Each part of a source ("A; B"), in order, once each. The element an
-        anchor names comes first: it's where the quote is."""
+        anchor names comes first (it's where the quote is), and a section of
+        the parts that holds it is left out (its text would show twice). Each
+        citation says where the quote is in it, if it is."""
         seen: set[str] = set()
-        out = []
+        out: list[Citation] = []
         for part in where.split(";"):
             if part.strip() and part.strip().casefold() not in seen:
                 seen.add(part.strip().casefold())
                 out.extend(self.cite(part))
         named = self.cite_id(anchor) if anchor else None
         if named is not None and named.element is not None:
-            same = [c for c in out if c.element is not None and c.element.id == named.element.id]
-            out = [*(same[:1] or [named]), *(c for c in out if c not in same[:1])]
+            nid = named.element.id
+            same = [c for c in out if c.element is not None and c.element.id == nid]
+            first = same[0] if same else named
+            out = [
+                c
+                for c in out
+                if c is not first
+                and not (
+                    named.element.kind == "section"
+                    and c.element is not None
+                    and c.element.kind == "section"
+                    and self._contains(c.element.id, nid)
+                )
+            ]
+            out.insert(0, first)
+        if pattern := _quote_pattern(quote):
+            for c in out:
+                if c.element is not None:
+                    c.quote = _find_quote(c.element, pattern)
         return out
 
 
@@ -354,3 +391,49 @@ def _rows(table: Element, note: str | None) -> list[int]:
             ):
                 out.append(i)
     return out
+
+
+# --- finding a source's quote -------------------------------------------------------------
+
+# Characters that differ between a paper and a quote of it: minus signs and
+# dashes, middle dots, odd spaces. One for one, so positions stay the same.
+_SAME = str.maketrans({"−": "-", "–": "-", "—": "-", "‐": "-", "‑": "-", "·": ".", "\u00a0": " "})
+_ELLIPSIS = re.compile(r"\s*(?:…|\.{3})\s*")
+
+
+def _plain(text: str) -> str:
+    return text.translate(_SAME)
+
+
+def _quote_pattern(quote: str | None) -> re.Pattern[str] | None:
+    """A quote as a pattern: its words in order, whatever spacing or table
+    cell breaks (" | ") fall between them, a gap where it says "…", and
+    whole numbers and words at its ends ("HR 0.7" doesn't match "HR 0.76")."""
+    pieces = []
+    for piece in _ELLIPSIS.split(_plain(quote or "")):
+        words = piece.replace("|", " ").split()
+        if words:
+            pieces.append(r"[\s|]+".join(re.escape(w) for w in words))
+    if not pieces:
+        return None
+    body = r".{0,300}?".join(pieces)
+    # Not inside a word or number: no letter or digit just outside, and no
+    # decimal going on ("0.7" in "0.76"); a sentence's full stop may follow.
+    return re.compile(rf"(?<!\w)(?<!\d\.){body}(?!\w)(?!\.\d)", re.IGNORECASE | re.DOTALL)
+
+
+def _find_quote(e: Element, pattern: re.Pattern[str]) -> QuoteHit | None:
+    """Where the quote is in the element: in the text Claude read of it
+    (table rows as " | "-joined cells, footnotes, paragraphs, the caption,
+    or the label and caption together)."""
+    texts: list[tuple[str, int, str]] = [
+        *(("row", i, " | ".join(c.text for c in row)) for i, row in enumerate(e.rows)),
+        *(("footnote", i, t) for i, t in enumerate(e.footnotes)),
+        *(("paragraph", i, t) for i, t in enumerate(e.paragraphs) if not t.startswith("## ")),
+        ("caption", 0, e.caption),
+        ("heading", 0, f"{e.label} {e.caption}"),
+    ]
+    for where, i, text in texts:
+        if m := pattern.search(_plain(text)):
+            return QuoteHit(where, i, m.start(), m.end())  # type: ignore[arg-type]
+    return None

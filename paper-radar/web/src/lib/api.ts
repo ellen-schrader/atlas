@@ -509,6 +509,16 @@ export interface CitedElement {
   image: string | null;
 }
 
+/** Where a source's quote is in an element: a table row, footnote,
+ *  paragraph or caption by index ("heading": the label and caption read
+ *  together), and the characters it covers there. */
+export interface QuoteHit {
+  where: "row" | "footnote" | "paragraph" | "caption" | "heading";
+  index: number;
+  start: number;
+  end: number;
+}
+
 /** One part of an extracted value's source ("Table 1 (ECOG PS)"), and what
  *  it points at (null when nothing in the article matched). */
 export interface CitedPart {
@@ -518,19 +528,24 @@ export interface CitedPart {
   rows: number[];
   /** The figure panel the part names ("d"). */
   panel: string | null;
+  /** Where the source's quote is in this part's element. */
+  quote: QuoteHit | null;
 }
 
-/** What a source's "where" points at in one of the trial's full-text files,
- *  and the article on PMC (each element's id is its anchor there). */
+/** What a source's "where" (and anchor) point at in one of the trial's
+ *  full-text files, where its quote is (quote_found null: it has none), and
+ *  the article on PMC (each element's id is its anchor there). */
 export async function fetchCited(
   teamId: string,
   trialId: string,
   sourceId: string,
   where: string,
   anchor?: string | null,
-): Promise<{ parts: CitedPart[]; article_url: string | null }> {
+  quote?: string | null,
+): Promise<{ parts: CitedPart[]; article_url: string | null; quote_found: boolean | null }> {
   const q = new URLSearchParams({ team_id: teamId, where });
   if (anchor) q.set("anchor", anchor);
+  if (quote) q.set("quote", quote);
   return authedRequest(`/trials/${trialId}/sources/${sourceId}/cited?${q}`);
 }
 

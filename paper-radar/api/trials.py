@@ -308,6 +308,8 @@ class CitedOut(BaseModel):
     parts: list[cited.Citation]
     # The article on PMC, to open in full; each element's id is its anchor there.
     article_url: str | None
+    # Whether the source's quote is in what's shown (None: it has no quote).
+    quote_found: bool | None = None
 
 
 @router.get("/{trial_id}/sources/{source_id}/cited", response_model=CitedOut)
@@ -316,7 +318,8 @@ def source_cited(
     source_id: str,
     team_id: str,
     where: str = Query(default="", max_length=500),
-    anchor: str | None = Query(default=None, max_length=64),
+    anchor: str | None = None,
+    quote: str | None = None,
     token: str = Depends(require_token),
 ) -> CitedOut:
     """The tables, figures and sections an extracted value's source names
@@ -347,10 +350,15 @@ def source_cited(
         # 415, not 422: a 422 is also FastAPI's answer to a malformed request.
         detail = "That file can't be read as an article."
         raise HTTPException(status_code=415, detail=detail) from exc
+    # Anchor and quote only help find the value: an odd one is ignored, not refused.
+    anchor = anchor if anchor and len(anchor) <= 64 else None
+    quote = (quote or "").strip()[:300] or None
+    parts = article.cite_all(where, anchor, quote)
     pmcid = article.pmcid
     return CitedOut(
-        parts=article.cite_all(where, anchor),
+        parts=parts,
         article_url=f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else None,
+        quote_found=any(p.quote for p in parts) if quote else None,
     )
 
 
