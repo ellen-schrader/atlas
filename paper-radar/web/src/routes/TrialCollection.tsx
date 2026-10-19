@@ -825,6 +825,9 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
+  // Remove buttons show only while editing: a × beside every title was easy
+  // to hit by accident.
+  const [editingList, setEditingList] = useState(false);
   const { justAdded, markAdded, rowRef } = useJustAdded();
   const [addedTitle, setAddedTitle] = useState("");
   const reporting = useQuery({
@@ -848,6 +851,8 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
     // the list, next to the button that added it), marked "Added".
     onSuccess: (_r, p) => {
       setPicking(false);
+      // Back to reading: an add isn't an edit, and stale crosses are a trap.
+      setEditingList(false);
       setAddedTitle(p.title);
       markAdded(p.id);
       onChange();
@@ -855,8 +860,18 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
     onError: () => toast({ message: "Couldn’t add that paper. Try again." }),
   });
   const remove = useMutation({
-    mutationFn: (paperId: string) => removeCollectionPaper(c.id, paperId),
-    onSuccess: onChange,
+    mutationFn: (p: { id: string; title: string }) => removeCollectionPaper(c.id, p.id),
+    onSuccess: (_r, p) => {
+      onChange();
+      toast({
+        message: `“${p.title}” taken out of this collection.`,
+        actionLabel: "Undo",
+        onAction: async () => {
+          await addCollectionPaper(c.id, p.id, userId);
+          onChange();
+        },
+      });
+    },
     onError: () => toast({ message: "Couldn’t remove that paper. Try again." }),
   });
   // Papers the lab still holds. One the lab has since removed (or that the
@@ -917,23 +932,38 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h3 className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
-          About the question
-        </h3>
+        <div className="flex items-baseline justify-between gap-2">
+          <h3 className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+            Relevant
+          </h3>
+          {about.length > 0 && (
+            <button
+              type="button"
+              aria-pressed={editingList}
+              onClick={() => setEditingList((e) => !e)}
+              className="text-meta font-medium text-accent hover:underline"
+            >
+              {editingList ? "Done" : "Edit"}
+            </button>
+          )}
+        </div>
         <p className="sr-only" aria-live="polite">
           {justAdded ? `Added ${addedTitle} to the collection.` : ""}
         </p>
         {about.length === 0 ? (
-          <p className="mt-1 text-sm text-muted">Meta-analyses and reviews that cover these trials.</p>
+          <p className="mt-1 text-sm text-muted">
+            Reviews, meta-analyses and other papers the lab reads alongside these trials.
+          </p>
         ) : (
           <ul className="divide-y divide-border">
             {about.map((p) => {
-              const action = (
+              const action = editingList && (
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Remove from this collection"
-                  onClick={() => remove.mutate(p.paper_id)}
+                  aria-label={`Remove ${p.papers?.title ?? "this paper"} from this collection`}
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate({ id: p.paper_id, title: p.papers?.title ?? "Paper" })}
                 >
                   <X size={14} aria-hidden />
                 </Button>
