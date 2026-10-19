@@ -55,13 +55,19 @@ XML = b"""<article xmlns:xlink="http://www.w3.org/1999/xlink">
 </article>"""
 
 
+class _Article(Article):
+    def cite_one(self, part):
+        (citation,) = self.cite(part)
+        return citation
+
+
 @pytest.fixture
 def article():
-    return Article(XML)
+    return _Article(XML)
 
 
 def test_a_table_and_the_rows_its_note_names(article):
-    c = article.cite("Table 1 (ECOG PS)")
+    c = article.cite_one("Table 1 (ECOG PS)")
     assert c.element.id == "Tab1"
     assert c.element.caption == "Baseline characteristics"
     assert [r[0].text for r in c.element.rows][:3] == [
@@ -71,37 +77,69 @@ def test_a_table_and_the_rows_its_note_names(article):
     ]
     assert c.element.rows[0][0].header and c.element.rows[0][0].colspan == 2
     assert c.rows == [4, 5]  # "ECOG PS" and its category row under it
-    assert article.cite("Table 1 (Age)").rows == [2, 3]
-    assert article.cite("Table 1").rows == []
+    assert article.cite_one("Table 1 (Age)").rows == [2, 3]
+    assert article.cite_one("Table 1").rows == []
 
 
 def test_footnotes_stay_apart(article):
-    assert article.cite("Table 1").element.footnotes == ["aRoad traffic accident.", "bPneumonia."]
+    assert article.cite_one("Table 1").element.footnotes == [
+        "aRoad traffic accident.",
+        "bPneumonia.",
+    ]
 
 
 def test_tables_and_figures_by_label_however_written(article):
-    assert article.cite("Extended Data Table 3").element.id == "Tab4"
-    fig = article.cite("Fig. 2d")
-    assert (fig.element.id, fig.panel, fig.element.graphic) == ("Fig2", "d", "Fig2_HTML.jpg")
-    assert article.cite("Figure 2").element.id == "Fig2"
+    assert article.cite_one("Extended Data Table 3").element.id == "Tab4"
+    fig = article.cite_one("Fig. 2d")
+    assert (fig.element.id, fig.panel) == ("Fig2", "d")
+    assert article.cite_one("Figure 2").element.id == "Fig2"
     # Extended Data Table 3 isn't Table 3, and a missing label matches nothing.
-    assert article.cite("Table 3").element is None
-    assert article.cite("Extended Data Table 1").element is None
+    assert article.cite_one("Table 3").element is None
+    assert article.cite_one("Extended Data Table 1").element is None
 
 
 def test_sections_and_their_subsections(article):
-    c = article.cite("Results (Patient disposition)")
+    c = article.cite_one("Results (Patient disposition)")
     assert (c.element.kind, c.element.id) == ("section", "Sec3")
     # The table inside the paragraph is an element of its own.
     assert c.element.paragraphs == ["333 patients were randomised (Table 1)."]
-    results = article.cite("Results").element
+    results = article.cite_one("Results").element
     assert results.paragraphs[0] == "## Patient disposition"
     # A note that isn't a subsection is Claude's comment: the section itself.
-    assert article.cite("Main (introduction, citing primary analysis)").element.id == "Sec1"
-    assert article.cite("Discussion for definition").element.id == "Sec8"
-    assert article.cite("Methods (Patients and treatment)").element.id == "Sec10"
-    assert article.cite("Abstract").element.paragraphs == ["Atezolizumab improved EFS."]
-    assert article.cite("Conclusions").element is None
+    assert article.cite_one("Main (introduction, citing primary analysis)").element.id == "Sec1"
+    assert article.cite_one("Discussion for definition").element.id == "Sec8"
+    assert article.cite_one("Methods (Patients and treatment)").element.id == "Sec10"
+    assert article.cite_one("Abstract").element.paragraphs == ["Atezolizumab improved EFS."]
+    assert article.cite_one("Conclusions").element is None
+
+
+def test_notes_however_bracketed(article):
+    assert article.cite_one("Table 1(ECOG PS)").rows == [4, 5]
+    assert article.cite_one("Table 1 (Age, n (%))").rows == [2, 3]
+
+
+def test_a_label_spanning_its_category_rows():
+    xml = XML.replace(b"<td>ECOG PS</td>", b'<td rowspan="2">ECOG PS</td>').replace(
+        b"<tr><td/><td>1</td>", b"<tr><td>1</td>"
+    )
+    c = _Article(xml).cite_one("Table 1 (ECOG PS)")
+    assert c.rows == [4, 5]
+    assert [cell.text for cell in c.element.rows[5]][:2] == ["1", "8 (5)"]
+
+
+def test_every_table_and_figure_a_part_names(article):
+    cites = article.cite("Table 1 (Age), Fig. 2b and Extended Data Table 3")
+    assert [(c.part, c.element.id) for c in cites] == [
+        ("Table 1 (Age)", "Tab1"),
+        ("Fig. 2b", "Fig2"),
+        ("Extended Data Table 3", "Tab4"),
+    ]
+    assert cites[0].rows == [2, 3]
+    # A plural label lists more numbers: each is looked up, missing ones too.
+    assert [(c.part, c.element and c.element.id) for c in article.cite("Tables 1 and 3")] == [
+        ("Table 1", "Tab1"),
+        ("Table 3", None),
+    ]
 
 
 def test_every_part_of_a_source_once(article):
@@ -194,4 +232,22 @@ def test_cited_endpoint_refuses_a_file_that_isnt_an_article(monkeypatch):
     r = client.get(
         "/trials/t1/sources/s1/cited", params={"team_id": "lab", "where": "Table 1"}, headers=AUTH
     )
-    assert r.status_code == 422
+    assert r.status_code == 415
+
+
+def test_cited_endpoint_404s_when_the_file_is_gone(monkeypatch):
+    _source(monkeypatch)
+
+    def gone(_path):
+        raise RuntimeError("Object not found")
+
+    bucket = SimpleNamespace(download=gone)
+    monkeypatch.setattr(
+        trials_api,
+        "service_client",
+        lambda: SimpleNamespace(storage=SimpleNamespace(from_=lambda _b: bucket)),
+    )
+    r = client.get(
+        "/trials/t1/sources/s1/cited", params={"team_id": "lab", "where": "Table 1"}, headers=AUTH
+    )
+    assert r.status_code == 404

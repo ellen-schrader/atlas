@@ -547,7 +547,12 @@ function EditableNumber({
           inputMode="decimal"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Escape" && setEditing(false)}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            // Handled: cancelling the edit mustn't also close the source panel.
+            e.preventDefault();
+            setEditing(false);
+          }}
           aria-label="Corrected value (empty for not reported)"
           className="h-7 w-20 rounded-md border border-border bg-surface px-1.5 font-mono text-sm text-fg"
         />

@@ -505,7 +505,6 @@ export interface CitedElement {
   /** A section's text; "## " starts a subheading. */
   paragraphs: string[];
   footnotes: string[];
-  graphic: string | null;
 }
 
 /** One part of an extracted value's source ("Table 1 (ECOG PS)"), and what

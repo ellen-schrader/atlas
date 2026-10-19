@@ -334,12 +334,18 @@ def source_cited(
     )
     if not rows or rows[0]["media_type"] != "application/xml":
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    xml = service_client().storage.from_(trial_extract.BUCKET).download(rows[0]["storage_path"])
+    bucket = service_client().storage.from_(trial_extract.BUCKET)
+    try:
+        xml = bucket.download(rows[0]["storage_path"])
+    except Exception as exc:  # gone from storage, or storage is down
+        log.warning("Couldn't read trial source %s: %s", source_id, exc)
+        raise HTTPException(status_code=404, detail=_NOT_FOUND) from exc
     try:
         article = cited.Article(xml)
     except jats.NotJats as exc:
+        # 415, not 422: a 422 is also FastAPI's answer to a malformed request.
         detail = "That file can't be read as an article."
-        raise HTTPException(status_code=422, detail=detail) from exc
+        raise HTTPException(status_code=415, detail=detail) from exc
     pmcid = article.pmcid
     return CitedOut(
         parts=article.cite_all(where),

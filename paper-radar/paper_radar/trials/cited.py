@@ -2,10 +2,10 @@
 
 An extracted value's source says where in the document it came from, in
 Claude's words: "Results (Patient disposition); Table 1", "Table 1 (ECOG PS)",
-"Fig. 2d", "Extended Data Table 3". Each part (split on ";") is matched to one
-element of the article: a table or figure by its label, else a section by its
-title (a subsection in brackets, when there is one). A table part's bracket
-names its row, so the rows it covers can be marked.
+"Fig. 2d", "Extended Data Table 3". Each part (split on ";") is matched to the
+article: every table or figure it names by label ("Table 2, Fig. 3b", "Tables
+1 and 2"), else a section by its title (a subsection in brackets, when there
+is one). A table's bracket names its row, so the rows it covers can be marked.
 
 Read with jats.py's safe parsing: any document declaring entities is refused.
 """
@@ -19,7 +19,6 @@ from typing import Literal
 
 from . import jats
 
-_XLINK = "{http://www.w3.org/1999/xlink}href"
 _PMCID = re.compile(r"^PMC\d{1,10}$")
 
 # "Table 1", "Extended Data Table 3", "Supplementary Table S2", "Fig. 2d",
@@ -30,8 +29,8 @@ _FLOAT = re.compile(
     r"(?P<number>S?\d+)(?P<panel>[a-z](?:[–,-][a-z])*)?\b",
     re.IGNORECASE,
 )
-# "Results (Patient disposition)": a title and what's in brackets after it.
-_TITLE_NOTE = re.compile(r"^\s*(?P<title>[^()]+?)\s*(?:\((?P<note>[^()]*)\))?\s*$")
+# More numbers after a plural label: "Tables 1 and 2", "Figs. 2, 3b".
+_MORE = re.compile(r"\s*(?:,|and|&)\s*(?P<number>S?\d+)(?P<panel>[a-z])?\b", re.IGNORECASE)
 
 
 @dataclass
@@ -53,7 +52,6 @@ class Element:
     rows: list[list[Cell]] = field(default_factory=list)  # tables
     paragraphs: list[str] = field(default_factory=list)  # sections; "## " starts a subheading
     footnotes: list[str] = field(default_factory=list)
-    graphic: str | None = None  # a figure's image file, as the article names it
 
 
 @dataclass
@@ -70,18 +68,37 @@ def _text(el: ET.Element | None) -> str:
     return jats._text(el) if el is not None else ""
 
 
-def _key(label: str) -> str | None:
-    """A float's label reduced to what identifies it: "extended data table 3"
-    for "Extended Data Table 3", "fig 2" for "Figure 2" or "Fig. 2"."""
-    m = _FLOAT.search(label)
-    if not m:
-        return None
-    prefix = " ".join(m["prefix"].lower().split()) if m["prefix"] else ""
-    number = m["number"].upper()
+def _key(prefix: str | None, kind: str, number: str) -> str:
+    """What identifies a table or figure: "extended data table 3" for
+    "Extended Data Table 3", "fig 2" for "Figure 2" or "Fig. 2"."""
+    prefix = " ".join(prefix.lower().split()) if prefix else ""
+    number = number.upper()
     if number.startswith("S"):  # "Table S2" is "Supplementary Table 2"
         prefix, number = "supplementary", number[1:]
-    kind = "table" if m["kind"].lower().startswith("table") else "fig"
+    kind = "table" if kind.lower().startswith("table") else "fig"
     return " ".join(x for x in (prefix, kind, number) if x)
+
+
+def _label_key(label: str) -> str | None:
+    m = _FLOAT.search(label)
+    return _key(m["prefix"], m["kind"], m["number"]) if m else None
+
+
+def _display(key: str, panel: str | None, note: str | None) -> str:
+    """A key as a label again: "Extended Data Table 3", "Fig. 2b (EFS)"."""
+    *prefix, kind, number = key.split()
+    label = " ".join([*(w.capitalize() for w in prefix), "Table" if kind == "table" else "Fig."])
+    return f"{label} {number}{panel or ''}" + (f" ({note})" if note else "")
+
+
+def _note(rest: str) -> str | None:
+    """What's in the brackets that open `rest`: "ECOG PS" for " (ECOG PS)",
+    "Age, n (%)" for "(Age, n (%))"."""
+    rest = rest.strip()
+    if not rest.startswith("("):
+        return None
+    close = rest.rfind(")")
+    return (rest[1:close] if close > 0 else rest[1:]).strip() or None
 
 
 def _table(tw: ET.Element) -> Element:
@@ -127,26 +144,24 @@ def _footnotes(tw: ET.Element) -> list[str]:
 
 
 def _figure(fig: ET.Element) -> Element:
-    graphic = next(fig.iter("graphic"), None)
     return Element(
         id=fig.get("id") or "",
         kind="figure",
         label=_text(fig.find("label")),
         caption=_text(fig.find("caption")),
-        graphic=graphic.get(_XLINK) if graphic is not None else None,
     )
 
 
 def _section(sec: ET.Element, title: str) -> Element:
     paragraphs: list[str] = []
 
-    def walk(s: ET.Element, depth: int) -> None:
+    def walk(s: ET.Element) -> None:
         for child in s:
             if child.tag == "sec":
                 sub = _text(child.find("title"))
                 if sub:
                     paragraphs.append(f"## {sub}")
-                walk(child, depth + 1)
+                walk(child)
             elif child.tag in ("p", "list", "disp-quote"):
                 # Tables and figures inside a paragraph are elements of their own.
                 inner = any(x.tag in ("table-wrap", "fig") for x in child.iter() if x is not child)
@@ -154,7 +169,7 @@ def _section(sec: ET.Element, title: str) -> Element:
                 if text:
                     paragraphs.append(text)
 
-    walk(sec, 0)
+    walk(sec)
     return Element(id=sec.get("id") or "", kind="section", label=title, paragraphs=paragraphs)
 
 
@@ -170,7 +185,7 @@ class Article:
         self.floats: dict[str, ET.Element] = {}
         for el in self.root.iter():
             if el.tag in ("table-wrap", "fig"):
-                key = _key(_text(el.find("label")))
+                key = _label_key(_text(el.find("label")))
                 if key and key not in self.floats:  # the first, not a later copy
                     self.floats[key] = el
 
@@ -202,36 +217,54 @@ class Article:
                 return sec
         return None
 
-    def cite(self, part: str) -> Citation:
-        """What one part of a source points at."""
+    def _float(self, ref: str, key: str, panel: str | None, note: str | None) -> Citation:
+        el = self.floats.get(key)
+        if el is None:
+            return Citation(ref, None)
+        if el.tag == "fig":
+            return Citation(ref, _figure(el), panel=panel.lower() if panel else None)
+        table = _table(el)
+        return Citation(ref, table, rows=_rows(table, note))
+
+    def cite(self, part: str) -> list[Citation]:
+        """What one part of a source points at: each table and figure it
+        names, else the section it names (a list of one, its element None
+        when nothing matched)."""
         part = part.strip()
-        m = _FLOAT.search(part)
-        if m:
-            el = self.floats.get(_key(m.group(0)) or "")
-            if el is None:
-                return Citation(part, None)
-            if el.tag == "fig":
-                return Citation(part, _figure(el), panel=m["panel"].lower() if m["panel"] else None)
-            table = _table(el)
-            note = _TITLE_NOTE.match(part[m.end() :] or "")
-            return Citation(part, table, rows=_rows(table, note["note"] if note else None))
+        # Every label, with the numbers a plural one goes on to list.
+        refs: list[tuple[int, int, str, str | None]] = []  # start, end, key, panel
+        for m in _FLOAT.finditer(part):
+            refs.append((m.start(), m.end(), _key(m["prefix"], m["kind"], m["number"]), m["panel"]))
+            if m["kind"].lower().rstrip(".").endswith("s"):
+                pos = m.end()
+                while more := _MORE.match(part, pos):
+                    key = _key(m["prefix"], m["kind"], more["number"])
+                    refs.append((more.start("number"), more.end(), key, more["panel"]))
+                    pos = more.end()
+        if refs:
+            out = []
+            for i, (_start, end, key, panel) in enumerate(refs):
+                stop = refs[i + 1][0] if i + 1 < len(refs) else len(part)
+                note = _note(part[end:stop])
+                # Each named on its own: "Table 3" for the 3 of "Tables 1 and 3".
+                ref = part if len(refs) == 1 else _display(key, panel, note)
+                out.append(self._float(ref, key, panel, note))
+            return out
         if part.casefold().startswith("abstract"):
             abstract = next(self.root.iter("abstract"), None)
             if abstract is not None:
-                return Citation(part, _section(abstract, "Abstract"))
-        tn = _TITLE_NOTE.match(part)
-        if not tn:
-            return Citation(part, None)
-        sec = self._find_section(tn["title"])
+                return [Citation(part, _section(abstract, "Abstract"))]
+        title, _, rest = part.partition("(")
+        sec = self._find_section(title.strip()) if title.strip() else None
         if sec is None:
-            return Citation(part, None)
-        if tn["note"]:
+            return [Citation(part, None)]
+        if note := _note("(" + rest if rest else ""):
             # "Results (Patient disposition)": the subsection, when it is one;
             # else the note is Claude's comment ("Main (introduction, …)").
-            sub = self._find_section(tn["note"], within=sec)
+            sub = self._find_section(note, within=sec)
             if sub is not None and sub is not sec:
                 sec = sub
-        return Citation(part, _section(sec, _text(sec.find("title"))))
+        return [Citation(part, _section(sec, _text(sec.find("title"))))]
 
     def cite_all(self, where: str) -> list[Citation]:
         """Each part of a source ("A; B"), in order, once each."""
@@ -240,27 +273,39 @@ class Article:
         for part in where.split(";"):
             if part.strip() and part.strip().casefold() not in seen:
                 seen.add(part.strip().casefold())
-                out.append(self.cite(part))
+                out.extend(self.cite(part))
         return out
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
 def _rows(table: Element, note: str | None) -> list[int]:
-    """The rows a note names ("ECOG PS"): the row whose first cell starts with
-    it, and the rows under it with an empty first cell (its categories)."""
+    """The rows a note names ("ECOG PS"): the row whose label (first cell)
+    starts with it, and the rows under it without a label of their own (its
+    categories), whether the label is blank there or spans them."""
     if not note:
         return []
-    want = " ".join(note.casefold().split())
+    # "Age, n (%)" also as "Age": the label may give the units differently.
+    wants = {w for w in (_norm(note), _norm(re.split(r"[,(]", note)[0])) if w}
     out: list[int] = []
+    spanned = 0  # rows still covered by a label cell from above
     for i, row in enumerate(table.rows):
-        first = " ".join(row[0].text.casefold().split()) if row else ""
+        if spanned:
+            spanned -= 1
+            label = None
+        else:
+            label = row[0] if row else None
+            spanned = label.rowspan - 1 if label else 0
         if out:
-            if first or row[0].header:
+            if label is not None and (label.text.strip() or label.header):
                 break
             out.append(i)
-        elif (
-            first
-            and not row[0].header
-            and (first.startswith(want) or (len(first) >= 3 and want.startswith(first)))
-        ):
-            out.append(i)
+        elif label is not None and not label.header:
+            first = _norm(label.text)
+            if first and any(
+                first.startswith(w) or (len(first) >= 3 and w.startswith(first)) for w in wants
+            ):
+                out.append(i)
     return out

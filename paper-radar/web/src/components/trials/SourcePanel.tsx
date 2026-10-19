@@ -38,7 +38,12 @@ export function SourcePanel({
     lastFocused.current = document.activeElement;
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Escape in a field (a value being corrected) is that field's.
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))
+        return;
+      onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     // Room for the panel beside the page on a wide screen (index.css).
@@ -65,13 +70,13 @@ export function SourcePanel({
   });
   const articleUrl = cited.data?.article_url ?? (doc ? pmcUrl(doc) : null);
 
-  // The first marked row, or the first part, in view once it's shown.
+  // Each source starts at the top, or at its first marked row.
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!cited.data) return;
-    const mark = body.current?.querySelector("[data-marked]");
-    (mark ?? body.current)?.scrollIntoView?.({ block: "center" });
-  }, [cited.data]);
+    if (!body.current) return;
+    body.current.scrollTop = 0;
+    body.current.querySelector("[data-marked]")?.scrollIntoView?.({ block: "center" });
+  }, [cited.data, source]);
 
   const open = async () => {
     if (!doc) return;
@@ -121,13 +126,17 @@ export function SourcePanel({
             This source is a PDF: open it{source.page ? ` at page ${source.page}` : ""} to check the
             value.
           </p>
+        ) : !source.where.trim() ? (
+          <p className="text-sm text-muted">
+            Claude didn’t say where in the paper this came from. Look for it in the full paper.
+          </p>
         ) : cited.isLoading ? (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Loader2 size={14} className="animate-spin" aria-hidden /> Finding it in the paper…
           </p>
         ) : cited.error ? (
           <p role="alert" className="text-sm text-danger">
-            {cited.error instanceof ApiError && cited.error.status === 422
+            {cited.error instanceof ApiError && cited.error.status === 415
               ? "This file can’t be read as an article. Open the full paper instead."
               : "Couldn’t load the source. Try again."}
           </p>
