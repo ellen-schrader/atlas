@@ -752,12 +752,10 @@ function Schedule({
               aria-pressed={shown === i}
               aria-label={`${p.kind === "surgery" ? "Surgery" : p.label}: show doses`}
               onClick={() => setOpen(shown === i ? null : i)}
-              className={cn(
-                "flex min-w-0 cursor-pointer flex-col gap-1 rounded-[5px] text-left outline-offset-2 transition",
-                "hover:outline hover:outline-1 hover:outline-border-strong",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                shown === i && "outline outline-2 outline-accent hover:outline-2 hover:outline-accent",
-              )}
+              // The highlight is a ring inside the phase block (below), not an
+              // outline around the column: the chart's scroller clipped that,
+              // and neighbours' outlines ran into each other across the gap.
+              className="group flex min-w-0 cursor-pointer flex-col gap-1 text-left focus-visible:outline-none"
               style={{ flex: flex(p) }}
               title={full(p, a)}
             >
@@ -773,8 +771,12 @@ function Schedule({
               </div>
               <div
                 className={cn(
-                  "flex h-8 items-center justify-center overflow-hidden whitespace-nowrap rounded-[4px] px-1 text-[11px]",
+                  "flex h-8 items-center justify-center overflow-hidden whitespace-nowrap rounded-[4px] px-1 text-[11px] transition",
                   BLOCK[p.kind],
+                  shown === i
+                    ? "ring-2 ring-inset ring-accent"
+                    : "group-hover:ring-1 group-hover:ring-inset group-hover:ring-fg/40",
+                  "group-focus-visible:ring-2 group-focus-visible:ring-inset group-focus-visible:ring-accent",
                 )}
               >
                 {/* Its own span, so a long name ends in "…" instead of losing both ends. */}
@@ -790,7 +792,7 @@ function Schedule({
   return (
     <div className="flex flex-col gap-3">
       {/* Only the chart scrolls sideways on a phone; the doses below wrap. */}
-      <div className="overflow-x-auto p-0.5">
+      <div className="overflow-x-auto">
         <div className="min-w-[560px]">
         <div className="mb-1 flex items-center gap-2 text-sm text-fg">
           <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: colours.exp }} />
