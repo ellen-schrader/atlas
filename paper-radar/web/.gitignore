@@ -7,3 +7,4 @@ dist-ssr
 # All env files are local secrets except the committed template.
 .env*
 !.env.example
+*.tsbuildinfo

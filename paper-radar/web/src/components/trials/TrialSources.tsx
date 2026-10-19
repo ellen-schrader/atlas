@@ -9,7 +9,6 @@ import { useMyRole } from "@/hooks/useMyRole";
 import { ApiError, fetchExtractionBudget, fetchOpenAccess, startExtraction } from "@/lib/api";
 import {
   type TrialSource,
-  extractionRunning,
   extractionState,
   fetchSources,
   removeSource,
@@ -140,13 +139,11 @@ export function TrialSources({
     }
   };
 
-  const running = extractionRunning(
-    facts?.extraction_status ?? null,
-    facts?.extraction_started_at ?? null,
-  );
-  const stalled = facts?.extraction_status === "running" && !running;
-  const queued = facts?.extraction_status === "queued";
-  const batched = facts?.extraction_status === "batched";
+  const state = extractionState(facts);
+  const running = state === "running";
+  const stalled = state === "stalled";
+  const queued = state === "queued";
+  const batched = state === "batched";
   // Queued trials can still be extracted now (skipping the wait); a trial out
   // in a batch can't: that result is paid for and on its way.
   const busy = running || batched;
@@ -313,18 +310,18 @@ export function TrialSources({
       )}
 
       <p className="text-meta text-faint" aria-live="polite">
-        {facts?.extraction_status === "queued"
-          ? facts.extraction_error
+        {queued
+          ? facts?.extraction_error
             ? `Queued · ${facts.extraction_error}`
             : `Queued for the next batch (half price): results usually within a few hours.`
-          : facts?.extraction_status === "batched"
+          : batched
             ? `With Claude in a batch: results usually within the hour of it being sent.`
             : running
           ? `Claude is reading ${list.length} ${list.length === 1 ? "document" : "documents"}… (started ${formatRelative(facts?.extraction_started_at ?? null)}; usually 1–3 minutes)`
           : stalled
             ? "The last extraction stopped without finishing. Start it again."
-            : facts?.extraction_status === "failed"
-            ? `Extraction failed: ${facts.extraction_error ?? "unknown error"}`
+            : state === "failed"
+            ? `Extraction failed: ${facts?.extraction_error ?? "unknown error"}`
             : facts?.extracted_at
               ? `Extracted by ${MODEL_NAMES[facts.extraction_model ?? ""] ?? facts.extraction_model} ${formatRelative(facts.extracted_at)}${
                   facts.extraction_cost_usd != null
@@ -338,7 +335,7 @@ export function TrialSources({
       {owner && budget.data && (
         <p className="text-meta text-faint">
           {team.name}’s extraction spend this month: ${budget.data.spent_usd.toFixed(2)} of $
-          {budget.data.cap_usd.toFixed(0)} (only owners see this)
+          {budget.data.cap_usd.toFixed(0)}
         </p>
       )}
       {confirmDialog}

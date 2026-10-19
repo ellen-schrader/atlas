@@ -552,30 +552,3 @@ def test_lab_trials_match_the_labs_short_name_too():
     )
     trials = trial_links._lab_trials(svc, "lab")
     assert trials["NCT02620280"]["names"] == ["NeoTRIP", "NeoTRIPaPDL1"]
-
-
-# --- where a trial has sites ----------------------------------------------------------
-
-
-def test_site_countries_counts_sites_most_first():
-    locations = [
-        {"country": "Germany"},
-        {"country": "United States"},
-        {"country": "Germany"},
-        {"country": "Japan", "status": "WITHDRAWN"},  # never opened
-        {"country": " "},
-        {"city": "Nowhere"},
-        "not a site",
-    ]
-    assert ctgov.site_countries(locations) == [("Germany", 2), ("United States", 1)]
-    assert ctgov.site_countries(None) == []
-
-
-def test_site_countries_from_a_real_record():
-    record = _fixture("NCT03197935")
-    countries = ctgov.site_countries(
-        record["protocolSection"]["contactsLocationsModule"]["locations"]
-    )
-    # IMpassion031's paper reports 13 countries.
-    assert len(countries) == 13
-    assert countries[0] == ("Germany", 13)

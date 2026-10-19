@@ -255,6 +255,52 @@ def start_extraction(
     return ExtractStarted(status="running")
 
 
+# One click gets data for a whole collection, so it has its own cap rather
+# than spending the per-trial ones.
+_get_data_limiter = PerUserRateLimiter(
+    10, 3600.0, lambda: HTTPException(status_code=429, detail="Too many requests. Try again later.")
+)
+
+
+class GetData(BaseModel):
+    team_id: str
+    trial_ids: list[str] = Field(min_length=1, max_length=trial_extract.MAX_GET_DATA)
+
+
+class GotData(BaseModel):
+    queued: list[str]
+    need_pdf: list[str]  # no files and no open-access full text
+    skipped: list[str]  # had data, or already on the way
+
+
+@router.post("/get-data", response_model=GotData)
+def get_data(req: GetData, token: str = Depends(require_token)) -> GotData:
+    """For the trials without data among these (a collection's): fetch their
+    open-access full text and queue them for the next batch, in one request."""
+    user_id = _require_feature(token, req.team_id)
+    _get_data_limiter.check(user_id)
+    ids = list(dict.fromkeys(req.trial_ids))
+    on_list = {
+        r["trial_id"]
+        for r in user_client(token)
+        .table("trial_posts")
+        .select("trial_id")
+        .eq("team_id", req.team_id)
+        .in_("trial_id", ids)
+        .execute()
+        .data
+        or []
+    }
+    if on_list != set(ids):
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    # The batch checks the cap again before sending; asked here too so a lab
+    # at its cap hears so now, not hours later on each trial's page.
+    reason = trial_extract.over_budget(service_client(), req.team_id)
+    if reason:
+        raise HTTPException(status_code=402, detail=reason)
+    return GotData(**trial_extract.get_data(req.team_id, ids))
+
+
 # --- PubMed (PR 6) -----------------------------------------------------------------
 
 
@@ -329,54 +375,6 @@ def pubmed_hint(trial_id: str, team_id: str, token: str = Depends(require_token)
         ],
         search_url=f"https://pubmed.ncbi.nlm.nih.gov/?term={nct}%5Bsi%5D",
     )
-
-
-# --- where trials have sites -----------------------------------------------------------
-
-
-class SiteCountry(BaseModel):
-    country: str
-    sites: int
-
-
-# Trials per request to the database: a location list can run to 100 kB, so
-# a lab's trials are read a few at a time.
-_COUNTRY_BATCH = 20
-
-
-@router.get("/countries", response_model=dict[str, list[SiteCountry]])
-def trial_countries(
-    team_id: str, token: str = Depends(require_token)
-) -> dict[str, list[SiteCountry]]:
-    """For each of the lab's trials, the countries it has sites in, from the
-    stored registry record (no call to ClinicalTrials.gov). Done here so the
-    web app gets a few bytes per trial instead of every site's address."""
-    _require_feature(token, team_id)
-    client = user_client(token)
-    ids = [
-        r["trial_id"]
-        for r in client.table("trial_posts")
-        .select("trial_id")
-        .eq("team_id", team_id)
-        .execute()
-        .data
-        or []
-    ]
-    out: dict[str, list[SiteCountry]] = {}
-    for i in range(0, len(ids), _COUNTRY_BATCH):
-        rows = (
-            client.table("trials")
-            .select("id, locations:registry->contactsLocationsModule->locations")
-            .in_("id", ids[i : i + _COUNTRY_BATCH])
-            .execute()
-            .data
-            or []
-        )
-        for r in rows:
-            out[r["id"]] = [
-                SiteCountry(country=c, sites=n) for c, n in ctgov.site_countries(r.get("locations"))
-            ]
-    return out
 
 
 # --- extraction budget (PR 7) ---------------------------------------------------------

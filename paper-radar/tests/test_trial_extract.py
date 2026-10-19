@@ -414,3 +414,99 @@ def test_endpoints_404_for_a_trial_not_on_the_list(monkeypatch):
     for path in ("/trials/t1/extract", "/trials/t1/open-access"):
         r = client.post(path, json={"team_id": "lab"}, headers=AUTH)
         assert r.status_code == 404
+
+
+# --- a collection's "Get data" ----------------------------------------------------------
+
+
+class _FactsSvc:
+    """trial_facts and trial_sources reads for get_data()."""
+
+    def __init__(self, facts, sources):
+        self.rows = {"trial_facts": facts, "trial_sources": sources}
+
+    def table(self, name):
+        rows = self.rows.get(name, [])
+
+        class Q:
+            def __getattr__(self, _a):
+                return lambda *a, **k: self
+
+            def execute(self):
+                return SimpleNamespace(data=rows)
+
+        return Q()
+
+
+def test_get_data_leaves_trials_with_data_alone(monkeypatch):
+    svc = _FactsSvc(
+        facts=[{"trial_id": "has", "extracted_at": "2026-10-01T00:00:00Z"}, {"trial_id": "files"}],
+        sources=[{"trial_id": "files"}, {"trial_id": "busy"}],
+    )
+    monkeypatch.setattr(te, "service_client", lambda: svc)
+    looked_up = []
+
+    def open_access(_team, trial):
+        looked_up.append(trial)
+        return {"fetched": ["Paper"] if trial == "open" else [], "closed": [], "have": []}
+
+    monkeypatch.setattr(te, "fetch_open_access", open_access)
+    queued = []
+    monkeypatch.setattr(te, "queue", lambda _team, trial: queued.append(trial) or trial != "busy")
+    out = te.get_data("lab", ["has", "files", "open", "closed", "busy"])
+    assert out == {"queued": ["files", "open"], "need_pdf": ["closed"], "skipped": ["has", "busy"]}
+    assert "has" not in queued  # re-extracting would cost money and wipe the checks
+    assert sorted(looked_up) == ["closed", "open"]  # only trials with no files
+
+
+def _lab_has(monkeypatch, trial_ids):
+    monkeypatch.setattr(trials_api, "_require_feature", lambda _t, _team: "u1")
+    monkeypatch.setattr(trials_api._get_data_limiter, "check", lambda _u: None)
+    monkeypatch.setattr(trials_api, "service_client", lambda: None)
+    rows = [{"trial_id": t} for t in trial_ids]
+    monkeypatch.setattr(
+        trials_api,
+        "user_client",
+        lambda _t: SimpleNamespace(table=lambda _n: _Rows(rows)),
+    )
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __getattr__(self, _a):
+        return lambda *a, **k: self
+
+    def execute(self):
+        return SimpleNamespace(data=self.rows)
+
+
+def test_get_data_endpoint_queues_in_one_request(monkeypatch):
+    _lab_has(monkeypatch, ["t1", "t2"])
+    monkeypatch.setattr(te, "over_budget", lambda _s, _t: None)
+    monkeypatch.setattr(
+        te, "get_data", lambda team, ids: {"queued": ids, "need_pdf": [], "skipped": []}
+    )
+    r = client.post(
+        "/trials/get-data", json={"team_id": "lab", "trial_ids": ["t1", "t2", "t1"]}, headers=AUTH
+    )
+    assert r.status_code == 200
+    assert r.json() == {"queued": ["t1", "t2"], "need_pdf": [], "skipped": []}
+
+
+def test_get_data_endpoint_says_when_the_lab_is_at_its_cap(monkeypatch):
+    _lab_has(monkeypatch, ["t1"])
+    monkeypatch.setattr(te, "over_budget", lambda _s, _t: "This month's budget is used.")
+    monkeypatch.setattr(te, "get_data", lambda *_a: pytest.fail("must not queue"))
+    r = client.post("/trials/get-data", json={"team_id": "lab", "trial_ids": ["t1"]}, headers=AUTH)
+    assert r.status_code == 402
+
+
+def test_get_data_endpoint_404s_for_a_trial_not_on_the_list(monkeypatch):
+    _lab_has(monkeypatch, ["t1"])
+    monkeypatch.setattr(te, "get_data", lambda *_a: pytest.fail("must not queue"))
+    r = client.post(
+        "/trials/get-data", json={"team_id": "lab", "trial_ids": ["t1", "other"]}, headers=AUTH
+    )
+    assert r.status_code == 404

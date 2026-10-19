@@ -14,7 +14,6 @@ import { extractionRunning, extractionState, fetchSources } from "@/lib/extracti
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { useJustAdded } from "@/hooks/useJustAdded";
-import { useTrialCountries } from "@/hooks/useTrialCountries";
 import { Input } from "@/components/ui/input";
 import {
   type FactsEdit,
@@ -22,6 +21,7 @@ import {
   SETTINGS,
   THERAPY_CLASSES,
   THERAPY_COLOR,
+  type Registry,
   type TrialDetail,
   type TrialLink,
   classification,
@@ -32,6 +32,7 @@ import {
   phaseLabel,
   removeTrial,
   saveFacts,
+  siteCountries,
   statusLabel,
   trialName,
 } from "@/lib/trials";
@@ -186,7 +187,7 @@ function TrialBody({ d }: { d: TrialDetail }) {
             · {[statusLabel(t.status), ...facts, t.sponsor].filter(Boolean).join(" · ")}
           </span>
         </div>
-        <SiteCountries trialId={t.id} />
+        <SiteCountries registry={t.registry} />
         <Classification d={d} onSaved={refresh} />
       </header>
 
@@ -290,12 +291,11 @@ function TrialBody({ d }: { d: TrialDetail }) {
 /** "68 sites in 13 countries · Germany, United States, Japan +10", and the
  *  full list a click away. Sites, not participants: the registry doesn't say
  *  how many each enrolled. */
-function SiteCountries({ trialId }: { trialId: string }) {
-  const { team } = useAppContext();
-  const { data } = useTrialCountries(team.id);
+function SiteCountries({ registry }: { registry: Registry | null }) {
   const [open, setOpen] = useState(false);
-  const countries = data?.[trialId];
-  if (!countries?.length) return null;
+  // From the record the page already has, not the lab-wide count.
+  const countries = siteCountries(registry);
+  if (!countries.length) return null;
   const sites = countries.reduce((n, c) => n + c.sites, 0);
   const lead = countries.slice(0, 3).map((c) => c.country);
   const more = countries.length - lead.length;

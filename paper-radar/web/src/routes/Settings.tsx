@@ -319,7 +319,7 @@ function TrialSpendPanel({ teamId, teamName }: { teamId: string; teamName: strin
           </div>
           <p className="text-xs text-muted">
             The cap resets on the 1st. Over it, members can still extract a trial with their own
-            Claude (no cost to the lab). Only owners see these amounts.
+            Claude (no cost to the lab).
           </p>
         </div>
       )}

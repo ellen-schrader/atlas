@@ -28,6 +28,7 @@ import { extractionState, inFlight } from "@/lib/extraction";
 import {
   type LabTrial,
   PATIENT_GROUPS,
+  type SiteCountries,
   SETTINGS,
   THERAPY_CLASSES,
   type TherapyClass,
@@ -38,7 +39,6 @@ import {
 } from "@/lib/trials";
 import { cn } from "@/lib/utils";
 import { useTrialCountries } from "@/hooks/useTrialCountries";
-import type { SiteCountries } from "@/lib/api";
 import { useAppContext } from "@/routes/Layout";
 
 type FilterKey = "therapy" | "group" | "setting" | "phase" | "country";
@@ -132,7 +132,8 @@ function AllTrials() {
     () => collectionsByTrial(collections.data ?? []),
     [collections.data],
   );
-  const { data: countries } = useTrialCountries(team.id);
+  const countryQuery = useTrialCountries(team.id);
+  const countries = countryQuery.data;
   const { data: trials, isLoading, error } = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
@@ -141,7 +142,14 @@ function AllTrials() {
       q.state.data?.some((t) => classification(t.facts, t.added_at) === "pending") ? 5000 : false,
   });
 
-  const selected = (key: FilterKey) => params.get(key)?.split(",").filter(Boolean) ?? [];
+  // One parameter per value (country=A&country=B): country names can hold a
+  // comma ("Iran, Islamic Republic of"). The other filters' values can't, so
+  // their older comma-joined links still read.
+  const selected = (key: FilterKey) =>
+    params
+      .getAll(key)
+      .flatMap((v) => (key === "country" ? [v] : v.split(",")))
+      .filter(Boolean);
   const view = params.get("view") === "grid" ? "grid" : "list";
   const sort = (params.get("sort") as Sort) || "papers";
   const q = params.get("q") ?? "";
@@ -158,7 +166,16 @@ function AllTrials() {
     );
   const toggle = (key: FilterKey, value: string) => {
     const cur = selected(key);
-    set(key, (cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value]).join(","));
+    const values = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+    setParams(
+      (p) => {
+        const next = new URLSearchParams(p);
+        next.delete(key);
+        for (const v of values) next.append(key, v);
+        return next;
+      },
+      { replace: true },
+    );
   };
   const clearAll = () => setParams((p) => {
     const next = new URLSearchParams(p);
@@ -172,6 +189,9 @@ function AllTrials() {
     (!needle || `${t.name} ${t.nct_id} ${t.title ?? ""} ${t.sponsor ?? ""}`.toLowerCase().includes(needle)) &&
     MENUS.every(({ key }) => {
       if (key === skip) return true;
+      // Until the countries load (or if they can't), the country filter
+      // waits rather than hiding every trial.
+      if (key === "country" && !countries) return true;
       const sel = selected(key);
       return sel.length === 0 || sel.some((s) => valuesOf(t, key, countries).includes(s));
     });
@@ -240,6 +260,13 @@ function AllTrials() {
       {error && (
         <p role="alert" className="text-sm text-danger">
           Couldn’t load the lab’s trials. Try again.
+        </p>
+      )}
+      {trials && selected("country").length > 0 && !countries && (
+        <p role={countryQuery.error ? "alert" : undefined} className="text-sm text-muted">
+          {countryQuery.error
+            ? "Couldn’t load where the trials have sites, so the country filter is off for now."
+            : "Loading where the trials have sites…"}
         </p>
       )}
 

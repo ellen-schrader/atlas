@@ -268,18 +268,3 @@ def parse(data: dict[str, Any]) -> TrialRecord:
 def _full_date(value: Any) -> str | None:
     """'2025-10-29' as is; a partial date ('2025-10') can't go in a date column."""
     return value if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
-
-
-def site_countries(locations: Any) -> list[tuple[str, int]]:
-    """Countries the trial has sites in, with how many, most sites first, from
-    the record's contactsLocationsModule.locations. Sites, not participants:
-    the registry doesn't say how many each enrolled. Withdrawn sites (never
-    opened) don't count."""
-    counts: dict[str, int] = {}
-    for loc in locations if isinstance(locations, list) else []:
-        if not isinstance(loc, dict) or loc.get("status") == "WITHDRAWN":
-            continue
-        country = (loc.get("country") or "").strip()
-        if country:
-            counts[country] = counts.get(country, 0) + 1
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))

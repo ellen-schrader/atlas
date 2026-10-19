@@ -33,9 +33,9 @@ import {
   setFollowing,
   updateCollection,
 } from "@/lib/collections";
-import { ApiError, fetchOpenAccess, startExtraction } from "@/lib/api";
+import { ApiError, MAX_GET_DATA, getTrialsData } from "@/lib/api";
 import { type CompareTrial, headline, verification } from "@/lib/compare";
-import { EST_BATCH_USD, extractionState, fetchSources, inFlight } from "@/lib/extraction";
+import { EST_BATCH_USD, extractionState, inFlight } from "@/lib/extraction";
 import { supabase } from "@/lib/supabase";
 import {
   type LabTrial,
@@ -529,9 +529,9 @@ function dataState(t: LabTrial): string {
 type Outcome = { queued: LabTrial[]; needPdf: LabTrial[]; stopped: string | null };
 
 /** How many of the collection's trials have data, and one action to get the
- *  rest: fetch each one's open-access full text, then queue it for the
- *  half-price batch. Trials with no open-access text are listed: they need a
- *  PDF uploaded on their page. */
+ *  rest: the server fetches each one's open-access full text, then queues it
+ *  for the half-price batch. Trials with no open-access text are listed: they
+ *  need a PDF uploaded on their page. */
 function ReadyBar({
   c,
   trials,
@@ -550,34 +550,25 @@ function ReadyBar({
   const { data: role } = useMyRole(team.id, userId);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const from: TrialFrom = { from: { to: `/trials/collections/${c.id}`, label: c.title } };
-  const missing = trials.filter((t) => !extracted?.has(t.id));
+  // Data on record counts even before its values load: a failed load must
+  // never offer to re-extract (that costs money and wipes the lab's checks).
+  const missing = trials.filter((t) => !t.facts?.extracted_at && !extracted?.has(t.id));
   const waiting = missing.filter((t) => inFlight(extractionState(t.facts)));
   const todo = missing.filter((t) => !waiting.includes(t));
 
   const run = useMutation({
     mutationFn: async (): Promise<Outcome> => {
       const out: Outcome = { queued: [], needPdf: [], stopped: null };
-      // One at a time: the API limits lookups and extractions per person, and
-      // a stop (the lab's monthly cap, the hourly limit) should end the run.
-      for (const t of todo) {
+      const byId = new Map(todo.map((t) => [t.id, t]));
+      const pick = (ids: string[]) => ids.flatMap((id) => byId.get(id) ?? []);
+      for (let i = 0; i < todo.length; i += MAX_GET_DATA) {
         try {
-          let have = (await fetchSources(team.id, t.id)).length;
-          if (!have) {
-            const r = await fetchOpenAccess(team.id, t.id);
-            have = r.fetched.length + r.have.length;
-          }
-          if (!have) {
-            out.needPdf.push(t);
-            continue;
-          }
-          await startExtraction(team.id, t.id, "batch");
-          out.queued.push(t);
+          const r = await getTrialsData(team.id, todo.slice(i, i + MAX_GET_DATA).map((t) => t.id));
+          // Skipped: queued or running meanwhile, which is what we wanted.
+          out.queued.push(...pick([...r.queued, ...r.skipped]));
+          out.needPdf.push(...pick(r.need_pdf));
         } catch (e) {
-          // 409: queued or running meanwhile, which is what we wanted.
-          if (e instanceof ApiError && e.status === 409) {
-            out.queued.push(t);
-            continue;
-          }
+          // The lab's monthly cap (402) or the hourly limit (429) ends the run.
           out.stopped = e instanceof ApiError ? e.message : "Something went wrong. Try again.";
           break;
         }

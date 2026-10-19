@@ -27,8 +27,7 @@ import {
   DIMENSION_LABELS,
   type Phase,
 } from "@/lib/extraction";
-import type { SiteCountries } from "@/lib/api";
-import { countriesSummary } from "@/lib/trials";
+import { type SiteCountries, countriesSummary } from "@/lib/trials";
 import { cn } from "@/lib/utils";
 
 // What makes trials hard to compare, most consequential first.

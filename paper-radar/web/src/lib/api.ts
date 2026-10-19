@@ -500,13 +500,20 @@ export async function startExtraction(
   });
 }
 
-/** Where each trial has sites: country and number of sites, most first. */
-export type SiteCountries = Record<string, { country: string; sites: number }[]>;
+/** At most this many trials per getTrialsData request (api/trial_extract.py). */
+export const MAX_GET_DATA = 30;
 
-/** For each of the lab's trials (by id), the countries it has sites in, from
- *  the stored registry record. */
-export async function fetchTrialCountries(teamId: string): Promise<SiteCountries> {
-  return authedRequest(`/trials/countries?${new URLSearchParams({ team_id: teamId })}`);
+/** Get data for several trials in one request (a collection's "Get data"):
+ *  the server fetches open-access full text for those with no files and
+ *  queues them for the next batch. Trials with data are left alone. */
+export async function getTrialsData(
+  teamId: string,
+  trialIds: string[],
+): Promise<{ queued: string[]; need_pdf: string[]; skipped: string[] }> {
+  return authedRequest("/trials/get-data", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, trial_ids: trialIds }),
+  });
 }
 
 /** This month's extraction spend for the lab, and its cap. */
