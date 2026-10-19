@@ -6,15 +6,7 @@ import type { Team } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { ClaudeButton, ClaudeRow } from "./ClaudeEntry";
-import {
-  FOCUS_RING,
-  LAB_NAV,
-  type NavItem,
-  PERSONAL_NAV,
-  TRIALS_NAV,
-  navTitle,
-  visible,
-} from "./nav";
+import { FOCUS_RING, HOME_NAV, NAV_GROUPS, type NavItem, navTitle, visible } from "./nav";
 import { ProfileMenu } from "./ProfileMenu";
 
 export interface SidebarProps {
@@ -68,8 +60,7 @@ function NavRow({
 }
 
 /** The labelled sidebar: desktop, and the mobile drawer (`drawer` grows the
- *  rows to 44px touch targets). Personal pages, then the lab's, separated by the
- *  block gap alone. */
+ *  rows to 44px touch targets). Home, then the headed groups. */
 export function Sidebar({
   drawer = false,
   onNavigate,
@@ -92,19 +83,24 @@ export function Sidebar({
         {!drawer && <NotificationsBell userId={p.userId} align="left" />}
       </div>
 
-      {navGroup("Main", PERSONAL_NAV)}
-      {navGroup("Lab", LAB_NAV)}
-      {visible(TRIALS_NAV, p.features).length > 0 && (
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2 px-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
-            Clinical trials
-            <span className="rounded-full border border-border-strong px-1.5 py-[3px] text-[10px] leading-none text-muted">
-              New
-            </span>
+      {navGroup("Main", HOME_NAV)}
+      {NAV_GROUPS.map((g) => {
+        const items = visible(g.items, p.features);
+        if (items.length === 0) return null;
+        return (
+          <div key={g.label} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 px-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+              {g.label}
+              {g.pill && (
+                <span className="rounded-full border border-border-strong px-1.5 py-[3px] text-[10px] leading-none text-muted">
+                  {g.pill}
+                </span>
+              )}
+            </div>
+            {navGroup(g.label, items)}
           </div>
-          {navGroup("Clinical trials", visible(TRIALS_NAV, p.features))}
-        </div>
-      )}
+        );
+      })}
 
       <div className="mt-auto">
         <ClaudeRow teamId={p.team.id} userId={p.userId} onNavigate={onNavigate} />
@@ -151,16 +147,23 @@ export function CollapsedBar(p: SidebarProps) {
 
       <div className="flex flex-col items-center gap-1">
         <nav aria-label="Main" className="flex flex-col items-center gap-1">
-          {PERSONAL_NAV.map(icon)}
+          {HOME_NAV.map(icon)}
         </nav>
-        <nav aria-label="Lab" className="flex flex-col items-center gap-1">
-          {LAB_NAV.map(icon)}
-        </nav>
-        {visible(TRIALS_NAV, p.features).length > 0 && (
-          <nav aria-label="Clinical trials" className="flex flex-col items-center gap-1">
-            {visible(TRIALS_NAV, p.features).map(icon)}
-          </nav>
-        )}
+        {NAV_GROUPS.map((g) => {
+          const items = visible(g.items, p.features);
+          return (
+            items.length > 0 && (
+              // The headings don't fit 68px: a hairline marks where a group starts.
+              <nav
+                key={g.label}
+                aria-label={g.label}
+                className="mt-1 flex flex-col items-center gap-1 border-t border-border pt-2"
+              >
+                {items.map(icon)}
+              </nav>
+            )
+          );
+        })}
       </div>
 
       <div className="mt-auto flex flex-col items-center gap-2">

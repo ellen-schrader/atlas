@@ -1,17 +1,18 @@
 import { type ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Check, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Check, ChevronDown, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from "lucide-react";
 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { ExtractionView } from "@/components/trials/ExtractionView";
 import { PubMedHint } from "@/components/trials/PubMedHint";
-import { TrialSources } from "@/components/trials/TrialSources";
+import { TrialSources, extractionSummary } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
 import { extractionRunning, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
 import {
   type FactsEdit,
@@ -32,7 +33,14 @@ import {
   statusLabel,
   trialName,
 } from "@/lib/trials";
+import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
+
+/** Where the trial was opened from (a collection's page passes itself), so
+ *  "back" goes there rather than always to All trials. */
+export interface TrialFrom {
+  from?: { to: string; label: string };
+}
 
 export default function TrialPage() {
   return (
@@ -45,6 +53,7 @@ export default function TrialPage() {
 function Trial() {
   const { nct = "" } = useParams();
   const { team } = useAppContext();
+  const back = (useLocation().state as TrialFrom | null)?.from ?? { to: "/trials", label: "All trials" };
   const { data, isLoading, error } = useQuery({
     queryKey: ["trial", team.id, nct],
     queryFn: () => fetchTrialDetail(team.id, nct),
@@ -66,10 +75,11 @@ function Trial() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 sm:p-8">
       <Link
-        to="/trials"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted hover:text-fg"
+        to={back.to}
+        className="inline-flex w-fit max-w-full items-center gap-1.5 text-sm text-muted hover:text-fg"
       >
-        <ArrowLeft size={14} aria-hidden /> All trials
+        <ArrowLeft size={14} aria-hidden className="shrink-0" />
+        <span className="truncate">{back.label}</span>
       </Link>
       {isLoading && (
         <p className="flex items-center gap-2 text-sm text-muted">
@@ -106,6 +116,7 @@ function TrialBody({ d }: { d: TrialDetail }) {
     queryFn: () => fetchSources(team.id, t.id),
   });
   const name = trialName(t, d.facts);
+  const [confirm, confirmDialog] = useConfirm();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["trial", team.id, t.nct_id] });
     qc.invalidateQueries({ queryKey: ["lab-trials", team.id] });
@@ -141,8 +152,16 @@ function TrialBody({ d }: { d: TrialDetail }) {
             variant="ghost"
             size="sm"
             disabled={remove.isPending}
-            onClick={() => {
-              if (window.confirm(`Take ${name} off ${team.name}’s list?`)) remove.mutate();
+            onClick={async () => {
+              if (
+                await confirm({
+                  title: `Take ${name} off ${team.name}’s list?`,
+                  body: "It leaves the lab’s collections too, and Atlas won’t add it back from papers. You can add it again by hand.",
+                  confirmLabel: "Remove from lab",
+                  danger: true,
+                })
+              )
+                remove.mutate();
             }}
           >
             Remove from lab
@@ -164,26 +183,10 @@ function TrialBody({ d }: { d: TrialDetail }) {
             {t.sponsor && ` · ${t.sponsor}`}
           </span>
         </div>
+        <Classification d={d} onSaved={refresh} />
       </header>
 
-      <Classification d={d} onSaved={refresh} />
-
-      <Section title="Papers in Atlas">
-        <Papers d={d} onChange={refresh} />
-        <PubMedHint trialId={t.id} onAdded={refresh} />
-      </Section>
-
-      <Section title="Data from the papers">
-        <TrialSources
-          trialId={t.id}
-          facts={d.facts}
-          papers={d.links
-            .filter((l) => (l.status === "auto" || l.status === "confirmed") && l.papers)
-            .map((l) => ({ id: l.paper_id, title: l.papers?.title ?? "Untitled paper" }))}
-          onExtractionChange={refresh}
-        />
-      </Section>
-
+      {/* The answer first; the plumbing that produced it after. */}
       {d.facts?.extraction && (
         <ExtractionView
           trialId={t.id}
@@ -201,6 +204,27 @@ function TrialBody({ d }: { d: TrialDetail }) {
           }}
         />
       )}
+
+      <Collapsible
+        title="Sources & extraction"
+        summary={extractionSummary(d.facts, sources.data?.length ?? 0)}
+        // Open while there's something to do here: no data yet, or it failed.
+        defaultOpen={!d.facts?.extraction || d.facts.extraction_status === "failed"}
+      >
+        <TrialSources
+          trialId={t.id}
+          facts={d.facts}
+          papers={d.links
+            .filter((l) => (l.status === "auto" || l.status === "confirmed") && l.papers)
+            .map((l) => ({ id: l.paper_id, title: l.papers?.title ?? "Untitled paper" }))}
+          onExtractionChange={refresh}
+        />
+      </Collapsible>
+
+      <Section title="Papers in Atlas">
+        <Papers d={d} onChange={refresh} />
+        <PubMedHint trialId={t.id} onAdded={refresh} />
+      </Section>
 
       <Section
         title="From ClinicalTrials.gov"
@@ -251,7 +275,40 @@ function TrialBody({ d }: { d: TrialDetail }) {
           )}
         </div>
       </Section>
+      {confirmDialog}
     </>
+  );
+}
+
+/** A section that can fold away to one line. */
+function Collapsible({
+  title,
+  summary,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  summary: string;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="rounded-card border border-border bg-surface">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-card p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <h2 className="text-heading font-semibold text-fg">{title}</h2>
+        <span className="flex min-w-0 items-center gap-2 text-meta text-muted">
+          {summary}
+          <ChevronDown size={16} aria-hidden className={cn("shrink-0 transition", open && "rotate-180")} />
+        </span>
+      </button>
+      {open && <div className="px-5 pb-5">{children}</div>}
+    </section>
   );
 }
 
@@ -405,36 +462,25 @@ function Classification({ d, onSaved }: { d: TrialDetail; onSaved: () => void })
     );
   }
 
-  return (
-    <Section
-      title="Classification"
-      aside={
-        <Button variant="ghost" size="sm" onClick={start}>
-          <Pencil size={14} aria-hidden /> Edit
-        </Button>
-      }
-    >
-      <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-        <Fact label="Setting">
-          {f?.settings.length ? f.settings.map((s) => SETTINGS[s]).join(", ") : "—"}
-        </Fact>
-        <Fact label="Patient group">
-          {f?.patient_groups.length ? f.patient_groups.map((g) => PATIENT_GROUPS[g]).join(", ") : "—"}
-        </Fact>
-        <Fact label="Therapy">
-          <TherapyList therapies={f?.therapy_classes ?? []} />
-        </Fact>
-      </dl>
-      <p className="text-meta text-faint">{source}</p>
-    </Section>
+  const chip = (label: string) => (
+    <span key={label} className="rounded-full border border-border px-2.5 py-0.5 text-muted">
+      {label}
+    </span>
   );
-}
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
-      <dt className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">{label}</dt>
-      <dd className="mt-1 text-fg">{children}</dd>
+    <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
+      {f?.classified_by ? (
+        <>
+          {f.settings.map((v) => chip(SETTINGS[v]))}
+          {f.patient_groups.map((v) => chip(PATIENT_GROUPS[v]))}
+          <TherapyList therapies={f.therapy_classes} />
+        </>
+      ) : (
+        <span className="text-faint">{source}</span>
+      )}
+      <Button variant="ghost" size="sm" onClick={start} title={f?.classified_by ? source : undefined}>
+        <Pencil size={13} aria-hidden /> Edit classification
+      </Button>
     </div>
   );
 }
@@ -532,7 +578,7 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
                     disabled={decide.isPending}
                     onClick={() => decide.mutate({ id: l.id, status: "rejected" })}
                   >
-                    <X size={14} aria-hidden /> No
+                    <X size={14} aria-hidden /> Not this trial
                   </Button>
                 </>,
               ),

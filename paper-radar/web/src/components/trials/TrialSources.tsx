@@ -4,6 +4,8 @@ import { FileText, Globe, Loader2, Sparkles, Upload, X } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { useMyRole } from "@/hooks/useMyRole";
 import { ApiError, fetchExtractionBudget, fetchOpenAccess, startExtraction } from "@/lib/api";
 import {
   type TrialSource,
@@ -23,6 +25,20 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-opus-4-8": "Claude Opus 4.8",
 };
 
+/** One line on where the trial's data stands, for the collapsed panel's header. */
+export function extractionSummary(facts: TrialFacts | null, documents: number): string {
+  const docs = `${documents} ${documents === 1 ? "document" : "documents"}`;
+  const status = facts?.extraction_status;
+  if (status === "queued") return `${docs} · queued for the next batch`;
+  if (status === "batched") return `${docs} · with Claude in a batch`;
+  if (extractionRunning(status ?? null, facts?.extraction_started_at ?? null))
+    return `${docs} · Claude is reading them`;
+  if (status === "failed") return `${docs} · the last extraction failed`;
+  if (facts?.extracted_at)
+    return `${docs} · extracted by ${MODEL_NAMES[facts.extraction_model ?? ""] ?? facts.extraction_model} ${formatRelative(facts.extracted_at)}`;
+  return documents ? `${docs} · not extracted yet` : "No documents yet";
+}
+
 /** The files behind a trial's data, and the button that has Claude read them. */
 export function TrialSources({
   trialId,
@@ -40,6 +56,10 @@ export function TrialSources({
   const qc = useQueryClient();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [confirm, confirmDialog] = useConfirm();
+  const { data: role } = useMyRole(team.id, userId);
+  // The PDF just picked, waiting to be told what it is.
+  const [file, setFile] = useState<File | null>(null);
   // "supplement", or the paper the PDF is ("" for a paper not in the list).
   const [what, setWhat] = useState<string>(papers[0]?.id ?? "");
   const key = ["trial-sources", team.id, trialId];
@@ -56,7 +76,10 @@ export function TrialSources({
         what === "supplement" ? "supplement" : "paper",
         what && what !== "supplement" ? what : null,
       ),
-    onSuccess: refresh,
+    onSuccess: () => {
+      setFile(null);
+      refresh();
+    },
     onError: (e) => toast({ message: e instanceof Error ? e.message : "Upload failed." }),
   });
   const remove = useMutation({
@@ -89,10 +112,14 @@ export function TrialSources({
     onError: (e) =>
       toast({ message: e instanceof ApiError ? e.message : "Couldn’t start the extraction." }),
   });
+  // The lab's spend is the owners' business (it's on their card): members
+  // aren't asked to weigh it on every trial. Owners see it in Settings too.
+  const owner = role === "owner";
   const budget = useQuery({
     queryKey: ["extraction-budget", team.id],
     queryFn: () => fetchExtractionBudget(team.id),
     staleTime: 60_000,
+    enabled: owner,
   });
 
   const open = async (s: TrialSource) => {
@@ -120,9 +147,8 @@ export function TrialSources({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted">
-        Claude reads these to extract the trial’s design, results and who was enrolled. Fetch the
-        open-access full text of linked papers, or upload PDFs (papers and supplements). Files stay
-        private to {team.name}.
+        Claude reads these documents to get the trial’s design, results and who was enrolled. They
+        stay private to {team.name}.
       </p>
 
       {list.length > 0 && (
@@ -143,20 +169,30 @@ export function TrialSources({
               <button
                 type="button"
                 onClick={() => open(s)}
-                className="min-w-0 flex-1 truncate text-left text-sm text-fg hover:text-accent"
+                // Wraps on a phone, where truncating left "PMC122…".
+                className="min-w-0 flex-1 break-words text-left text-sm text-fg hover:text-accent sm:truncate"
               >
                 {s.filename}
               </button>
               <span className="shrink-0 text-meta text-muted">
-                {s.kind === "supplement" ? "Supplement" : "Paper"} · {(s.bytes / 1e6).toFixed(1)} MB
+                {s.kind === "supplement" ? "Supplement" : "Paper"}
+                <span className="hidden sm:inline"> · {(s.bytes / 1e6).toFixed(1)} MB</span>
               </span>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label={`Remove ${s.filename}`}
                 disabled={remove.isPending || running}
-                onClick={() => {
-                  if (window.confirm(`Remove ${s.filename}?`)) remove.mutate(s);
+                onClick={async () => {
+                  if (
+                    await confirm({
+                      title: `Remove ${s.filename}?`,
+                      body: "The data already extracted stays until the trial is extracted again.",
+                      confirmLabel: "Remove",
+                      danger: true,
+                    })
+                  )
+                    remove.mutate(s);
                 }}
               >
                 <X size={14} aria-hidden />
@@ -180,33 +216,13 @@ export function TrialSources({
           )}
           Fetch open access
         </Button>
-        <label className="flex min-w-0 items-center gap-1.5 text-sm text-muted">
-          <span className="sr-only">What the PDF is</span>
-          <select
-            value={what}
-            onChange={(e) => setWhat(e.target.value)}
-            className="h-8 max-w-64 truncate rounded-md border border-border bg-surface px-2 text-sm text-fg"
-          >
-            {papers.map((p) => (
-              <option key={p.id} value={p.id}>
-                Paper: {p.title}
-              </option>
-            ))}
-            <option value="">Another paper</option>
-            <option value="supplement">Supplement</option>
-          </select>
-        </label>
         <Button
           variant="secondary"
           size="sm"
-          disabled={upload.isPending}
+          disabled={upload.isPending || file !== null}
           onClick={() => fileRef.current?.click()}
         >
-          {upload.isPending ? (
-            <Loader2 size={14} className="animate-spin" aria-hidden />
-          ) : (
-            <Upload size={14} aria-hidden />
-          )}
+          <Upload size={14} aria-hidden />
           Upload PDF
         </Button>
         <input
@@ -216,35 +232,75 @@ export function TrialSources({
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) upload.mutate(f);
+            if (f) setFile(f);
             e.target.value = "";
           }}
         />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
             size="sm"
             disabled={list.length === 0 || busy || extract.isPending}
             onClick={() => extract.mutate("now")}
-            title="Full price, about a minute"
           >
-            Extract now
+            Get data now
           </Button>
           <Button
             size="sm"
             disabled={list.length === 0 || busy || queued || extract.isPending}
             onClick={() => extract.mutate("batch")}
-            title="Half price; results usually within a few hours"
           >
             {busy || queued || extract.isPending ? (
               <Loader2 size={14} className="animate-spin" aria-hidden />
             ) : (
               <Sparkles size={14} aria-hidden />
             )}
-            {queued ? "Queued" : facts?.extraction ? "Queue re-extraction" : "Queue extraction"}
+            {queued ? "Queued" : facts?.extraction ? "Queue a fresh extraction" : "Queue extraction"}
           </Button>
         </div>
       </div>
+
+      {file && (
+        <form
+          className="flex flex-wrap items-center gap-2 rounded-control border border-border p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            upload.mutate(file);
+          }}
+        >
+          <label className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-sm text-fg">
+            <span className="min-w-0 truncate">
+              What is <span className="font-medium">{file.name}</span>?
+            </span>
+            <select
+              value={what}
+              onChange={(e) => setWhat(e.target.value)}
+              className="h-8 min-w-0 max-w-full truncate rounded-md border border-border bg-surface px-2 text-sm text-fg sm:max-w-80"
+            >
+              {papers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
+              <option value="">Another paper</option>
+              <option value="supplement">A supplement</option>
+            </select>
+          </label>
+          <Button type="submit" size="sm" disabled={upload.isPending}>
+            {upload.isPending && <Loader2 size={14} className="animate-spin" aria-hidden />}
+            Upload
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setFile(null)}>
+            Cancel
+          </Button>
+        </form>
+      )}
+
+      {list.length > 0 && !busy && (
+        <p className="text-meta text-muted">
+          Queue: half price, ready within a few hours. Get data now: full price, about a minute.
+        </p>
+      )}
 
       <p className="text-meta text-faint" aria-live="polite">
         {facts?.extraction_status === "queued"
@@ -262,17 +318,20 @@ export function TrialSources({
             : facts?.extracted_at
               ? `Extracted by ${MODEL_NAMES[facts.extraction_model ?? ""] ?? facts.extraction_model} ${formatRelative(facts.extracted_at)}${
                   facts.extraction_cost_usd != null
-                    ? ` · about $${Number(facts.extraction_cost_usd).toFixed(2)}`
+                    ? owner ? ` · about $${Number(facts.extraction_cost_usd).toFixed(2)}` : ""
                     : ""
-                }. Extracting again replaces the values and their checks.`
-              : "Not extracted yet."}
+                }. A fresh extraction replaces the values and their checks.`
+              : list.length === 0
+                ? "Not extracted yet. First fetch the open-access full text, or upload a PDF."
+                : "Not extracted yet."}
       </p>
-      {budget.data && (
+      {owner && budget.data && (
         <p className="text-meta text-faint">
           {team.name}’s extraction spend this month: ${budget.data.spent_usd.toFixed(2)} of $
-          {budget.data.cap_usd.toFixed(0)}
+          {budget.data.cap_usd.toFixed(0)} (only owners see this)
         </p>
       )}
+      {confirmDialog}
     </div>
   );
 }

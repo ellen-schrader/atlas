@@ -118,9 +118,10 @@ export function CompareView({ available }: { available: CompareTrial[] }) {
         <p className="text-sm text-muted">Pick at least two trials with extracted data.</p>
       ) : (
         <>
-          <Schedules trials={trials} indexOf={slotOf} />
-          <Results trials={trials} indexOf={slotOf} />
+          {/* What differs first: it says how far the numbers below can be compared. */}
           <Differences trials={trials} indexOf={slotOf} />
+          <Results trials={trials} indexOf={slotOf} />
+          <Schedules trials={trials} indexOf={slotOf} />
           <EnrolmentTable trials={trials} indexOf={slotOf} />
         </>
       )}

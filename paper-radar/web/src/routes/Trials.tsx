@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { FlaskConical, LayoutGrid, List, Loader2, Plus, X } from "lucide-react";
+import { FlaskConical, LayoutGrid, List, Loader2, Plus, Search, X } from "lucide-react";
 
 import { AddTrialDialog } from "@/components/trials/AddTrialDialog";
 import { EMPTY_COLLECTION, NewCollectionDialog } from "@/components/trials/CollectionForm";
@@ -15,7 +15,9 @@ import {
   Unclassified,
 } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
-import { sameSettingAndGroup, sharedTags } from "@/lib/collections";
+import { Input } from "@/components/ui/input";
+import { type Collection, fetchCollections, sameSettingAndGroup, sharedTags } from "@/lib/collections";
+import { extractionRunning } from "@/lib/extraction";
 import {
   type LabTrial,
   PATIENT_GROUPS,
@@ -59,6 +61,33 @@ function labelOf(key: FilterKey, value: string): string {
 const list = (t: LabTrial, key: "settings" | "patient_groups", labels: Record<string, string>) =>
   (t.facts?.[key] ?? []).map((v) => labels[v]).join(", ") || "—";
 
+/** Whether Claude has the trial's data yet: what Compare needs. */
+function DataState({ t }: { t: LabTrial }) {
+  const f = t.facts;
+  if (f?.extracted_at) return <span className="text-fg">Extracted</span>;
+  const s = f?.extraction_status;
+  if (s === "queued" || s === "batched" || extractionRunning(s ?? null, f?.extraction_started_at ?? null))
+    return <span className="text-muted">On the way</span>;
+  return <span className="text-faint">{s === "failed" ? "Failed" : "Not yet"}</span>;
+}
+
+/** The lab's collections each trial is in. */
+type InCollections = Map<string, Collection[]>;
+
+function CollectionNames({ t, inCollections }: { t: LabTrial; inCollections: InCollections }) {
+  const cs = inCollections.get(t.id) ?? [];
+  if (cs.length === 0) return <span className="text-faint">—</span>;
+  return (
+    <span className="flex flex-col gap-0.5">
+      {cs.map((c) => (
+        <Link key={c.id} to={`/trials/collections/${c.id}`} className="relative z-10 truncate text-fg hover:text-accent">
+          {c.title}
+        </Link>
+      ))}
+    </span>
+  );
+}
+
 export default function Trials() {
   return (
     <RequireTrials>
@@ -76,6 +105,13 @@ function AllTrials() {
   const [saving, setSaving] = useState(false);
   const pick = (id: string) =>
     setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  const collections = useQuery({
+    queryKey: ["collections", team.id],
+    queryFn: () => fetchCollections(team.id),
+  });
+  const inCollections: InCollections = new Map();
+  for (const c of collections.data ?? [])
+    for (const id of c.trial_ids) inCollections.set(id, [...(inCollections.get(id) ?? []), c]);
   const { data: trials, isLoading, error } = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
@@ -87,6 +123,8 @@ function AllTrials() {
   const selected = (key: FilterKey) => params.get(key)?.split(",").filter(Boolean) ?? [];
   const view = params.get("view") === "grid" ? "grid" : "list";
   const sort = (params.get("sort") as Sort) || "papers";
+  const q = params.get("q") ?? "";
+  const needle = q.trim().toLowerCase();
   const set = (key: string, value: string | null) =>
     setParams(
       (p) => {
@@ -104,11 +142,13 @@ function AllTrials() {
   const clearAll = () => setParams((p) => {
     const next = new URLSearchParams(p);
     for (const m of MENUS) next.delete(m.key);
+    next.delete("q");
     return next;
   }, { replace: true });
 
   const all = trials ?? [];
   const matches = (t: LabTrial, skip: FilterKey | null) =>
+    (!needle || `${t.name} ${t.nct_id} ${t.title ?? ""} ${t.sponsor ?? ""}`.toLowerCase().includes(needle)) &&
     MENUS.every(({ key }) => {
       if (key === skip) return true;
       const sel = selected(key);
@@ -190,6 +230,20 @@ function AllTrials() {
       {trials && trials.length > 0 && (
         <>
           <div className="flex flex-wrap items-center gap-2">
+            <label className="relative min-w-56 flex-1 sm:max-w-xs">
+              <span className="sr-only">Search trials</span>
+              <Search
+                size={15}
+                aria-hidden
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-faint"
+              />
+              <Input
+                value={q}
+                onChange={(e) => set("q", e.target.value || null)}
+                placeholder="Name, NCT ID, sponsor or words"
+                className="pl-9"
+              />
+            </label>
             {MENUS.map((m) => (
               <FilterMenu
                 key={m.key}
@@ -251,7 +305,7 @@ function AllTrials() {
                 {labelOf(key, v)} <X size={12} aria-hidden />
               </button>
             ))}
-            {active.length > 0 && (
+            {(active.length > 0 || needle) && (
               <button
                 type="button"
                 onClick={clearAll}
@@ -259,6 +313,11 @@ function AllTrials() {
               >
                 Clear all
               </button>
+            )}
+            {picked.length === 0 && (
+              <span className="ml-auto hidden text-meta text-faint sm:inline">
+                Tick trials to save them as a collection
+              </span>
             )}
           </div>
 
@@ -273,14 +332,14 @@ function AllTrials() {
             <>
               {/* A six-column table doesn't fit a phone: cards there. */}
               <div className="hidden sm:block">
-                <TrialTable trials={shown} picked={picked} onPick={pick} />
+                <TrialTable trials={shown} picked={picked} onPick={pick} inCollections={inCollections} />
               </div>
               <div className="sm:hidden">
-                <TrialGrid trials={shown} picked={picked} onPick={pick} />
+                <TrialGrid trials={shown} picked={picked} onPick={pick} inCollections={inCollections} />
               </div>
             </>
           ) : (
-            <TrialGrid trials={shown} picked={picked} onPick={pick} />
+            <TrialGrid trials={shown} picked={picked} onPick={pick} inCollections={inCollections} />
           )}
         </>
       )}
@@ -321,7 +380,7 @@ function PaperCount({ t }: { t: LabTrial }) {
       <span className="font-mono">{t.papers}</span>
       {t.suggestions > 0 && (
         <span
-          className="rounded-full border border-border-strong px-1.5 text-[11px] text-muted"
+          className="rounded-full border border-border-strong px-1.5 text-meta text-muted"
           title={`${t.suggestions} suggested ${t.suggestions === 1 ? "paper" : "papers"} to review`}
         >
           +{t.suggestions} to review
@@ -334,9 +393,10 @@ function PaperCount({ t }: { t: LabTrial }) {
 interface Pickable {
   picked: string[];
   onPick: (id: string) => void;
+  inCollections: InCollections;
 }
 
-function PickBox({ t, picked, onPick }: { t: LabTrial } & Pickable) {
+function PickBox({ t, picked, onPick }: { t: LabTrial } & Omit<Pickable, "inCollections">) {
   const on = picked.includes(t.id);
   return (
     <input
@@ -349,20 +409,21 @@ function PickBox({ t, picked, onPick }: { t: LabTrial } & Pickable) {
   );
 }
 
-function TrialTable({ trials, picked, onPick }: { trials: LabTrial[] } & Pickable) {
+function TrialTable({ trials, picked, onPick, inCollections }: { trials: LabTrial[] } & Pickable) {
   return (
     <div className="overflow-x-auto rounded-card border border-border bg-surface">
-      <table className="w-full min-w-[760px] text-left text-sm">
+      <table className="w-full min-w-[860px] text-left text-sm">
         <thead className="border-b border-border text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
           <tr>
             <th className="w-10 py-3 pl-4">
-              <span className="sr-only">Select</span>
+              <span className="sr-only">Select for a collection</span>
             </th>
             <th className="px-3 py-3 font-semibold">Trial</th>
             <th className="px-3 py-3 font-semibold">Setting</th>
             <th className="px-3 py-3 font-semibold">Therapy</th>
             <th className="px-3 py-3 font-semibold">Patient group</th>
-            <th className="px-3 py-3 font-semibold">Status</th>
+            <th className="px-3 py-3 font-semibold">Data</th>
+            <th className="px-3 py-3 font-semibold">Collections</th>
             <th className="px-4 py-3 font-semibold">Papers</th>
           </tr>
         </thead>
@@ -382,6 +443,7 @@ function TrialTable({ trials, picked, onPick }: { trials: LabTrial[] } & Pickabl
                 <div className="font-mono text-meta text-muted">
                   {phaseLabel(t.phases)} · {t.nct_id}
                 </div>
+                <div className="text-meta text-muted">{statusLabel(t.status)}</div>
               </td>
               <td className="px-3 py-3 text-fg">
                 <Classified t={t}>{list(t, "settings", SETTINGS)}</Classified>
@@ -394,7 +456,12 @@ function TrialTable({ trials, picked, onPick }: { trials: LabTrial[] } & Pickabl
               <td className="px-3 py-3 text-fg">
                 <Classified t={t}>{list(t, "patient_groups", PATIENT_GROUPS)}</Classified>
               </td>
-              <td className="px-3 py-3 text-muted">{statusLabel(t.status)}</td>
+              <td className="px-3 py-3">
+                <DataState t={t} />
+              </td>
+              <td className="max-w-48 px-3 py-3">
+                <CollectionNames t={t} inCollections={inCollections} />
+              </td>
               <td className="px-4 py-3 text-fg">
                 <PaperCount t={t} />
               </td>
@@ -406,7 +473,7 @@ function TrialTable({ trials, picked, onPick }: { trials: LabTrial[] } & Pickabl
   );
 }
 
-function TrialGrid({ trials, picked, onPick }: { trials: LabTrial[] } & Pickable) {
+function TrialGrid({ trials, picked, onPick, inCollections }: { trials: LabTrial[] } & Pickable) {
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {trials.map((t) => {
@@ -444,6 +511,11 @@ function TrialGrid({ trials, picked, onPick }: { trials: LabTrial[] } & Pickable
               <Classified t={t}>
                 <TherapyList therapies={therapies} />
               </Classified>
+            </div>
+            <div className="text-meta text-muted">
+              Data: <DataState t={t} />
+              {(inCollections.get(t.id)?.length ?? 0) > 0 &&
+                ` · in ${inCollections.get(t.id)!.map((c) => c.title).join(", ")}`}
             </div>
             <div className="mt-auto flex items-center justify-between pt-2 text-meta text-muted">
               <span>

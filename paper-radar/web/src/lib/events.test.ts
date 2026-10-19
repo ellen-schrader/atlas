@@ -25,14 +25,14 @@ describe("the feed", () => {
       ["values_verified", 1],
       ["paper_linked", 1],
     ]);
-    expect(say(items[0])).toBe("2 value groups verified by Ada");
+    expect(say(items[0])).toBe("Ada checked 2 parts of the data against the papers");
   });
 
   it("keeps people apart", () => {
     const items = foldEvents([ev({}), ev({ actor: { display_name: "Bob" } })]);
     expect(items.map((i) => say(i))).toEqual([
-      "A value group verified by Ada",
-      "A value group verified by Bob",
+      "Ada checked a part of the data against the papers",
+      "Bob checked a part of the data against the papers",
     ]);
   });
 

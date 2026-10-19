@@ -156,6 +156,24 @@ const BUCKET = "trial-sources";
 /** PDFs travel base64-encoded in a 32 MB request: 24 MB is the most one can be. */
 export const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 
+/** What one trial's batch extraction costs, for the estimate before asking:
+ *  measured at $0.13 a trial in October 2026 (papers plus supplements). */
+export const EST_BATCH_USD = 0.13;
+
+/** A treatment's name without its dose and schedule, for a label too narrow
+ *  for the whole thing: "Dose-dense doxorubicin 60 mg/m² + cyclophosphamide
+ *  600 mg/m² q2w ×4" → "Dose-dense doxorubicin + cyclophosphamide". */
+export function treatmentName(label: string): string {
+  return label
+    .split(/\s+\+\s+/)
+    .map((part) => {
+      const words = part.trim().split(/\s+/);
+      const dose = words.findIndex((w, i) => i > 0 && /\d|^[q×x]\d|^(weekly|daily|cycles?)$/i.test(w));
+      return (dose > 0 ? words.slice(0, dose) : words).join(" ");
+    })
+    .join(" + ");
+}
+
 /** A run is "running" for 30 minutes at most: past that it crashed (a deploy,
  *  a restart), and the API lets a new one start. Mirrors api/trial_extract.py. */
 export function extractionRunning(status: string | null, startedAt: string | null): boolean {

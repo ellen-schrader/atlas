@@ -27,58 +27,77 @@ export interface NavItem {
   description?: (labName: string) => string;
 }
 
-/** Yours: what you've done or saved. */
-export const PERSONAL_NAV: NavItem[] = [
-  { to: "/", label: "Home", icon: LayoutGrid, end: true },
-  {
-    to: "/reading-list",
-    label: "My reading list",
-    icon: Bookmark,
-    description: () => "Papers you have saved to read",
-  },
-];
+/** Home stands alone, above the headed groups. */
+export const HOME_NAV: NavItem[] = [{ to: "/", label: "Home", icon: LayoutGrid, end: true }];
 
-/** The lab's: everything everyone has shared. */
-export const LAB_NAV: NavItem[] = [
-  {
-    to: "/papers",
-    label: "Library",
-    icon: LibraryBig,
-    description: (lab) => `All of ${lab}’s papers`,
-  },
-  {
-    to: "/gallery",
-    label: "Figure gallery",
-    icon: Image,
-    beta: true,
-    description: () => "Figures and diagrams your lab has shared",
-  },
-  {
-    to: "/maps",
-    label: "Topic map",
-    icon: MapIcon,
-    beta: true,
-    description: () => "See how the lab’s papers connect by subject",
-  },
-];
+export interface NavGroup {
+  /** The group's heading, and its nav landmark's name. */
+  label: string;
+  /** A pill beside the heading ("New"). */
+  pill?: string;
+  items: NavItem[];
+}
 
-/** Clinical trials: its own group, headed "Clinical trials" with a New pill. */
-export const TRIALS_NAV: NavItem[] = [
+/** The headed groups, in sidebar order. A group whose items are all behind
+ *  features the user lacks disappears, heading and all. */
+export const NAV_GROUPS: NavGroup[] = [
   {
-    to: "/trials/collections",
-    label: "Collections",
-    icon: Layers,
-    feature: TRIALS_FEATURE,
-    description: (lab) => `Clinical questions ${lab} follows`,
+    label: "Papers",
+    items: [
+      {
+        to: "/papers",
+        label: "Library",
+        icon: LibraryBig,
+        description: (lab) => `All of ${lab}’s papers`,
+      },
+      {
+        to: "/reading-list",
+        label: "My reading list",
+        icon: Bookmark,
+        description: () => "Papers you have saved to read",
+      },
+    ],
   },
   {
-    to: "/trials",
-    label: "All trials",
-    icon: FlaskConical,
-    // Not a prefix match: /trials/collections is its own entry.
-    end: true,
-    feature: TRIALS_FEATURE,
-    description: (lab) => `Breast cancer trials ${lab} follows`,
+    label: "Explore",
+    items: [
+      {
+        to: "/gallery",
+        label: "Figure gallery",
+        icon: Image,
+        beta: true,
+        description: () => "Figures and diagrams your lab has shared",
+      },
+      {
+        to: "/maps",
+        label: "Topic map",
+        icon: MapIcon,
+        beta: true,
+        description: () => "See how the lab’s papers connect by subject",
+      },
+    ],
+  },
+  {
+    label: "Clinical trials",
+    pill: "New",
+    items: [
+      {
+        to: "/trials/collections",
+        label: "Collections",
+        icon: Layers,
+        feature: TRIALS_FEATURE,
+        description: (lab) => `Clinical questions ${lab} follows`,
+      },
+      {
+        to: "/trials",
+        label: "All trials",
+        icon: FlaskConical,
+        // Not a prefix match: /trials/collections is its own entry.
+        end: true,
+        feature: TRIALS_FEATURE,
+        description: (lab) => `Breast cancer trials ${lab} follows`,
+      },
+    ],
   },
 ];
 

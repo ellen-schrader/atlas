@@ -1,6 +1,6 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleDashed, FileText, Pencil } from "lucide-react";
+import { Check, CircleDashed, ClipboardCheck, ExternalLink, FileText, Pencil } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,9 @@ import {
   fetchReviews,
   setVerified,
   sourceUrl,
+  treatmentName,
 } from "@/lib/extraction";
+import { headline, reviewGroups } from "@/lib/compare";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
@@ -37,6 +39,42 @@ interface Ctx {
   reviews: Set<string>;
   colours: ArmColours;
   onChange: () => void;
+  /** In review mode numbers can be corrected and groups marked verified;
+   *  outside it the page is for reading. */
+  reviewing: boolean;
+  /** The group being reviewed. */
+  current: string | null;
+}
+
+/** Each review group's source, for "Open source" in the review bar. */
+function groupSource(x: Extraction, path: string): Source | null {
+  if (path === "design") return x.design.source;
+  if (path === "schedule") return x.arms.find((a) => a.role === "experimental")?.source ?? null;
+  if (path === "adverse_events") return x.adverse_events[0]?.source ?? null;
+  if (path === "enrolment") return x.enrolment.source;
+  if (path === "context") return x.context.find((c) => c.source)?.source ?? null;
+  const i = Number(path.split(".")[1]);
+  return x.endpoints[i]?.source ?? null;
+}
+
+function groupTitle(x: Extraction, path: string): string {
+  const fixed: Record<string, string> = {
+    design: "Question and design",
+    schedule: "Treatment",
+    adverse_events: "Adverse events",
+    enrolment: "Who was enrolled",
+    context: "Details that affect comparison",
+  };
+  return fixed[path] ?? x.endpoints[Number(path.split(".")[1])]?.name ?? path;
+}
+
+const groupId = (path: string) => `review-${path.replace(/\./g, "-")}`;
+
+/** "p = 0.0044 (1-sided)", "p < 0.001": the extraction keeps the paper's text. */
+function pText(v: string): string {
+  const t = v.trim();
+  if (/^p\b/i.test(t)) return t;
+  return /^[<>≤≥=]/.test(t) ? `p ${t}` : `p = ${t}`;
 }
 
 /** Everything Claude extracted, grouped as on the mock-up's trial view. Each
@@ -71,17 +109,52 @@ export function ExtractionView({
     qc.invalidateQueries({ queryKey: ["trial-edits", team.id, trialId] });
     qc.invalidateQueries({ queryKey: ["trial", team.id] });
   };
-  const ctx: Ctx = { trialId, sources, reviews: reviews.data ?? new Set(), colours, onChange };
+  const groups = reviewGroups(x);
+  const done = reviews.data ? groups.filter((g) => reviews.data.has(g)).length : null;
+  const [current, setCurrent] = useState<string | null>(null);
+  const reviewing = current !== null;
+  const ctx: Ctx = {
+    trialId,
+    sources,
+    reviews: reviews.data ?? new Set(),
+    colours,
+    onChange,
+    reviewing,
+    current,
+  };
   const exp = x.arms.find((a) => a.role === "experimental");
   const ctrl = x.arms.find((a) => a.role === "control");
+  const firstUnchecked = () => groups.find((g) => !reviews.data?.has(g)) ?? groups[0];
+  const lead = headline(x);
 
   return (
     <div className="flex flex-col gap-6">
-      <p className="text-meta text-faint">
-        {edits.data
-          ? `${edits.data} ${edits.data === 1 ? "value" : "values"} corrected by the lab · every change is logged`
-          : "As extracted by Claude · check each group against its source"}
-      </p>
+      <section
+        aria-label="Key results"
+        className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-card border border-border bg-surface p-5"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+            Key results
+          </div>
+          <div className="mt-1 font-mono text-card font-semibold text-fg">{lead || "No headline result extracted"}</div>
+          <p className="mt-1 text-meta text-muted">
+            {done == null
+              ? "Extracted by Claude"
+              : done === groups.length
+                ? `All ${groups.length} groups checked against their sources`
+                : `${done} of ${groups.length} groups checked against their sources`}
+            {!!edits.data &&
+              ` · ${edits.data} ${edits.data === 1 ? "value" : "values"} corrected by the lab (every change is logged)`}
+          </p>
+        </div>
+        {!reviewing && (
+          <Button variant={done === groups.length ? "secondary" : "default"} onClick={() => setCurrent(firstUnchecked())}>
+            <ClipboardCheck size={16} aria-hidden />
+            {done === groups.length ? "Review again" : done ? "Continue review" : "Review the data"}
+          </Button>
+        )}
+      </section>
 
       <Group title="Question" path="design" source={x.design.source} ctx={ctx}>
         <dl className="grid gap-3 sm:grid-cols-2">
@@ -147,20 +220,7 @@ export function ExtractionView({
           source={x.adverse_events[0]?.source ?? null}
           ctx={ctx}
         >
-          <div className="flex flex-col gap-3">
-            {x.adverse_events.map((a, i) => (
-              <Bars
-                key={i}
-                caption={a.label}
-                exp={a.exp_pct}
-                ctrl={a.ctrl_pct}
-                colours={colours}
-                expPath={`adverse_events.${i}.exp_pct`}
-                ctrlPath={`adverse_events.${i}.ctrl_pct`}
-                ctx={ctx}
-              />
-            ))}
-          </div>
+          <AdverseEvents x={x} ctx={ctx} />
         </Group>
       )}
 
@@ -192,6 +252,116 @@ export function ExtractionView({
           <p className="mt-2 whitespace-pre-wrap text-sm text-muted">{x.caveats}</p>
         </details>
       )}
+
+      {current && (
+        <ReviewBar
+          x={x}
+          groups={groups}
+          current={current}
+          ctx={ctx}
+          onMove={setCurrent}
+          onDone={() => setCurrent(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Review mode's bar: one group at a time, its source a click away, and
+ *  "verified" moves on to the next one not yet checked. */
+function ReviewBar({
+  x,
+  groups,
+  current,
+  ctx,
+  onMove,
+  onDone,
+}: {
+  x: Extraction;
+  groups: string[];
+  current: string;
+  ctx: Ctx;
+  onMove: (path: string) => void;
+  onDone: () => void;
+}) {
+  const { team, userId } = useAppContext();
+  const toast = useToast();
+  const i = groups.indexOf(current);
+  const source = groupSource(x, current);
+  const doc = source ? ctx.sources[source.doc - 1] : null;
+  const verified = ctx.reviews.has(current);
+  useEffect(() => {
+    document.getElementById(groupId(current))?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [current]);
+  // The next group not yet checked, after this one; else the next one.
+  const next = () => {
+    const after = [...groups.slice(i + 1), ...groups.slice(0, i)];
+    return after.find((g) => !ctx.reviews.has(g) && g !== current) ?? null;
+  };
+  const verify = useMutation({
+    mutationFn: () => setVerified(team.id, ctx.trialId, userId, current, true),
+    onSuccess: () => {
+      ctx.onChange();
+      const n = next();
+      if (n) onMove(n);
+      else {
+        toast({ message: "Every group is checked." });
+        onDone();
+      }
+    },
+    onError: () => toast({ message: "Couldn’t save that. Try again." }),
+  });
+  const label = source
+    ? [`Doc ${source.doc}`, source.where, source.page && `p. ${source.page}`].filter(Boolean).join(" · ")
+    : "No source given: check it against the papers";
+
+  return (
+    <div
+      role="region"
+      aria-label="Review"
+      className="sticky bottom-4 z-20 flex flex-col gap-3 rounded-card border border-border-strong bg-surface p-4 shadow-lg sm:flex-row sm:items-center"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-meta text-muted">
+          Checking {i + 1} of {groups.length}
+          {verified && " · already verified"}
+        </div>
+        <div className="font-semibold text-fg">{groupTitle(x, current)}</div>
+        <div className="truncate text-meta text-muted" title={label}>
+          {label}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {doc && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={async () => {
+              try {
+                window.open(await sourceUrl(doc), "_blank", "noopener");
+              } catch {
+                toast({ message: "Couldn’t open the source." });
+              }
+            }}
+          >
+            <ExternalLink size={14} aria-hidden /> Open source
+          </Button>
+        )}
+        <Button size="sm" disabled={verify.isPending || verified} onClick={() => verify.mutate()}>
+          <Check size={14} aria-hidden /> Matches the source
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onMove(groups[(i + 1) % groups.length])}
+        >
+          Skip
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+      <p className="text-meta text-faint sm:hidden">Tap a number to correct it.</p>
     </div>
   );
 }
@@ -206,7 +376,7 @@ function SourceLink({ source, ctx }: { source: Source; ctx: Ctx }) {
     .join(" · ");
   if (!doc)
     return (
-      <span className="inline-block max-w-[22rem] truncate text-meta text-faint" title={label}>
+      <span className="inline-block max-w-[min(22rem,100%)] truncate text-meta text-faint" title={label}>
         {label}
       </span>
     );
@@ -221,7 +391,7 @@ function SourceLink({ source, ctx }: { source: Source; ctx: Ctx }) {
           toast({ message: "Couldn’t open the source." });
         }
       }}
-      className="inline-flex max-w-[22rem] items-center gap-1 text-meta text-muted hover:text-accent"
+      className="inline-flex max-w-[min(22rem,100%)] items-center gap-1 text-meta text-muted hover:text-accent"
     >
       <FileText size={12} aria-hidden className="shrink-0" />
       <span className="truncate">{label}</span>
@@ -236,6 +406,13 @@ function VerifyToggle({ path, ctx }: { path: string; ctx: Ctx }) {
     mutationFn: () => setVerified(team.id, ctx.trialId, userId, path, !on),
     onSuccess: ctx.onChange,
   });
+  // Reading, not reviewing: only a check worth knowing about is shown.
+  if (!ctx.reviewing)
+    return on ? (
+      <span className="inline-flex items-center gap-1 text-meta text-accent">
+        <Check size={12} aria-hidden /> Verified
+      </span>
+    ) : null;
   return (
     <button
       type="button"
@@ -271,7 +448,13 @@ function Group({
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
+    <section
+      id={groupId(path)}
+      className={cn(
+        "flex scroll-mt-6 flex-col gap-3 rounded-card border bg-surface p-5 transition",
+        ctx.current === path ? "border-accent ring-2 ring-accent/30" : "border-border",
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-heading font-semibold text-fg">{title}</h3>
         <div className="flex flex-wrap items-center gap-2">
@@ -311,6 +494,12 @@ function EditableNumber({
     },
     onError: () => toast({ message: "Couldn’t save the correction." }),
   });
+  if (!ctx.reviewing)
+    return (
+      <span className={cn("font-mono", className)}>
+        {value == null ? <span className="text-faint" title="Not reported">n/r</span> : `${value}${suffix}`}
+      </span>
+    );
   if (editing)
     return (
       <form
@@ -350,8 +539,8 @@ function EditableNumber({
         className,
       )}
     >
-      {value == null ? <span className="text-faint">n/r</span> : `${value}${suffix}`}
-      <Pencil size={11} aria-hidden className="text-faint opacity-0 group-hover:opacity-100" />
+      {value == null ? <span className="text-faint" title="Not reported">n/r</span> : `${value}${suffix}`}
+      <Pencil size={11} aria-hidden className="text-faint group-hover:text-accent" />
     </button>
   );
 }
@@ -427,17 +616,26 @@ function EndpointPanel({ e, path, ctx }: { e: Endpoint; path: string; ctx: Ctx }
       )}
       <p className="text-sm text-fg">
         {e.kind === "rate" ? (
-          <>
-            Δ <EditableNumber value={e.difference} path={`${path}.difference`} ctx={ctx} suffix=" pp" />
-            {ci(e.difference_ci_low, e.difference_ci_high)}
-          </>
+          e.difference == null && !ctx.reviewing ? (
+            <span className="text-muted">
+              Difference not reported
+              {e.exp_value != null &&
+                e.ctrl_value != null &&
+                ` (the rates are ${Math.round((e.exp_value - e.ctrl_value) * 10) / 10} pp apart)`}
+            </span>
+          ) : (
+            <>
+              Difference <EditableNumber value={e.difference} path={`${path}.difference`} ctx={ctx} suffix=" pp" />
+              {ci(e.difference_ci_low, e.difference_ci_high)}
+            </>
+          )
         ) : (
           <>
             HR <EditableNumber value={e.hr} path={`${path}.hr`} ctx={ctx} />
             {ci(e.hr_ci_low, e.hr_ci_high)}
           </>
         )}
-        {e.p_value && <span className="text-muted"> · {e.p_value}</span>}
+        {e.p_value && <span className="text-muted"> · {pText(e.p_value)}</span>}
       </p>
       <p className="text-meta text-muted">
         {[
@@ -449,6 +647,51 @@ function EndpointPanel({ e, path, ctx }: { e: Endpoint; path: string; ctx: Ctx }
           .join(" · ")}
       </p>
     </Group>
+  );
+}
+
+/** Adverse events as a table: eight pairs of 0–100% bars hid 5-point
+ *  differences and took half the page. */
+function AdverseEvents({ x, ctx }: { x: Extraction; ctx: Ctx }) {
+  const dot = (colour: string) => (
+    <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: colour }} />
+  );
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[420px] text-sm">
+        <thead className="text-left text-meta text-muted">
+          <tr className="border-b border-border">
+            <th className="py-2 pr-3 font-normal">Event</th>
+            <th className="px-2 py-2 text-right font-normal">
+              <span className="inline-flex items-center gap-1.5">{dot(ctx.colours.exp)} Experimental</span>
+            </th>
+            <th className="px-2 py-2 text-right font-normal">
+              <span className="inline-flex items-center gap-1.5">{dot(ctx.colours.ctrl)} Control</span>
+            </th>
+            <th className="py-2 pl-2 text-right font-normal">Difference</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {x.adverse_events.map((a, i) => {
+            const d = a.exp_pct != null && a.ctrl_pct != null ? Math.round((a.exp_pct - a.ctrl_pct) * 10) / 10 : null;
+            return (
+              <tr key={i}>
+                <td className="py-2 pr-3 text-fg">{a.label}</td>
+                <td className="px-2 py-2 text-right">
+                  <EditableNumber value={a.exp_pct} path={`adverse_events.${i}.exp_pct`} ctx={ctx} suffix="%" />
+                </td>
+                <td className="px-2 py-2 text-right">
+                  <EditableNumber value={a.ctrl_pct} path={`adverse_events.${i}.ctrl_pct`} ctx={ctx} suffix="%" />
+                </td>
+                <td className="py-2 pl-2 text-right font-mono text-muted">
+                  {d == null ? "—" : `${d > 0 ? "+" : ""}${d} pp`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -482,7 +725,8 @@ function Schedule({
   ctrlN: number | null;
 }) {
   // Surgery is a fixed sliver; other blocks scale with their weeks.
-  const flex = (p: Phase) => (p.kind === "surgery" ? "0 0 14px" : `${p.weeks ?? 8} 1 0`);
+  // Surgery is a fixed block, wide enough to say what it is.
+  const flex = (p: Phase) => (p.kind === "surgery" ? "0 0 58px" : `${p.weeks ?? 8} 1 0`);
   const row = (arm: "exp" | "ctrl") => {
     const add = (p: Phase) => (arm === "exp" ? p.experimental_add : p.control_add);
     return (
@@ -501,7 +745,7 @@ function Schedule({
                 )}
                 style={a && !placebo ? { background: arm === "exp" ? colours.exp : colours.ctrl, color: "var(--bg)" } : undefined}
               >
-                {first ? a : ""}
+                {first ? treatmentName(a) : ""}
               </div>
               <div
                 className={cn(
@@ -509,7 +753,8 @@ function Schedule({
                   BLOCK[p.kind],
                 )}
               >
-                {p.kind === "surgery" ? "" : p.label}
+                {/* Its own span, so a long name ends in "…" instead of losing both ends. */}
+                <span className="min-w-0 truncate">{p.kind === "surgery" ? "Surgery" : treatmentName(p.label)}</span>
               </div>
             </div>
           );
@@ -647,7 +892,7 @@ function DimensionRow({
   );
   return (
     <div className="grid gap-2 sm:grid-cols-[160px_1fr] sm:items-center">
-      <div className="text-sm text-fg">
+      <div className="min-w-0 text-sm text-fg">
         {label}
         {d?.assay && <span className="block text-meta text-muted">{d.assay}</span>}
         {d?.source && (
@@ -703,7 +948,7 @@ function DimensionRow({
                   ))}
                 <span
                   className={cn(
-                    "relative truncate text-[12px]",
+                    "relative truncate text-[13px]",
                     no ? "text-faint line-through" : "text-fg",
                   )}
                 >
@@ -711,7 +956,7 @@ function DimensionRow({
                   {cond && " †"}
                 </span>
                 {!no && (
-                  <span className="relative text-[12px]">
+                  <span className="relative text-[13px]">
                     {byArm ? (
                       <>
                         <EditableNumber value={c.exp_pct} path={`${path}.categories.${j}.exp_pct`} ctx={ctx} />

@@ -1,7 +1,7 @@
 import { type ReactNode, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Bell, BellOff, ChevronDown, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, Loader2, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
@@ -10,6 +10,7 @@ import { CollectionForm } from "@/components/trials/CollectionForm";
 import { CompareView } from "@/components/trials/CompareView";
 import { RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { Textarea } from "@/components/ui/textarea";
 import { useDismissable } from "@/hooks/useDismissable";
 import { useMyRole } from "@/hooks/useMyRole";
@@ -30,7 +31,9 @@ import {
   setFollowing,
   updateCollection,
 } from "@/lib/collections";
+import { ApiError, fetchOpenAccess, startExtraction } from "@/lib/api";
 import { type CompareTrial, headline, verification } from "@/lib/compare";
+import { EST_BATCH_USD, extractionRunning, fetchSources } from "@/lib/extraction";
 import { supabase } from "@/lib/supabase";
 import {
   type LabTrial,
@@ -43,6 +46,7 @@ import {
 } from "@/lib/trials";
 import { cn, formatRelative, initials } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
+import type { TrialFrom } from "@/routes/TrialPage";
 
 export default function TrialCollection() {
   return (
@@ -103,6 +107,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
   const toast = useToast();
   const { data: role } = useMyRole(team.id, userId);
   const [editing, setEditing] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["collection", team.id, c.id] });
     qc.invalidateQueries({ queryKey: ["collections", team.id] });
@@ -145,6 +150,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
     return e ? [{ id: t.id, name: t.name, extraction: e.extraction }] : [];
   });
   const [view, setView] = useState<"overview" | "compare">("overview");
+  const canCompare = comparable.length >= 2;
 
   const tags = [
     ...c.settings.map((s) => SETTINGS[s]),
@@ -213,8 +219,15 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
                   variant="danger"
                   size="sm"
                   disabled={del.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Delete “${c.title}”? Its trials stay in All trials.`))
+                  onClick={async () => {
+                    if (
+                      await confirm({
+                        title: `Delete “${c.title}”?`,
+                        body: "Its notes go with it. Its trials stay in All trials, with their data.",
+                        confirmLabel: "Delete collection",
+                        danger: true,
+                      })
+                    )
                       del.mutate();
                   }}
                 >
@@ -226,40 +239,58 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
         </header>
       )}
 
-      <div role="tablist" aria-label="Collection views" className="flex gap-2">
-        {(
-          [
-            ["overview", "Overview"],
-            ["compare", `Compare trials${comparable.length >= 2 ? ` · ${comparable.length}` : ""}`],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={view === key}
-            disabled={key === "compare" && comparable.length < 2}
-            title={
-              key === "compare" && comparable.length < 2
-                ? extractions.isLoading
-                  ? "Loading extracted data…"
-                  : "Needs two trials with extracted data"
-                : undefined
-            }
-            onClick={() => setView(key)}
-            className={cn(
-              "min-h-10 rounded-control border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
-              view === key
-                ? "border-border-strong bg-surface-2 text-fg"
-                : "border-border text-muted hover:text-fg",
-            )}
-          >
-            {label}
-          </button>
-        ))}
+      <ReadyBar c={c} trials={inCollection} extracted={extractions.data} loading={extractions.isLoading} />
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div
+          role="tablist"
+          aria-label="Collection views"
+          className="flex gap-2"
+          onKeyDown={(e) => {
+            // Arrow keys move between tabs, as a tablist should.
+            if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+            const next = view === "overview" && canCompare ? "compare" : "overview";
+            setView(next);
+            document.getElementById(`tab-${next}`)?.focus();
+          }}
+        >
+          {(
+            [
+              ["overview", "Overview"],
+              ["compare", `Compare trials${canCompare ? ` · ${comparable.length}` : ""}`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              id={`tab-${key}`}
+              type="button"
+              role="tab"
+              aria-selected={view === key}
+              tabIndex={view === key ? 0 : -1}
+              disabled={key === "compare" && !canCompare}
+              aria-describedby={key === "compare" && !canCompare ? "compare-why" : undefined}
+              onClick={() => setView(key)}
+              className={cn(
+                "min-h-10 rounded-control border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
+                view === key
+                  ? "border-border-strong bg-surface-2 text-fg"
+                  : "border-border text-muted hover:text-fg",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {!canCompare && (
+          <p id="compare-why" className="text-meta text-muted">
+            {extractions.isLoading
+              ? "Loading the trials’ data…"
+              : `Compare needs two trials with data${comparable.length === 1 ? ": one has it so far" : ""}.`}
+          </p>
+        )}
       </div>
 
-      {view === "compare" && comparable.length >= 2 ? (
+      {view === "compare" && canCompare ? (
         <CompareView available={comparable} />
       ) : (
         <Section
@@ -289,6 +320,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
           <Papers c={c} onChange={refresh} />
         </Section>
       </div>
+      {confirmDialog}
     </>
   );
 }
@@ -322,9 +354,22 @@ function TrialRows({
   onChange: () => void;
 }) {
   const toast = useToast();
+  const { userId } = useAppContext();
+  const from: TrialFrom = { from: { to: `/trials/collections/${c.id}`, label: c.title } };
   const remove = useMutation({
-    mutationFn: (trialId: string) => removeCollectionTrial(c.id, trialId),
-    onSuccess: onChange,
+    mutationFn: (t: LabTrial) => removeCollectionTrial(c.id, t.id),
+    onSuccess: (_r, t) => {
+      onChange();
+      // One click took it out, so one click puts it back.
+      toast({
+        message: `${t.name} taken out of this collection.`,
+        actionLabel: "Undo",
+        onAction: async () => {
+          await addCollectionTrials(c.id, [t.id], userId);
+          onChange();
+        },
+      });
+    },
     onError: () => toast({ message: "Couldn’t remove that trial. Try again." }),
   });
   if (trials.length === 0)
@@ -340,6 +385,7 @@ function TrialRows({
           <div className="min-w-44">
             <Link
               to={`/trials/${t.nct_id}`}
+              state={from}
               className="font-semibold text-fg hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               {t.name}
@@ -348,7 +394,7 @@ function TrialRows({
               {phaseLabel(t.phases)} · {t.nct_id}
             </div>
           </div>
-          <div className="min-w-0 flex-1 text-sm text-fg">
+          <div className="min-w-0 flex-1 basis-56 text-sm text-fg">
             <TherapyList therapies={t.facts?.therapy_classes ?? []} />
             <div className="mt-1 text-meta text-muted">
               {[
@@ -366,8 +412,8 @@ function TrialRows({
               if (!e && (loading || !extractions)) return <span className="text-meta text-faint">…</span>;
               if (!e)
                 return (
-                  <Link to={`/trials/${t.nct_id}`} className="text-meta text-faint hover:text-accent">
-                    Data not extracted yet
+                  <Link to={`/trials/${t.nct_id}`} state={from} className="text-meta text-muted hover:text-accent">
+                    {dataState(t)}
                   </Link>
                 );
               const status = verification(e.extraction, e.reviewed);
@@ -388,7 +434,7 @@ function TrialRows({
               );
             })()}
           </div>
-          <div className="flex items-center gap-3 text-meta text-muted">
+          <div className="ml-auto flex items-center gap-3 text-meta text-muted">
             <span>
               {t.papers} {t.papers === 1 ? "paper" : "papers"}
             </span>
@@ -396,8 +442,9 @@ function TrialRows({
               variant="ghost"
               size="icon"
               aria-label={`Remove ${t.name} from this collection`}
+              title="Remove from this collection"
               disabled={remove.isPending}
-              onClick={() => remove.mutate(t.id)}
+              onClick={() => remove.mutate(t)}
             >
               <X size={15} aria-hidden />
             </Button>
@@ -405,6 +452,140 @@ function TrialRows({
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Where a trial without data stands, in a few words. */
+function dataState(t: LabTrial): string {
+  const f = t.facts;
+  if (f?.extraction_status === "queued") return "Queued for data";
+  if (f?.extraction_status === "batched") return "With Claude, in a batch";
+  if (extractionRunning(f?.extraction_status ?? null, f?.extraction_started_at ?? null))
+    return "Claude is reading it";
+  if (f?.extraction_status === "failed") return "Extraction failed: open to retry";
+  return "No data yet";
+}
+
+type Outcome = { queued: LabTrial[]; needPdf: LabTrial[]; stopped: string | null };
+
+/** How many of the collection's trials have data, and one action to get the
+ *  rest: fetch each one's open-access full text, then queue it for the
+ *  half-price batch. Trials with no open-access text are listed: they need a
+ *  PDF uploaded on their page. */
+function ReadyBar({
+  c,
+  trials,
+  extracted,
+  loading,
+}: {
+  c: CollectionDetail;
+  trials: LabTrial[];
+  extracted?: Map<string, TrialExtraction>;
+  loading: boolean;
+}) {
+  const { team } = useAppContext();
+  const qc = useQueryClient();
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const from: TrialFrom = { from: { to: `/trials/collections/${c.id}`, label: c.title } };
+  const missing = trials.filter((t) => !extracted?.has(t.id));
+  const waiting = missing.filter((t) => {
+    const s = t.facts?.extraction_status;
+    return s === "queued" || s === "batched" || extractionRunning(s ?? null, t.facts?.extraction_started_at ?? null);
+  });
+  const todo = missing.filter((t) => !waiting.includes(t));
+
+  const run = useMutation({
+    mutationFn: async (): Promise<Outcome> => {
+      const out: Outcome = { queued: [], needPdf: [], stopped: null };
+      // One at a time: the API limits lookups and extractions per person, and
+      // a stop (the lab's monthly cap, the hourly limit) should end the run.
+      for (const t of todo) {
+        try {
+          let have = (await fetchSources(team.id, t.id)).length;
+          if (!have) {
+            const r = await fetchOpenAccess(team.id, t.id);
+            have = r.fetched.length + r.have.length;
+          }
+          if (!have) {
+            out.needPdf.push(t);
+            continue;
+          }
+          await startExtraction(team.id, t.id, "batch");
+          out.queued.push(t);
+        } catch (e) {
+          // 409: queued or running meanwhile, which is what we wanted.
+          if (e instanceof ApiError && e.status === 409) {
+            out.queued.push(t);
+            continue;
+          }
+          out.stopped = e instanceof ApiError ? e.message : "Something went wrong. Try again.";
+          break;
+        }
+      }
+      return out;
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["lab-trials", team.id] });
+      qc.invalidateQueries({ queryKey: ["extraction-budget", team.id] });
+    },
+    onSuccess: setOutcome,
+  });
+
+  if (loading || trials.length === 0) return null;
+  const have = trials.length - missing.length;
+  if (missing.length === 0 && !outcome) return null;
+  const links = (ts: LabTrial[]) =>
+    ts.map((t, i) => (
+      <span key={t.id}>
+        {i > 0 && ", "}
+        <Link to={`/trials/${t.nct_id}`} state={from} className="text-accent hover:underline">
+          {t.name}
+        </Link>
+      </span>
+    ));
+
+  return (
+    <section
+      aria-label="Trial data"
+      className="flex flex-col gap-2 rounded-card border border-accent/40 bg-accent-weak/40 p-4"
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <div className="font-semibold text-fg">
+            {have} of {trials.length} {trials.length === 1 ? "trial has" : "trials have"} data
+          </div>
+          <p className="text-sm text-muted">
+            {todo.length > 0
+              ? `Atlas can fetch the open-access papers for the other ${todo.length === 1 ? "one" : todo.length} and have Claude read them: about $${(todo.length * EST_BATCH_USD).toFixed(2)}, ready within a few hours.`
+              : waiting.length > 0
+                ? `${waiting.length === 1 ? "The other one is" : `The other ${waiting.length} are`} on the way: usually ready within a few hours.`
+                : "Every trial has data."}
+            {todo.length > 0 && waiting.length > 0 && ` ${waiting.length} more on the way.`}
+          </p>
+        </div>
+        {todo.length > 0 && (
+          <Button disabled={run.isPending} onClick={() => run.mutate()}>
+            {run.isPending ? (
+              <Loader2 size={16} className="animate-spin" aria-hidden />
+            ) : (
+              <Sparkles size={16} aria-hidden />
+            )}
+            {run.isPending ? "Getting data…" : `Get data for ${todo.length === 1 ? "it" : `the ${todo.length}`}`}
+          </Button>
+        )}
+      </div>
+      {outcome && (
+        <p className="text-sm text-fg" aria-live="polite">
+          {outcome.queued.length > 0 && <>Queued: {links(outcome.queued)}. </>}
+          {outcome.needPdf.length > 0 && (
+            <>
+              No open-access full text for {links(outcome.needPdf)}: upload the paper’s PDF on its page.{" "}
+            </>
+          )}
+          {outcome.stopped && <span className="text-danger">Stopped: {outcome.stopped}</span>}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -602,7 +783,14 @@ function Notes({ c, onChange }: { c: CollectionDetail; onChange: () => void }) {
             Couldn’t add the note. Try again.
           </p>
         )}
-        <Button type="submit" size="sm" className="w-fit" disabled={!body.trim() || add.isPending}>
+        <Button
+          type="submit"
+          size="sm"
+          // Secondary while empty: a disabled primary reads as washed-out teal.
+          variant={body.trim() ? "default" : "secondary"}
+          className="w-fit"
+          disabled={!body.trim() || add.isPending}
+        >
           Add note
         </Button>
       </form>
