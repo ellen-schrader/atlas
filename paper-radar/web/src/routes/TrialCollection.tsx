@@ -307,14 +307,11 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
           aside={
             <div className="flex items-center gap-3">
               {inCollection.length > 0 && (
-                <button
-                  type="button"
-                  aria-pressed={editingTrials}
-                  onClick={() => setEditingTrials((e) => !e)}
-                  className="text-meta font-medium text-accent hover:underline"
-                >
-                  {editingTrials ? "Done" : "Edit"}
-                </button>
+                <EditToggle
+                  on={editingTrials}
+                  onToggle={() => setEditingTrials((e) => !e)}
+                  label="Edit the trials"
+                />
               )}
               <AddTrialMenu
                 c={c}
@@ -354,6 +351,23 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
       </div>
       {confirmDialog}
     </>
+  );
+}
+
+/** "Edit" / "Done": shows a list's remove buttons. A button like the ones
+ *  beside it (Add trial), not a bare link. */
+function EditToggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
+  return (
+    <Button
+      variant={on ? "secondary" : "ghost"}
+      size="sm"
+      aria-pressed={on}
+      aria-label={on ? "Done editing" : label}
+      onClick={onToggle}
+    >
+      {on ? <Check size={14} aria-hidden /> : <Pencil size={14} aria-hidden />}
+      {on ? "Done" : "Edit"}
+    </Button>
   );
 }
 
@@ -962,19 +976,16 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-h-8 items-center justify-between gap-2">
           <h3 className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
             Relevant
           </h3>
           {about.length > 0 && (
-            <button
-              type="button"
-              aria-pressed={editingList}
-              onClick={() => setEditingList((e) => !e)}
-              className="text-meta font-medium text-accent hover:underline"
-            >
-              {editingList ? "Done" : "Edit"}
-            </button>
+            <EditToggle
+              on={editingList}
+              onToggle={() => setEditingList((e) => !e)}
+              label="Edit the relevant papers"
+            />
           )}
         </div>
         <p className="sr-only" aria-live="polite">
