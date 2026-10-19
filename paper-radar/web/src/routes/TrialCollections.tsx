@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Layers, Loader2, Plus, Search, Sparkles } from "lucide-react";
 
 import { NewCollectionDialog } from "@/components/trials/CollectionForm";
+import { TrialsFeed } from "@/components/trials/TrialsFeed";
 import { RequireTrials, TherapySwatch, TrialsDisclaimer } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -220,6 +221,10 @@ function Collections() {
             />
           ))}
         </div>
+      )}
+
+      {collections.data && trials.data && !needle && !chip && (
+        <TrialsFeed teamId={team.id} collections={collections.data} trials={trials.data} />
       )}
 
       <TrialsDisclaimer />

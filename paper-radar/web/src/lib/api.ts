@@ -494,3 +494,16 @@ export async function startExtraction(teamId: string, trialId: string): Promise<
     body: JSON.stringify({ team_id: teamId }),
   });
 }
+
+export interface PubMedHint {
+  count: number;
+  /** How many of `count` were compared with the library (the most recent). */
+  checked: number;
+  not_in_lab: { pmid: string; title: string; journal: string | null; year: string | null; doi: string | null }[];
+  search_url: string;
+}
+
+/** PubMed papers naming this trial, and which the lab doesn't have. */
+export async function fetchPubMedHint(teamId: string, trialId: string): Promise<PubMedHint> {
+  return authedRequest(`/trials/${trialId}/pubmed?${new URLSearchParams({ team_id: teamId })}`);
+}
