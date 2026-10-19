@@ -2317,25 +2317,30 @@ def bibtex_import(
 
 
 def _enrich_imported(papers: list[tuple[str, str | None, str | None]]) -> None:
-    """Tag an imported batch, a few papers per Claude call. No-ops without an
-    Anthropic key; failures are logged, and the daily backfill tags what's left."""
+    """Tag the imported papers that aren't tagged yet, a few per Claude call.
+    No-ops without an Anthropic key; failures are logged, and the daily
+    backfill tags what's left."""
+    from .backfill_enrichment import tag_batch
+
     svc = service_client()
-    rows = [{"id": i, "title": t, "abstract": a} for i, t, a in papers if t or a]
+    ids = [paper_id for paper_id, _t, _a in papers]
+    rows: list[dict] = []
+    for start in range(0, len(ids), 100):
+        rows += (
+            svc.table("papers")
+            .select("id, title, abstract")
+            .in_("id", ids[start : start + 100])
+            .is_("enriched_at", "null")
+            .execute()
+            .data
+            or []
+        )
+    rows = [r for r in rows if r.get("title") or r.get("abstract")]
     for start in range(0, len(rows), enrichment.BATCH_SIZE):
-        chunk = rows[start : start + enrichment.BATCH_SIZE]
         try:
-            tags = enrichment.enrich_batch(chunk)
+            tag_batch(svc, rows[start : start + enrichment.BATCH_SIZE])
         except Exception as exc:  # noqa: BLE001
-            log.warning("bibtex import: tagging a batch of %d failed: %s", len(chunk), exc)
-            continue
-        now = datetime.now(UTC).isoformat()
-        for paper_id, paper_tags in tags.items():
-            try:
-                svc.table("papers").update({"tags": paper_tags, "enriched_at": now}).eq(
-                    "id", paper_id
-                ).is_("enriched_at", "null").execute()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("bibtex import: storing tags for %s failed: %s", paper_id, exc)
+            log.warning("bibtex import: tagging a batch failed: %s", exc)
 
 
 def _embed_batch(papers: list[tuple[str, str | None, str | None]]) -> None:

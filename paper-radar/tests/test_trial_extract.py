@@ -90,6 +90,18 @@ def test_manuscript_xml_takes_the_latest_version(monkeypatch):
     assert asked[-1] == "PMC9.2/PMC9.2.xml"
 
 
+def test_manuscript_xml_never_takes_an_older_version_for_the_latest(monkeypatch):
+    def get(path, limit):
+        if path == "PMC9.1/PMC9.1.json":
+            return _meta("PMC9")
+        if path == "PMC9.2/PMC9.2.json":
+            raise te._Unavailable("timed out")  # version 2 may exist
+        return b"<article>v1</article>"
+
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9") is None
+
+
 def test_manuscript_xml_only_takes_what_may_be_reused(monkeypatch):
     for meta in (
         _meta("PMC9", is_retracted=True),
@@ -564,15 +576,25 @@ def test_get_data_leaves_trials_with_data_alone(monkeypatch):
 
     def open_access(_team, trial):
         looked_up.append(trial)
-        return {"fetched": ["Paper"] if trial == "open" else [], "closed": [], "have": []}
+        return {
+            "fetched": ["Paper"] if trial == "open" else [],
+            "closed": [],
+            "have": [],
+            "unconfirmed": ["Suggested"] if trial == "waiting" else [],
+        }
 
     monkeypatch.setattr(te, "fetch_open_access", open_access)
     queued = []
     monkeypatch.setattr(te, "queue", lambda _team, trial: queued.append(trial) or trial != "busy")
-    out = te.get_data("lab", ["has", "files", "open", "closed", "busy"])
-    assert out == {"queued": ["files", "open"], "need_pdf": ["closed"], "skipped": ["has", "busy"]}
+    out = te.get_data("lab", ["has", "files", "open", "closed", "busy", "waiting"])
+    assert out == {
+        "queued": ["files", "open"],
+        "need_pdf": ["closed"],
+        "unconfirmed": ["waiting"],  # a paper to confirm, not a PDF to find
+        "skipped": ["has", "busy"],
+    }
     assert "has" not in queued  # re-extracting would cost money and wipe the checks
-    assert sorted(looked_up) == ["closed", "open"]  # only trials with no files
+    assert sorted(looked_up) == ["closed", "open", "waiting"]  # only trials with no files
 
 
 def _lab_has(monkeypatch, trial_ids):
@@ -608,7 +630,7 @@ def test_get_data_endpoint_queues_in_one_request(monkeypatch):
         "/trials/get-data", json={"team_id": "lab", "trial_ids": ["t1", "t2", "t1"]}, headers=AUTH
     )
     assert r.status_code == 200
-    assert r.json() == {"queued": ["t1", "t2"], "need_pdf": [], "skipped": []}
+    assert r.json() == {"queued": ["t1", "t2"], "need_pdf": [], "unconfirmed": [], "skipped": []}
 
 
 def test_get_data_endpoint_says_when_the_lab_is_at_its_cap(monkeypatch):

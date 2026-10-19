@@ -414,9 +414,10 @@ def test_link_papers_by_pubmed(monkeypatch):
     def naming(nct):
         asked.append(nct)
         return 3, [
-            SimpleNamespace(doi="10.1/os"),
-            SimpleNamespace(doi="10.1/sugg"),
-            SimpleNamespace(doi="10.1/rej"),
+            SimpleNamespace(doi="10.1/os", pubtypes=("Journal Article",)),
+            SimpleNamespace(doi="10.1/sugg", pubtypes=()),
+            SimpleNamespace(doi="10.1/rej", pubtypes=()),
+            SimpleNamespace(doi="10.1/review", pubtypes=("Journal Article", "Review")),
         ]
 
     monkeypatch.setattr(trial_links.pubmed, "papers_naming", naming)
@@ -426,19 +427,21 @@ def test_link_papers_by_pubmed(monkeypatch):
         {"id": "p2", "title": "OlympiA final", "abstract": None, "doi": "10.1/sugg"},
         {"id": "p3", "title": "Rejected", "abstract": None, "doi": "10.1/rej"},
         {"id": "p4", "title": "Unrelated", "abstract": None, "doi": "10.1/other"},
+        {"id": "p5", "title": "A review", "abstract": None, "doi": "10.1/review"},
     ]
     linked = trial_links.link_papers("lab", papers, use_pubmed=True)
 
     assert asked == ["NCT02032823"]  # not the trial the lab took off its list
     (links,) = [rows for name, rows in svc.upserts if name == "paper_trials"]
     assert [(r["paper_id"], r["source"], r["status"]) for r in links] == [
-        ("p1", "pubmed", "auto")  # DOI matched whatever its case
+        ("p1", "pubmed", "auto"),  # DOI matched whatever its case
+        ("p5", "pubmed", "suggested"),  # a review isn't the trial's results
     ]
     # The suggestion PubMed backs up becomes automatic, only while still a suggestion.
     [(table, fields, filters)] = svc.updates
     assert table == "paper_trials" and fields == {"source": "pubmed", "status": "auto"}
     assert ("paper_id", "p2") in filters and ("status", "suggested") in filters
-    assert linked == trial_links.Linked(2, {"t-oly"})
+    assert linked == trial_links.Linked(3, {"t-oly"})
     # Without use_pubmed (one posted paper), PubMed isn't asked.
     monkeypatch.setattr(trial_links.pubmed, "papers_naming", lambda _n: pytest.fail("no PubMed"))
     trial_links.link_papers("lab", papers)
@@ -453,8 +456,8 @@ def test_pubmed_dois_stops_asking_once_pubmed_fails(monkeypatch):
 
     monkeypatch.setattr(trial_links.pubmed, "papers_naming", down)
     lookup = trial_links.Lookup()
-    assert trial_links.pubmed_dois("NCT00000001", lookup) == set()
-    assert trial_links.pubmed_dois("NCT00000002", lookup) == set()
+    assert trial_links.pubmed_dois("NCT00000001", lookup) == {}
+    assert trial_links.pubmed_dois("NCT00000002", lookup) == {}
     assert calls == ["NCT00000001"]
     assert lookup.pubmed == {}  # not remembered: the next run asks again
 
@@ -675,3 +678,67 @@ def test_lab_trials_match_the_labs_short_name_too():
     )
     trials = trial_links._lab_trials(svc, "lab")
     assert trials["NCT02620280"]["names"] == ["NeoTRIP", "NeoTRIPaPDL1"]
+
+
+def test_a_malformed_nct_id_doesnt_stop_pubmed_for_the_rest(monkeypatch):
+    def naming(nct):
+        if nct == "nct1":
+            raise ValueError("not an NCT ID")
+        return 1, [SimpleNamespace(doi="10.1/x", pubtypes=())]
+
+    monkeypatch.setattr(trial_links.pubmed, "papers_naming", naming)
+    monkeypatch.setattr(trial_links, "_PUBMED_PAUSE", 0)
+    lookup = trial_links.Lookup()
+    assert trial_links.pubmed_dois("nct1", lookup) == {}
+    assert trial_links.pubmed_dois("NCT00000002", lookup) == {"10.1/x": False}
+
+
+def _pubmed_lab(monkeypatch, listed):
+    """A lab with trials t1..t4 whose PubMed lists are `listed` {trial: [doi]}."""
+    svc = _UpdatingSvc()
+    monkeypatch.setattr(trial_links, "service_client", lambda: svc)
+    trials = {f"NCT0000000{i}": {"id": f"t{i}", "nct_id": f"NCT0000000{i}"} for i in range(1, 5)}
+    monkeypatch.setattr(trial_links, "_lab_trials", lambda _s, _t: trials)
+    monkeypatch.setattr(trial_links, "_decided", lambda *_a: {})
+    monkeypatch.setattr(trial_links, "_removed", lambda *_a: set())
+    asked = []
+
+    def naming(nct):
+        asked.append(nct)
+        dois = listed.get(trials[nct]["id"], [])
+        return len(dois), [SimpleNamespace(doi=d, pubtypes=()) for d in dois]
+
+    monkeypatch.setattr(trial_links.pubmed, "papers_naming", naming)
+    monkeypatch.setattr(trial_links, "_PUBMED_PAUSE", 0)
+    return svc, asked
+
+
+def test_a_paper_listed_under_several_of_the_labs_trials_is_only_suggested(monkeypatch):
+    pooled = ["10.1/pooled"]
+    svc, _ = _pubmed_lab(monkeypatch, {"t1": pooled, "t2": pooled, "t3": pooled})
+    paper = {"id": "p", "title": "Pooled analysis", "abstract": None, "doi": "10.1/pooled"}
+    linked = trial_links.link_papers("lab", [paper], use_pubmed=True)
+    (links,) = [rows for name, rows in svc.upserts if name == "paper_trials"]
+    assert {r["status"] for r in links} == {"suggested"} and len(links) == 3
+    assert linked.trials == set()  # nothing fetched, nothing queued
+
+
+def test_a_new_trial_asks_pubmed_about_that_trial_only(monkeypatch):
+    _, asked = _pubmed_lab(monkeypatch, {})
+    paper = {"id": "p", "title": "x", "abstract": None, "doi": "10.1/x"}
+    trial_links.link_papers("lab", [paper], use_pubmed=True, pubmed_trials={"t2"})
+    assert asked == ["NCT00000002"]
+
+
+def test_fetch_full_texts_takes_a_few_trials_at_a_time_and_stamps_them(monkeypatch):
+    from api import trial_extract
+
+    svc = _FakeSvc()
+    monkeypatch.setattr(trial_links, "service_client", lambda: svc)
+    monkeypatch.setattr(trial_links, "FETCH_PER_RUN", 2)
+    done = []
+    monkeypatch.setattr(trial_extract, "fetch_open_access", lambda team, t: done.append(t))
+    trial_links.fetch_full_texts("lab", {"t3", "t1", "t2"})
+    assert done == ["t1", "t2"]  # the daily job takes the rest
+    stamped = [rows["trial_id"] for name, rows in svc.upserts if name == "trial_facts"]
+    assert stamped == ["t1", "t2"]

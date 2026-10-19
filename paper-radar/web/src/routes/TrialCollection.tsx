@@ -526,7 +526,13 @@ function dataState(t: LabTrial): string {
   }
 }
 
-type Outcome = { queued: LabTrial[]; needPdf: LabTrial[]; stopped: string | null };
+type Outcome = {
+  queued: LabTrial[];
+  needPdf: LabTrial[];
+  /** Only suggested papers: one to confirm before Atlas can fetch it. */
+  unconfirmed: LabTrial[];
+  stopped: string | null;
+};
 
 /** How many of the collection's trials have data, and one action to get the
  *  rest: the server fetches each one's open-access full text, then queues it
@@ -558,7 +564,7 @@ function ReadyBar({
 
   const run = useMutation({
     mutationFn: async (): Promise<Outcome> => {
-      const out: Outcome = { queued: [], needPdf: [], stopped: null };
+      const out: Outcome = { queued: [], needPdf: [], unconfirmed: [], stopped: null };
       const byId = new Map(todo.map((t) => [t.id, t]));
       const pick = (ids: string[]) => ids.flatMap((id) => byId.get(id) ?? []);
       for (let i = 0; i < todo.length; i += MAX_GET_DATA) {
@@ -567,6 +573,7 @@ function ReadyBar({
           // Skipped: queued or running meanwhile, which is what we wanted.
           out.queued.push(...pick([...r.queued, ...r.skipped]));
           out.needPdf.push(...pick(r.need_pdf));
+          out.unconfirmed.push(...pick(r.unconfirmed ?? []));
         } catch (e) {
           // The lab's monthly cap (402) or the hourly limit (429) ends the run.
           out.stopped = e instanceof ApiError ? e.message : "Something went wrong. Try again.";
@@ -631,6 +638,12 @@ function ReadyBar({
           {outcome.needPdf.length > 0 && (
             <>
               No free full text for {links(outcome.needPdf)}: upload the paper’s PDF on its page.{" "}
+            </>
+          )}
+          {outcome.unconfirmed.length > 0 && (
+            <>
+              Only suggested papers for {links(outcome.unconfirmed)}: confirm the right one on its
+              page, then get data again.{" "}
             </>
           )}
           {outcome.stopped && <span className="text-danger">Stopped: {outcome.stopped}</span>}

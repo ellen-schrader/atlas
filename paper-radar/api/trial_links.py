@@ -6,12 +6,17 @@ Two kinds of link (public.paper_trials):
     trial, it is added to the lab's list (source 'paper'). Also 'auto': PubMed
     lists one of the lab's trials on the paper's record (source 'pubmed'),
     which finds papers whose abstract doesn't name it; checked when the whole
-    lab is linked (an import, a new trial, the daily run), not per post.
+    lab is linked (an import, the daily run; a new trial asks about that trial
+    only), not per post. A review, meta-analysis or a paper PubMed lists
+    under several of the lab's trials (a pooled analysis) is only suggested:
+    its numbers aren't one trial's results.
   * 'suggested': the trial's short name appears in the paper's title. Waits for
     a person to confirm or reject it, unless PubMed confirms it.
 
-A trial that gains an automatic link has its open-access full text fetched
-straight away (api/trial_extract.fetch_open_access).
+A trial that gains an automatic link has its free full text fetched
+(api/trial_extract.fetch_open_access), up to FETCH_PER_RUN trials at a time:
+a first file queues the trial's (paid) extraction, so the rest wait for the
+daily job, which takes 20 a day.
 
 A link a person has already decided on is never touched again. Everything here
 runs only for labs where the clinical trials feature is on (for the lab or for
@@ -26,8 +31,10 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 from paper_radar.trials import FEATURE, ctgov, pubmed
@@ -41,6 +48,10 @@ log = logging.getLogger(__name__)
 _MIN_ACRONYM = 4  # shorter names ("BEST", "ACE" aside) match too much
 # Keyless E-utilities allow 3 requests a second; each trial is two.
 _PUBMED_PAUSE = 0.7
+# Not one trial's results: suggested, never linked automatically.
+_POOLED_TYPES = {"Review", "Systematic Review", "Meta-Analysis", "Editorial", "Comment"}
+_MAX_PUBMED_TRIALS = 2  # a paper listed under more of the lab's trials is pooled
+FETCH_PER_RUN = 20  # trials whose full text is fetched per linking pass
 
 
 class Linked(NamedTuple):
@@ -133,25 +144,31 @@ class Lookup:
     def __init__(self) -> None:
         self.answers: dict[str, str | None] = {}
         self.down = False
-        self.pubmed: dict[str, set[str]] = {}  # NCT ID → DOIs PubMed lists it on
+        # NCT ID → {DOI: whether it's a review/meta-analysis} PubMed lists it on
+        self.pubmed: dict[str, dict[str, bool]] = {}
         self.pubmed_down = False
 
 
-def pubmed_dois(nct_id: str, lookup: Lookup) -> set[str]:
-    """DOIs (lowercase) of the papers PubMed lists this trial on. Empty if
-    PubMed fails; the rest of the run doesn't ask again, and the next run does."""
+def pubmed_dois(nct_id: str, lookup: Lookup) -> dict[str, bool]:
+    """DOIs (lowercase) of the papers PubMed lists this trial on, each with
+    whether it's a review or meta-analysis. Empty if PubMed fails (the rest of
+    the run doesn't ask again; the next run does) or the ID is malformed."""
     if nct_id in lookup.pubmed:
         return lookup.pubmed[nct_id]
     if lookup.pubmed_down:
-        return set()
+        return {}
     try:
         _, papers = pubmed.papers_naming(nct_id)
-    except (pubmed.PubMedError, ValueError) as exc:
+    except ValueError as exc:  # this trial's ID, not PubMed: the others still ask
+        log.warning("not asking PubMed about %r: %s", nct_id, exc)
+        lookup.pubmed[nct_id] = {}
+        return {}
+    except pubmed.PubMedError as exc:
         log.warning("PubMed failed on %s; skipping it this run: %s", nct_id, exc)
         lookup.pubmed_down = True
-        return set()
+        return {}
     time.sleep(_PUBMED_PAUSE)
-    lookup.pubmed[nct_id] = {p.doi for p in papers if p.doi}
+    lookup.pubmed[nct_id] = {p.doi: bool(_POOLED_TYPES & set(p.pubtypes)) for p in papers if p.doi}
     return lookup.pubmed[nct_id]
 
 
@@ -197,10 +214,11 @@ def link_papers(
     *,
     lookup: Lookup | None = None,
     use_pubmed: bool = False,
+    pubmed_trials: set[str] | None = None,
 ) -> Linked:
     """Link these lab papers ({id, title, abstract, doi}) to trials. With
     `use_pubmed`, also by the lab's trials' PubMed records (two requests per
-    trial, so for whole-lab runs)."""
+    trial, so for whole-lab runs), or only these trials' (`pubmed_trials`)."""
     svc = service_client()
     papers = [p for p in papers if p.get("id")]
     if not papers:
@@ -216,14 +234,19 @@ def link_papers(
         for pattern in map(acronym_pattern, t.get("names") or [t.get("acronym")])
         if pattern
     ]
-    # DOI → the lab's trials PubMed lists the paper under.
+    # DOI → the lab's trials PubMed lists the paper under; DOIs that aren't
+    # one trial's report (a review, or listed under several of the lab's trials).
     by_doi: dict[str, set[str]] = {}
+    pooled: set[str] = set()
     if use_pubmed:
         for nct, t in trials.items():
-            if t["id"] in removed:
+            if t["id"] in removed or (pubmed_trials is not None and t["id"] not in pubmed_trials):
                 continue
-            for doi in pubmed_dois(nct, lookup):
+            for doi, review in pubmed_dois(nct, lookup).items():
                 by_doi.setdefault(doi, set()).add(t["id"])
+                if review:
+                    pooled.add(doi)
+        pooled |= {doi for doi, ts in by_doi.items() if len(ts) > _MAX_PUBMED_TRIALS}
 
     new_links: dict[tuple[str, str], dict[str, Any]] = {}
     confirmed: set[tuple[str, str]] = set()  # suggestions PubMed backs up
@@ -243,11 +266,15 @@ def link_papers(
             key = (p["id"], trial_id)
             if key not in have:
                 new_links[key] = {"source": "nct_in_abstract", "status": "auto"}
-        for trial_id in by_doi.get((p.get("doi") or "").lower(), ()):
+        doi = (p.get("doi") or "").lower()
+        for trial_id in by_doi.get(doi, ()):
             key = (p["id"], trial_id)
             if key in new_links:
                 continue
-            if key not in have:
+            if doi in pooled:  # a person decides whether it reports this trial
+                if key not in have:
+                    new_links[key] = {"source": "pubmed", "status": "suggested"}
+            elif key not in have:
                 new_links[key] = {"source": "pubmed", "status": "auto"}
             elif have[key] == "suggested":
                 confirmed.add(key)
@@ -275,13 +302,25 @@ def link_papers(
 
 
 def fetch_full_texts(team_id: str, trial_ids: Iterable[str]) -> None:
-    """Fetch the open-access full text of trials that just gained linked
-    papers, so nobody has to click "Fetch open access". Free; never raises."""
+    """Fetch the free full text of trials that just gained linked papers, so
+    nobody has to click "Fetch open access". At most FETCH_PER_RUN trials:
+    each first file queues a paid extraction, and the daily job (20 a day)
+    takes the rest. Stamps each as checked, as the daily job does, so it isn't
+    looked up twice. Never raises."""
     from . import trial_extract  # lazy: trial_extract is heavy, and only needed here
 
-    for trial_id in sorted(trial_ids):
+    svc = service_client()
+    for trial_id in sorted(trial_ids)[:FETCH_PER_RUN]:
         try:
             trial_extract.fetch_open_access(team_id, trial_id)
+            svc.table("trial_facts").upsert(
+                {
+                    "team_id": team_id,
+                    "trial_id": trial_id,
+                    "open_access_checked_at": datetime.now(UTC).isoformat(),
+                },
+                on_conflict="team_id,trial_id",
+            ).execute()
         except Exception as exc:  # noqa: BLE001 — one trial must not stop the rest
             log.warning("open access for trial %s failed: %s", trial_id, exc)
 
@@ -301,7 +340,12 @@ def link_paper(team_id: str, paper_id: str) -> None:
             .data
         )
         linked = link_papers(team_id, rows or [])
-        fetch_full_texts(team_id, linked.trials)
+        if linked.trials:
+            # Off this thread: posting through Claude (MCP) waits for link_paper,
+            # and a full text can take a while to fetch.
+            threading.Thread(
+                target=fetch_full_texts, args=(team_id, linked.trials), daemon=True
+            ).start()
     except Exception as exc:  # noqa: BLE001 — a background task must not raise
         log.warning("linking paper %s to trials failed: %s", paper_id, exc)
         return
@@ -312,13 +356,19 @@ def _lab_papers(svc, team_id: str) -> list[dict[str, Any]]:
     return lab_papers(svc, team_id, columns="id, title, abstract, doi")
 
 
-def link_lab(team_id: str) -> None:
-    """Background task after a trial is added to a lab, or many papers at once
-    (a BibTeX import): one pass over all the lab's papers."""
+def link_lab(team_id: str, trial_id: str | None = None) -> None:
+    """Background task after a trial is added to a lab (`trial_id`: PubMed is
+    asked about that one only), or many papers at once (a BibTeX import): one
+    pass over all the lab's papers."""
     try:
         if not team_active(team_id):
             return
-        linked = link_papers(team_id, _lab_papers(service_client(), team_id), use_pubmed=True)
+        linked = link_papers(
+            team_id,
+            _lab_papers(service_client(), team_id),
+            use_pubmed=True,
+            pubmed_trials={trial_id} if trial_id else None,
+        )
         fetch_full_texts(team_id, linked.trials)
     except Exception as exc:  # noqa: BLE001 — a background task must not raise
         log.warning("linking lab %s papers to trials failed: %s", team_id, exc)

@@ -573,7 +573,7 @@ export const MAX_GET_DATA = 30;
 export async function getTrialsData(
   teamId: string,
   trialIds: string[],
-): Promise<{ queued: string[]; need_pdf: string[]; skipped: string[] }> {
+): Promise<{ queued: string[]; need_pdf: string[]; unconfirmed?: string[]; skipped: string[] }> {
   return authedRequest("/trials/get-data", {
     method: "POST",
     body: JSON.stringify({ team_id: teamId, trial_ids: trialIds }),
