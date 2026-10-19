@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -33,6 +34,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from paper_radar.config import get_settings
+from paper_radar.trials import jats
 from paper_radar.trials.extraction import CONTEXT_LABELS, DIMENSIONS, Extraction
 
 from .supa import service_client
@@ -237,11 +239,12 @@ def _documents(svc, sources: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                 "data": base64.standard_b64encode(data).decode("ascii"),
             }
         else:
-            source = {
-                "type": "text",
-                "media_type": "text/plain",
-                "data": data.decode("utf-8", "replace"),
-            }
+            # Trimmed to the article's trial content: a third of the tokens.
+            try:
+                text = jats.to_text(data)
+            except jats.NotJats:
+                text = data.decode("utf-8", "replace")
+            source = {"type": "text", "media_type": "text/plain", "data": text}
         blocks.append({"type": "document", "source": source, "title": title})
     return blocks, listing
 
@@ -264,86 +267,121 @@ def _tool() -> dict[str, Any]:
     }
 
 
-def _ask(client, messages: list[dict[str, Any]]):
-    """One request; the final message. Raises ExtractionError."""
+def request(
+    registry: dict[str, Any], blocks: list[dict[str, Any]], listing: list[str]
+) -> dict[str, Any]:
+    """The request's parameters, the same for "now" and for a batch. No cache
+    write: one request reads the documents once, and a cache write would cost
+    1.25× for a read that never comes."""
+    return {
+        "model": MODEL,
+        "max_tokens": 32000,
+        "output_config": {"effort": "high"},
+        "system": SYSTEM,
+        "tools": [_tool()],
+        # Opus 5.5 can't be forced to a tool; the prompt asks for it.
+        "tool_choice": {"type": "auto"},
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    *blocks,
+                    {
+                        "type": "text",
+                        "text": (
+                            "Documents:\n"
+                            + "\n".join(listing)
+                            + f"\n\n<registry_record>\n{registry_digest(registry)}\n"
+                            "</registry_record>"
+                        ),
+                    },
+                    {
+                        "type": "text",
+                        "text": f"Extract this trial's data and record it with {TOOL}.",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def answer(msg: Any) -> tuple[Extraction | None, Any, str | None]:
+    """From a final message: (the extraction, the tool call, why not).
+    Exactly one of extraction and reason is set; the tool call is there when
+    Claude made one (a schema error can be sent back to it)."""
+    if msg.stop_reason == "refusal":
+        return None, None, "Claude declined to read these documents."
+    if msg.stop_reason == "max_tokens":
+        return None, None, "Claude's answer was cut off. Try again with fewer documents."
+    call = next((b for b in msg.content if b.type == "tool_use" and b.name == TOOL), None)
+    if call is None:
+        return None, None, "Claude didn't record an extraction. Try again."
+    try:
+        return Extraction.model_validate(call.input), call, None
+    except ValidationError as exc:
+        return None, call, f"That didn't match the schema:\n{exc}"
+
+
+def _ask(client, params: dict[str, Any]):
+    """One request, streamed (a long, document-heavy request would otherwise
+    risk the HTTP timeout); a refusal falls back to another model server-side
+    (not available in batches)."""
     import anthropic
 
     try:
-        # Streamed: a long, document-heavy request would otherwise risk the
-        # HTTP timeout. A refusal falls back to another model server-side.
         with client.beta.messages.stream(
-            model=MODEL,
-            max_tokens=32000,
-            output_config={"effort": "high"},
+            **params,
             betas=["server-side-fallback-2026-06-01"],
             fallbacks=[{"model": "claude-opus-4-8"}],
-            system=SYSTEM,
-            tools=[_tool()],
-            # Opus 5.5 can't be forced to a tool; the prompt asks for it.
-            tool_choice={"type": "auto"},
-            messages=messages,
         ) as stream:
-            msg = stream.get_final_message()
+            return stream.get_final_message()
     except anthropic.BadRequestError as exc:
         raise ExtractionError(f"The API refused the request: {exc.message}") from exc
     except anthropic.APIError as exc:
         raise ExtractionError("The Claude API failed. Try again in a while.") from exc
-    if msg.stop_reason == "refusal":
-        raise ExtractionError("Claude declined to read these documents.")
-    if msg.stop_reason == "max_tokens":
-        raise ExtractionError("Claude's answer was cut off. Try again with fewer documents.")
-    return msg
 
 
-def extract(
-    registry: dict[str, Any], blocks: list[dict[str, Any]], listing: list[str]
-) -> tuple[Extraction, float, str]:
-    """Claude's extraction, its rough cost in dollars, and the model that answered.
-    Raises ExtractionError."""
+def client():
     settings = get_settings()
     if not settings.anthropic_api_key:
         raise ExtractionError("Extraction isn't set up (no Anthropic key).")
     import anthropic
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "user",
-            "content": [
-                *blocks,
-                {
-                    "type": "text",
-                    "text": (
-                        "Documents:\n"
-                        + "\n".join(listing)
-                        + f"\n\n<registry_record>\n{registry_digest(registry)}\n"
-                        "</registry_record>"
-                    ),
-                    # A retry reads the documents from cache.
-                    "cache_control": {"type": "ephemeral"},
-                },
-                {"type": "text", "text": f"Extract this trial's data and record it with {TOOL}."},
-            ],
-        }
-    ]
+    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+
+def extract(
+    registry: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    listing: list[str],
+    on_cost: Any = None,
+) -> tuple[Extraction, float, str]:
+    """Extract now, at full price: the extraction, its cost in dollars and the
+    model that answered. `on_cost(usd, model)` hears about every paid call, so
+    the spend is recorded even when the answer is no good. Raises
+    ExtractionError."""
+    c = client()
+    params = request(registry, blocks, listing)
     cost = 0.0
     for attempt in range(2):
-        msg = _ask(client, messages)
-        cost += _cost(msg.usage)
+        msg = _ask(c, params)
+        usd = _cost(msg.usage)
+        cost += usd
+        if on_cost:
+            on_cost(usd, msg.model)
         _log_usage(msg.usage, attempt)
-        call = next((b for b in msg.content if b.type == "tool_use" and b.name == TOOL), None)
-        if call is None:
-            raise ExtractionError("Claude didn't record an extraction. Try again.")
-        try:
-            return Extraction.model_validate(call.input), round(cost, 4), msg.model
-        except ValidationError as exc:
-            if attempt == 1:
-                raise ExtractionError(
-                    "Claude's answer didn't fit the expected shape. Try again."
-                ) from exc
-            # Same conversation, so the documents come from cache: tell Claude
-            # what was wrong and let it record again.
-            messages += [
+        result, call, why = answer(msg)
+        if result is not None:
+            return result, round(cost, 4), msg.model
+        if call is None or attempt == 1:
+            raise ExtractionError(
+                why if call is None else "Claude's answer didn't fit the expected shape. Try again."
+            )
+        # Tell Claude what was wrong and let it record again.
+        params = {
+            **params,
+            "messages": [
+                *params["messages"],
                 {"role": "assistant", "content": msg.content},
                 {
                     "role": "user",
@@ -352,11 +390,12 @@ def extract(
                             "type": "tool_result",
                             "tool_use_id": call.id,
                             "is_error": True,
-                            "content": f"That didn't match the schema:\n{exc}\nRecord it again.",
+                            "content": f"{why}\nRecord it again.",
                         }
                     ],
                 },
-            ]
+            ],
+        }
     raise AssertionError("unreachable")
 
 
@@ -411,61 +450,205 @@ def claim(team_id: str, trial_id: str) -> bool:
     return bool(taken)
 
 
-def run(team_id: str, trial_id: str) -> None:
-    """Background task after claim(). Always ends in 'done' or 'failed'."""
-    svc = service_client()
-    where = {"team_id": team_id, "trial_id": trial_id}
+# --- budget and bookkeeping ---------------------------------------------------------
 
-    def finish(fields: dict[str, Any]) -> None:
-        q = svc.table("trial_facts").update(fields)
-        for k, v in where.items():
-            q = q.eq(k, v)
-        q.execute()
 
+def monthly_cap() -> float:
+    """Dollars each lab may spend on extraction per calendar month."""
     try:
-        sources = (
-            svc.table("trial_sources")
-            .select("id, storage_path, filename, kind, media_type")
-            .eq("team_id", team_id)
-            .eq("trial_id", trial_id)
-            .order("kind")
-            .order("added_at")
-            .execute()
-            .data
-            or []
+        return float(os.environ.get("TRIAL_EXTRACTION_MONTHLY_USD", "10"))
+    except ValueError:
+        return 10.0
+
+
+def spent_this_month(svc, team_id: str) -> float:
+    start = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    rows = (
+        svc.table("trial_extraction_spend")
+        .select("usd")
+        .eq("team_id", team_id)
+        .gte("spent_at", start.isoformat())
+        .execute()
+        .data
+        or []
+    )
+    return sum(float(r["usd"]) for r in rows)
+
+
+def over_budget(svc, team_id: str) -> str | None:
+    """Why the lab can't extract right now, or None."""
+    cap = monthly_cap()
+    if spent_this_month(svc, team_id) >= cap:
+        return f"This month's extraction budget (${cap:.0f}) is used. It resets on the 1st."
+    return None
+
+
+def record_spend(svc, team_id: str, trial_id: str, usd: float, model: str | None, mode: str):
+    svc.table("trial_extraction_spend").insert(
+        {"team_id": team_id, "trial_id": trial_id, "usd": usd, "model": model, "mode": mode}
+    ).execute()
+
+
+def load(svc, team_id: str, trial_id: str):
+    """(sources, registry, content blocks, listing) for a trial. Raises
+    ExtractionError when there's nothing to read."""
+    sources = (
+        svc.table("trial_sources")
+        .select("id, storage_path, filename, kind, media_type")
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .order("kind")
+        .order("added_at")
+        .execute()
+        .data
+        or []
+    )
+    if not sources:
+        raise ExtractionError("Add the trial's papers first: upload a PDF or fetch open access.")
+    registry = (svc.table("trials").select("registry").eq("id", trial_id).execute().data or [{}])[
+        0
+    ].get("registry") or {}
+    blocks, listing = _documents(svc, sources)
+    return sources, registry, blocks, listing
+
+
+def update_facts(svc, team_id: str, trial_id: str, fields: dict[str, Any]) -> None:
+    svc.table("trial_facts").update(fields).eq("team_id", team_id).eq(
+        "trial_id", trial_id
+    ).execute()
+
+
+def store(
+    svc,
+    team_id: str,
+    trial_id: str,
+    result: Extraction,
+    model: str,
+    cost: float,
+    sources: list[dict[str, Any]],
+    mode: str,
+) -> None:
+    """Save a finished extraction. It replaces the values people checked: clear
+    the checks first, so no moment shows old "verified" marks on new values."""
+    svc.table("trial_fact_reviews").delete().eq("team_id", team_id).eq(
+        "trial_id", trial_id
+    ).execute()
+    update_facts(
+        svc,
+        team_id,
+        trial_id,
+        {
+            "extraction": result.model_dump(mode="json"),
+            "extraction_status": "done",
+            "extraction_error": None,
+            "extracted_at": datetime.now(UTC).isoformat(),
+            "extraction_model": model,
+            "extraction_cost_usd": cost,
+            "extraction_sources": [src["id"] for src in sources],
+            "extraction_mode": mode,
+            "extraction_batch_id": None,
+            "extraction_attempts": 0,
+        },
+    )
+
+
+def run(team_id: str, trial_id: str) -> None:
+    """ "Extract now": background task after claim(). Always ends in 'done' or
+    'failed'."""
+    svc = service_client()
+    try:
+        reason = over_budget(svc, team_id)
+        if reason:
+            raise ExtractionError(reason)
+        sources, registry, blocks, listing = load(svc, team_id, trial_id)
+        result, cost, model = extract(
+            registry,
+            blocks,
+            listing,
+            on_cost=lambda usd, m: record_spend(svc, team_id, trial_id, usd, m, "now"),
         )
-        if not sources:
-            raise ExtractionError(
-                "Add the trial's papers first: upload a PDF or fetch open access."
-            )
-        registry = (
-            svc.table("trials").select("registry").eq("id", trial_id).execute().data or [{}]
-        )[0].get("registry") or {}
-        blocks, listing = _documents(svc, sources)
-        result, cost, model = extract(registry, blocks, listing)
-        # A new extraction replaces the values people checked: clear the checks
-        # first, so no moment shows old "verified" marks on new values.
-        svc.table("trial_fact_reviews").delete().eq("team_id", team_id).eq(
-            "trial_id", trial_id
-        ).execute()
-        finish(
-            {
-                "extraction": result.model_dump(mode="json"),
-                "extraction_status": "done",
-                "extraction_error": None,
-                "extracted_at": datetime.now(UTC).isoformat(),
-                "extraction_model": model,
-                "extraction_cost_usd": cost,
-                "extraction_sources": [src["id"] for src in sources],
-            }
-        )
+        store(svc, team_id, trial_id, result, model, cost, sources, "now")
     except ExtractionError as exc:
-        finish({"extraction_status": "failed", "extraction_error": str(exc)})
+        update_facts(
+            svc, team_id, trial_id, {"extraction_status": "failed", "extraction_error": str(exc)}
+        )
     except Exception as exc:  # noqa: BLE001 — a background task must end the run
         log.exception("extraction for trial %s in lab %s failed", trial_id, team_id)
-        finish(
+        update_facts(
+            svc,
+            team_id,
+            trial_id,
             {
                 "extraction_status": "failed",
                 "extraction_error": f"Something went wrong ({type(exc).__name__}).",
+            },
+        )
+
+
+def queue(team_id: str, trial_id: str) -> bool:
+    """Queue for the next batch (half price, within hours). False if it's
+    already queued, in a batch or running."""
+    svc = service_client()
+    svc.table("trial_facts").upsert(
+        {"team_id": team_id, "trial_id": trial_id},
+        on_conflict="team_id,trial_id",
+        ignore_duplicates=True,
+    ).execute()
+    stale = (datetime.now(UTC) - STALE_RUN).strftime("%Y-%m-%dT%H:%M:%SZ")
+    taken = (
+        svc.table("trial_facts")
+        .update(
+            {
+                "extraction_status": "queued",
+                "extraction_queued_at": datetime.now(UTC).isoformat(),
+                "extraction_error": None,
+                "extraction_attempts": 0,
+                "extraction_mode": "batch",
             }
         )
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .or_(
+            "extraction_status.is.null,extraction_status.in.(done,failed),"
+            f"and(extraction_status.eq.running,extraction_started_at.lt.{stale})"
+        )
+        .execute()
+        .data
+    )
+    return bool(taken)
+
+
+# --- open access, daily ------------------------------------------------------------------
+
+
+def fetch_missing_open_access(teams: set[str], limit: int = 20) -> int:
+    """For trials with linked papers but no sources yet, fetch their open-access
+    full text (which queues them for extraction). Returns trials fetched for."""
+    svc = service_client()
+    links = (
+        svc.table("paper_trials")
+        .select("team_id, trial_id")
+        .in_("team_id", sorted(teams))
+        .in_("status", ["auto", "confirmed"])
+        .execute()
+        .data
+        or []
+    )
+    have = {
+        (r["team_id"], r["trial_id"])
+        for r in svc.table("trial_sources")
+        .select("team_id, trial_id")
+        .in_("team_id", sorted(teams))
+        .execute()
+        .data
+        or []
+    }
+    todo = sorted({(r["team_id"], r["trial_id"]) for r in links} - have)[:limit]
+    n = 0
+    for team_id, trial_id in todo:
+        try:
+            if fetch_open_access(team_id, trial_id)["fetched"]:
+                n += 1
+        except Exception as exc:  # noqa: BLE001 — one trial must not stop the rest
+            log.warning("open access for trial %s failed: %s", trial_id, exc)
+    return n

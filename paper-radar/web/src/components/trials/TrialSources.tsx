@@ -4,7 +4,7 @@ import { FileText, Globe, Loader2, Sparkles, Upload, X } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
-import { ApiError, fetchOpenAccess, startExtraction } from "@/lib/api";
+import { ApiError, fetchExtractionBudget, fetchOpenAccess, startExtraction } from "@/lib/api";
 import {
   type TrialSource,
   extractionRunning,
@@ -80,10 +80,18 @@ export function TrialSources({
       toast({ message: e instanceof ApiError ? e.message : "Couldn’t reach Europe PMC." }),
   });
   const extract = useMutation({
-    mutationFn: () => startExtraction(team.id, trialId),
-    onSuccess: onExtractionChange,
+    mutationFn: (mode: "batch" | "now") => startExtraction(team.id, trialId, mode),
+    onSuccess: () => {
+      onExtractionChange();
+      qc.invalidateQueries({ queryKey: ["extraction-budget", team.id] });
+    },
     onError: (e) =>
       toast({ message: e instanceof ApiError ? e.message : "Couldn’t start the extraction." }),
+  });
+  const budget = useQuery({
+    queryKey: ["extraction-budget", team.id],
+    queryFn: () => fetchExtractionBudget(team.id),
+    staleTime: 60_000,
   });
 
   const open = async (s: TrialSource) => {
@@ -99,6 +107,8 @@ export function TrialSources({
     facts?.extraction_started_at ?? null,
   );
   const stalled = facts?.extraction_status === "running" && !running;
+  const waiting = facts?.extraction_status === "queued" || facts?.extraction_status === "batched";
+  const busy = running || waiting;
   // Numbered as the extraction read them ("Doc 2"); files added since are new.
   const readOrder = facts?.extraction_sources ?? [];
   const list = sources.data ?? [];
@@ -206,24 +216,40 @@ export function TrialSources({
             e.target.value = "";
           }}
         />
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={list.length === 0 || busy || extract.isPending}
+            onClick={() => extract.mutate("now")}
+            title="Full price, about a minute"
+          >
+            Extract now
+          </Button>
           <Button
             size="sm"
-            disabled={list.length === 0 || running || extract.isPending}
-            onClick={() => extract.mutate()}
+            disabled={list.length === 0 || busy || extract.isPending}
+            onClick={() => extract.mutate("batch")}
+            title="Half price; results usually within a few hours"
           >
-            {running || extract.isPending ? (
+            {busy || extract.isPending ? (
               <Loader2 size={14} className="animate-spin" aria-hidden />
             ) : (
               <Sparkles size={14} aria-hidden />
             )}
-            {facts?.extraction ? "Extract again" : "Start extraction"}
+            {facts?.extraction ? "Queue re-extraction" : "Queue extraction"}
           </Button>
         </div>
       </div>
 
       <p className="text-meta text-faint" aria-live="polite">
-        {running
+        {facts?.extraction_status === "queued"
+          ? facts.extraction_error
+            ? `Queued · ${facts.extraction_error}`
+            : `Queued for the next batch (half price): results usually within a few hours.`
+          : facts?.extraction_status === "batched"
+            ? `With Claude in a batch: results usually within the hour of it being sent.`
+            : running
           ? `Claude is reading ${list.length} ${list.length === 1 ? "document" : "documents"}… (started ${formatRelative(facts?.extraction_started_at ?? null)}; usually 1–3 minutes)`
           : stalled
             ? "The last extraction stopped without finishing. Start it again."
@@ -237,6 +263,12 @@ export function TrialSources({
                 }. Extracting again replaces the values and their checks.`
               : "Not extracted yet."}
       </p>
+      {budget.data && (
+        <p className="text-meta text-faint">
+          {team.name}’s extraction spend this month: ${budget.data.spent_usd.toFixed(2)} of $
+          {budget.data.cap_usd.toFixed(0)}
+        </p>
+      )}
     </div>
   );
 }

@@ -487,12 +487,24 @@ export async function fetchOpenAccess(
   });
 }
 
-/** Start Claude's extraction of the trial's data from its sources. */
-export async function startExtraction(teamId: string, trialId: string): Promise<void> {
+/** Start Claude's extraction of the trial's data from its sources: queued for
+ *  the next batch (half price, within hours) or now (full price). */
+export async function startExtraction(
+  teamId: string,
+  trialId: string,
+  mode: "batch" | "now" = "batch",
+): Promise<void> {
   await authedRequest(`/trials/${trialId}/extract`, {
     method: "POST",
-    body: JSON.stringify({ team_id: teamId }),
+    body: JSON.stringify({ team_id: teamId, mode }),
   });
+}
+
+/** This month's extraction spend for the lab, and its cap. */
+export async function fetchExtractionBudget(
+  teamId: string,
+): Promise<{ spent_usd: number; cap_usd: number }> {
+  return authedRequest(`/trials/budget?${new URLSearchParams({ team_id: teamId })}`);
 }
 
 export interface PubMedHint {

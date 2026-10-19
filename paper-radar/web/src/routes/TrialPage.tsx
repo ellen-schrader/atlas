@@ -48,15 +48,19 @@ function Trial() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["trial", team.id, nct],
     queryFn: () => fetchTrialDetail(team.id, nct),
-    refetchInterval: (q) =>
-      q.state.data &&
-      (classification(q.state.data.facts, q.state.data.added_at) === "pending" ||
-        extractionRunning(
-          q.state.data.facts?.extraction_status ?? null,
-          q.state.data.facts?.extraction_started_at ?? null,
-        ))
-        ? 5000
-        : false,
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return false;
+      if (
+        classification(d.facts, d.added_at) === "pending" ||
+        extractionRunning(d.facts?.extraction_status ?? null, d.facts?.extraction_started_at ?? null)
+      )
+        return 5000;
+      // A batch takes hours: look in now and then while the page is open.
+      if (d.facts?.extraction_status === "queued" || d.facts?.extraction_status === "batched")
+        return 60_000;
+      return false;
+    },
   });
 
   return (

@@ -225,17 +225,30 @@ class ExtractStarted(BaseModel):
     status: str
 
 
+class StartExtraction(BaseModel):
+    team_id: str
+    # "batch": queued, half price, within hours. "now": full price, a minute.
+    mode: str = Field(default="batch", pattern="^(batch|now)$")
+
+
 @router.post("/{trial_id}/extract", response_model=ExtractStarted, status_code=202)
 def start_extraction(
     trial_id: str,
-    req: TeamOnly,
+    req: StartExtraction,
     background: BackgroundTasks,
     token: str = Depends(require_token),
 ) -> ExtractStarted:
-    """Have Claude extract the trial's data from its sources. Runs in the
-    background; the trial page follows trial_facts.extraction_status."""
+    """Have Claude extract the trial's data from its sources: queued for the
+    next batch, or now. The trial page follows trial_facts.extraction_status."""
     user_id = _require_lab_trial(token, req.team_id, trial_id)
     _extract_limiter.check(user_id)
+    if req.mode == "batch":
+        if not trial_extract.queue(req.team_id, trial_id):
+            raise HTTPException(status_code=409, detail="It's already queued or running.")
+        return ExtractStarted(status="queued")
+    reason = trial_extract.over_budget(service_client(), req.team_id)
+    if reason:
+        raise HTTPException(status_code=402, detail=reason)
     if not trial_extract.claim(req.team_id, trial_id):
         raise HTTPException(status_code=409, detail="An extraction is already running.")
     background.add_task(trial_extract.run, req.team_id, trial_id)
@@ -315,4 +328,22 @@ def pubmed_hint(trial_id: str, team_id: str, token: str = Depends(require_token)
             if not ((p.doi and p.doi in held_dois) or p.pmid in held_pmids)
         ],
         search_url=f"https://pubmed.ncbi.nlm.nih.gov/?term={nct}%5Bsi%5D",
+    )
+
+
+# --- extraction budget (PR 7) ---------------------------------------------------------
+
+
+class Budget(BaseModel):
+    spent_usd: float
+    cap_usd: float
+
+
+@router.get("/budget", response_model=Budget)
+def extraction_budget(team_id: str, token: str = Depends(require_token)) -> Budget:
+    """What the lab's extractions cost this month, and its monthly cap."""
+    _require_feature(token, team_id)
+    return Budget(
+        spent_usd=round(trial_extract.spent_this_month(service_client(), team_id), 2),
+        cap_usd=trial_extract.monthly_cap(),
     )
