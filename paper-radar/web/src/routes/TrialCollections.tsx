@@ -11,10 +11,13 @@ import {
   type Collection,
   type Suggestion,
   fetchCollections,
+  fetchLabEndpoints,
   questionCaps,
   suggestCollections,
 } from "@/lib/collections";
-import { type LabTrial, THERAPY_CLASSES, fetchLabTrials } from "@/lib/trials";
+import { hrOf, pcrOf, sharedHrEndpoint } from "@/lib/compare";
+import type { Endpoint, Extraction } from "@/lib/extraction";
+import { type LabTrial, THERAPY_CLASSES, THERAPY_COLOR, fetchLabTrials } from "@/lib/trials";
 import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
@@ -69,6 +72,10 @@ function Collections() {
     queryFn: () => fetchLabTrials(team.id),
   });
   const byId = new Map((trials.data ?? []).map((t) => [t.id, t]));
+  const endpoints = useQuery({
+    queryKey: ["lab-endpoints", team.id],
+    queryFn: () => fetchLabEndpoints(team.id),
+  });
 
   const all = collections.data ?? [];
   // Quick chips: the therapy classes the lab's collections are about.
@@ -197,7 +204,12 @@ function Collections() {
       {shown.length > 0 && (
         <div className="grid gap-3 md:grid-cols-2">
           {shown.map((c) => (
-            <CollectionTile key={c.id} c={c} trials={c.trial_ids.map((id) => byId.get(id))} />
+            <CollectionTile
+              key={c.id}
+              c={c}
+              trials={c.trial_ids.map((id) => byId.get(id))}
+              endpoints={endpoints.data}
+            />
           ))}
         </div>
       )}
@@ -220,7 +232,15 @@ function Collections() {
   );
 }
 
-function CollectionTile({ c, trials }: { c: Collection; trials: (LabTrial | undefined)[] }) {
+function CollectionTile({
+  c,
+  trials,
+  endpoints,
+}: {
+  c: Collection;
+  trials: (LabTrial | undefined)[];
+  endpoints?: Map<string, Endpoint[]>;
+}) {
   const lead = c.therapy_classes.find((t) => t !== "chemotherapy") ?? c.therapy_classes[0];
   const known = trials.filter(Boolean) as LabTrial[];
   return (
@@ -238,6 +258,13 @@ function CollectionTile({ c, trials }: { c: Collection; trials: (LabTrial | unde
       </div>
       <div className="text-card font-semibold text-fg">{c.title}</div>
       {c.question && <p className="line-clamp-2 text-sm text-muted">{c.question}</p>}
+      {known.length > 0 && endpoints && (
+        <MiniPlot
+          trials={known}
+          endpoints={endpoints}
+          colour={lead ? THERAPY_COLOR[lead] : "var(--ch-1)"}
+        />
+      )}
       {known.length > 0 ? (
         <ul className="mt-1 flex flex-wrap gap-1.5">
           {known.map((t) => (
@@ -258,5 +285,79 @@ function CollectionTile({ c, trials }: { c: Collection; trials: (LabTrial | unde
         {formatRelative(c.updated_at)}
       </div>
     </Link>
+  );
+}
+
+/** The tile's plot: each trial's pCR (control hollow → experimental filled)
+ *  if any trial reports one, else its hazard ratio on a log axis. Trials
+ *  without extracted data are left out; the tile's list still names them. */
+function MiniPlot({
+  trials,
+  endpoints,
+  colour,
+}: {
+  trials: LabTrial[];
+  endpoints: Map<string, Endpoint[]>;
+  colour: string;
+}) {
+  const asX = (t: LabTrial) => ({ endpoints: endpoints.get(t.id) ?? [] }) as unknown as Extraction;
+  const pcr = trials.flatMap((t) => {
+    const e = pcrOf(asX(t));
+    return e ? [{ t, c: e.ctrl_value!, x: e.exp_value! }] : [];
+  });
+  const hrName = pcr.length ? null : sharedHrEndpoint(trials.map((t) => ({ id: t.id, name: t.name, extraction: asX(t) })));
+  const hr = hrName
+    ? trials.flatMap((t) => {
+        const e = hrOf(asX(t), hrName);
+        return e ? [{ t, hr: e.hr!, lo: e.hr_ci_low, hi: e.hr_ci_high }] : [];
+      })
+    : [];
+  if (!pcr.length && !hr.length) return null;
+
+  const pP = (v: number) => Math.max(0, Math.min(100, ((v - 20) / 60) * 100));
+  const hP = (v: number) =>
+    Math.max(0, Math.min(100, ((Math.log(v) - Math.log(0.25)) / (Math.log(1.5) - Math.log(0.25))) * 100));
+  const label = pcr.length ? "pCR · control ○ → experimental ●" : `${hrName === "IDFS" ? "iDFS" : hrName} hazard ratio (95% CI)`;
+
+  return (
+    <div className="mt-1 flex flex-col gap-1" aria-label={label}>
+      <div className="text-meta text-faint">{label}</div>
+      {pcr.map(({ t, c, x }) => (
+        <div key={t.id} className="grid grid-cols-[96px_1fr_56px] items-center gap-2" title={`${t.name}: ${c}% → ${x}%`}>
+          <span className="truncate text-meta text-muted">{t.name}</span>
+          <div className="relative h-3">
+            <div
+              className="absolute top-1/2 h-[2px] -translate-y-1/2 opacity-60"
+              style={{ left: `${pP(Math.min(c, x))}%`, width: `${Math.abs(pP(x) - pP(c))}%`, background: colour }}
+            />
+            <span
+              className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full border-2 bg-surface"
+              style={{ left: `${pP(c)}%`, borderColor: colour }}
+            />
+            <span className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full" style={{ left: `${pP(x)}%`, background: colour }} />
+          </div>
+          <span className="text-right font-mono text-meta text-fg">
+            {x - c >= 0 ? "+" : ""}
+            {Math.round((x - c) * 10) / 10} pp
+          </span>
+        </div>
+      ))}
+      {hr.map(({ t, hr: v, lo, hi }) => (
+        <div key={t.id} className="grid grid-cols-[96px_1fr_56px] items-center gap-2" title={`${t.name}: HR ${v}${lo != null && hi != null ? ` (${lo}–${hi})` : ""}`}>
+          <span className="truncate text-meta text-muted">{t.name}</span>
+          <div className="relative h-3">
+            <div className="absolute inset-y-0 w-px bg-border-strong" style={{ left: `${hP(1)}%` }} />
+            {lo != null && hi != null && (
+              <div
+                className="absolute top-1/2 h-[2px] -translate-y-1/2"
+                style={{ left: `${hP(lo)}%`, width: `${hP(hi) - hP(lo)}%`, background: colour }}
+              />
+            )}
+            <span className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full" style={{ left: `${hP(v)}%`, background: colour }} />
+          </div>
+          <span className="text-right font-mono text-meta text-fg">{v}</span>
+        </div>
+      ))}
+    </div>
   );
 }

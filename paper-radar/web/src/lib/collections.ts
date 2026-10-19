@@ -306,3 +306,57 @@ export function suggestCollections(trials: LabTrial[], collections: Collection[]
   }
   return out.sort((a, b) => b.trials.length - a.trials.length);
 }
+
+// --- extracted data, for comparing ------------------------------------------------
+
+export interface TrialExtraction {
+  trial_id: string;
+  extraction: import("@/lib/extraction").Extraction;
+  reviewed: Set<string>;
+}
+
+/** The extractions (and the lab's checks) of these trials. */
+export async function fetchExtractions(
+  teamId: string,
+  trialIds: string[],
+): Promise<Map<string, TrialExtraction>> {
+  if (!trialIds.length) return new Map();
+  const [facts, reviews] = await Promise.all([
+    supabase
+      .from("trial_facts")
+      .select("trial_id, extraction")
+      .eq("team_id", teamId)
+      .in("trial_id", trialIds)
+      .not("extraction", "is", null),
+    supabase
+      .from("trial_fact_reviews")
+      .select("trial_id, path")
+      .eq("team_id", teamId)
+      .in("trial_id", trialIds),
+  ]);
+  if (facts.error) throw facts.error;
+  if (reviews.error) throw reviews.error;
+  const out = new Map<string, TrialExtraction>();
+  for (const f of facts.data as { trial_id: string; extraction: TrialExtraction["extraction"] }[])
+    out.set(f.trial_id, { ...f, reviewed: new Set() });
+  for (const r of reviews.data as { trial_id: string; path: string }[])
+    out.get(r.trial_id)?.reviewed.add(r.path);
+  return out;
+}
+
+/** Just the endpoints of every extracted trial in the lab: what the tiles plot. */
+export async function fetchLabEndpoints(
+  teamId: string,
+): Promise<Map<string, import("@/lib/extraction").Endpoint[]>> {
+  const { data, error } = await supabase
+    .from("trial_facts")
+    .select("trial_id, endpoints:extraction->endpoints")
+    .eq("team_id", teamId)
+    .not("extraction", "is", null);
+  if (error) throw error;
+  return new Map(
+    (data as unknown as { trial_id: string; endpoints: import("@/lib/extraction").Endpoint[] | null }[]).map(
+      (r) => [r.trial_id, r.endpoints ?? []],
+    ),
+  );
+}

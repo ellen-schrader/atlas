@@ -76,6 +76,12 @@
   --ch-5: #6a5cd8;
   --ch-6: #c8503a;
   --ch-off: #b9c1c1;
+  /* Trials side by side (Compare): validated with the dataviz skill's checker
+     in this order, light on --surface; each also has a shape and a label. */
+  --cmp-1: #c23c86;
+  --cmp-2: #b4791a;
+  --cmp-3: #6a5cd8;
+  --cmp-4: #2f8f52;
 
   /* Sequential ramps for the map: publication year and topic relevance. */
   --year-1: #bdd8d7;
@@ -119,6 +125,12 @@
   --ch-5: #9a8cf5;
   --ch-6: #f0705a;
   --ch-off: #39434c;
+  /* Deeper than the dark --ch-* steps: those sit above the dark lightness band
+     the checker asks of a categorical set. */
+  --cmp-1: #d9529f;
+  --cmp-2: #bd8526;
+  --cmp-3: #8a7be8;
+  --cmp-4: #37a560;
 
   /* Monotonic in one hue: a sequential scale must read as a progression, not as
      categories. (These were blue for two steps — leftovers from the old palette.) */
