@@ -289,14 +289,36 @@ class Article:
                 sec = sub
         return [Citation(part, _section(sec, _text(sec.find("title"))))]
 
-    def cite_all(self, where: str) -> list[Citation]:
-        """Each part of a source ("A; B"), in order, once each."""
+    def cite_id(self, anchor: str) -> Citation | None:
+        """The table, figure or section with this id (an extraction's anchor)."""
+        for el in self.root.iter():
+            if el.get("id") != anchor:
+                continue
+            if el.tag == "table-wrap":
+                table = _table(el)
+                return Citation(table.label or anchor, table)
+            if el.tag == "fig":
+                fig = _figure(el, self.pmcid)
+                return Citation(fig.label or anchor, fig)
+            if el.tag in ("sec", "abstract"):
+                title = _text(el.find("title")) or ("Abstract" if el.tag == "abstract" else "")
+                return Citation(title or anchor, _section(el, title))
+            return None
+        return None
+
+    def cite_all(self, where: str, anchor: str | None = None) -> list[Citation]:
+        """Each part of a source ("A; B"), in order, once each. The element an
+        anchor names comes first: it's where the quote is."""
         seen: set[str] = set()
         out = []
         for part in where.split(";"):
             if part.strip() and part.strip().casefold() not in seen:
                 seen.add(part.strip().casefold())
                 out.extend(self.cite(part))
+        named = self.cite_id(anchor) if anchor else None
+        if named is not None and named.element is not None:
+            same = [c for c in out if c.element is not None and c.element.id == named.element.id]
+            out = [*(same[:1] or [named]), *(c for c in out if c not in same[:1])]
         return out
 
 

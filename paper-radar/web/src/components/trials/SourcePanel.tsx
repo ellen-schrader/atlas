@@ -5,7 +5,13 @@ import { ExternalLink, Loader2, X } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { ApiError, type CitedElement, type CitedPart, fetchCited } from "@/lib/api";
-import { type Source, type TrialSource, openSourceFile, pmcUrl } from "@/lib/extraction";
+import {
+  type Source,
+  type TrialSource,
+  openSourceFile,
+  pmcUrl,
+  quoteMatcher,
+} from "@/lib/extraction";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
@@ -61,14 +67,20 @@ export function SourcePanel({
     };
   }, []);
 
+  const located = !!source.where.trim() || !!source.anchor;
   const cited = useQuery({
-    queryKey: ["cited", team.id, trialId, doc?.id, source.where],
-    queryFn: () => fetchCited(team.id, trialId, doc!.id, source.where),
-    enabled: !!doc && doc.media_type === "application/xml" && !!source.where.trim(),
+    queryKey: ["cited", team.id, trialId, doc?.id, source.where, source.anchor ?? null],
+    queryFn: () => fetchCited(team.id, trialId, doc!.id, source.where, source.anchor),
+    enabled: !!doc && doc.media_type === "application/xml" && located,
     staleTime: Infinity,
     retry: (n, e) => !(e instanceof ApiError && (e.status ?? 500) < 500) && n < 2,
   });
   const articleUrl = cited.data?.article_url ?? (doc ? pmcUrl(doc) : null);
+  const quote = quoteMatcher(source.quote);
+  // Whether Claude's quote is in what's shown: if not, the value needs a
+  // closer look.
+  const quoteFound =
+    !quote || !cited.data || cited.data.parts.some((p) => !!p.element && contains(p.element, quote));
 
   // Each source starts at the top, or at its first marked row.
   const body = useRef<HTMLDivElement>(null);
@@ -110,6 +122,16 @@ export function SourcePanel({
             {source.page && <span className="font-normal text-muted"> · p. {source.page}</span>}
           </div>
           {doc && <div className="truncate text-meta text-muted">{doc.filename}</div>}
+          {source.quote && (
+            <blockquote className="mt-2 border-l-2 border-accent pl-2 font-mono text-meta text-fg">
+              “{source.quote}”
+            </blockquote>
+          )}
+          {!quoteFound && (
+            <p role="status" className="mt-1 text-meta text-danger">
+              Claude’s quote isn’t in what’s shown here: check the value against the full paper.
+            </p>
+          )}
         </div>
         <button
           ref={closeRef}
@@ -132,7 +154,7 @@ export function SourcePanel({
             This source is a PDF: open it{source.page ? ` at page ${source.page}` : ""} to check the
             value.
           </p>
-        ) : !source.where.trim() ? (
+        ) : !located ? (
           <p className="text-sm text-muted">
             Claude didn’t say where in the paper this came from. Look for it in the full paper.
           </p>
@@ -147,7 +169,9 @@ export function SourcePanel({
               : "Couldn’t load the source. Try again."}
           </p>
         ) : (
-          cited.data?.parts.map((p, i) => <Part key={i} part={p} articleUrl={articleUrl} />)
+          cited.data?.parts.map((p, i) => (
+            <Part key={i} part={p} articleUrl={articleUrl} quote={quote} />
+          ))
         )}
       </div>
 
@@ -182,7 +206,38 @@ export function SourcePanel({
 }
 
 /** One part of the source and the element it names. */
-function Part({ part, articleUrl }: { part: CitedPart; articleUrl: string | null }) {
+/** A table row's text as Claude read it: cells joined by " | ". */
+const rowText = (row: CitedElement["rows"][number]) => row.map((c) => c.text).join(" | ");
+
+/** Whether the quote is in the element's text. */
+function contains(e: CitedElement, quote: RegExp): boolean {
+  return [e.caption, ...e.paragraphs, ...e.rows.map(rowText)].some((t) => quote.test(t));
+}
+
+/** Text with the quote marked, where it is. */
+function Marked({ text, quote }: { text: string; quote: RegExp | null }) {
+  const m = quote?.exec(text);
+  if (!m) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, m.index)}
+      <mark data-marked="" className="rounded-sm bg-accent-weak px-0.5 text-fg">
+        {m[0]}
+      </mark>
+      {text.slice(m.index + m[0].length)}
+    </>
+  );
+}
+
+function Part({
+  part,
+  articleUrl,
+  quote,
+}: {
+  part: CitedPart;
+  articleUrl: string | null;
+  quote: RegExp | null;
+}) {
   const e = part.element;
   if (!e)
     return (
@@ -216,17 +271,21 @@ function Part({ part, articleUrl }: { part: CitedPart; articleUrl: string | null
         )}
       </div>
       {e.kind === "table" ? (
-        <Table e={e} marked={part.rows} />
+        <Table e={e} marked={part.rows} quote={quote} />
       ) : e.kind === "figure" ? (
-        <Figure key={e.image ?? e.id} e={e} />
+        <Figure key={e.image ?? e.id} e={e} quote={quote} />
       ) : (
-        <Paragraphs paragraphs={e.paragraphs} />
+        <Paragraphs paragraphs={e.paragraphs} quote={quote} />
       )}
     </section>
   );
 }
 
-function Table({ e, marked }: { e: CitedElement; marked: number[] }) {
+function Table({ e, marked, quote }: { e: CitedElement; marked: number[]; quote: RegExp | null }) {
+  // The rows the note names, and the row the quote is from.
+  const quoted = quote ? e.rows.flatMap((row, i) => (quote.test(rowText(row)) ? [i] : [])) : [];
+  const on = new Set([...marked, ...quoted]);
+  const first = Math.min(...on);
   return (
     <>
       {e.caption && <p className="text-sm text-muted">{e.caption}</p>}
@@ -234,12 +293,15 @@ function Table({ e, marked }: { e: CitedElement; marked: number[] }) {
         <table className="w-full border-collapse text-meta">
           <tbody>
             {e.rows.map((row, i) => {
-              const on = marked.includes(i);
               return (
                 <tr
                   key={i}
-                  data-marked={on && i === marked[0] ? "" : undefined}
-                  className={cn("border-b border-border last:border-0", on && "bg-accent-weak")}
+                  data-marked={i === first ? "" : undefined}
+                  className={cn(
+                    "border-b border-border last:border-0",
+                    on.has(i) && "bg-accent-weak",
+                    quoted.includes(i) && "outline outline-1 -outline-offset-1 outline-accent",
+                  )}
                 >
                   {row.map((c, j) => {
                     const Cell = c.header ? "th" : "td";
@@ -277,7 +339,7 @@ function Table({ e, marked }: { e: CitedElement; marked: number[] }) {
 
 /** The figure's image from PMC, and its caption. An image that won't load
  *  (NCBI moved it, or it's offline) leaves just the caption. */
-function Figure({ e }: { e: CitedElement }) {
+function Figure({ e, quote }: { e: CitedElement; quote: RegExp | null }) {
   const [broken, setBroken] = useState(false);
   return (
     <>
@@ -293,12 +355,14 @@ function Figure({ e }: { e: CitedElement }) {
           className="h-auto w-full rounded-control border border-border bg-white"
         />
       )}
-      <p className="text-sm text-fg">{e.caption}</p>
+      <p className="text-sm text-fg">
+        <Marked text={e.caption} quote={quote} />
+      </p>
     </>
   );
 }
 
-function Paragraphs({ paragraphs }: { paragraphs: string[] }) {
+function Paragraphs({ paragraphs, quote }: { paragraphs: string[]; quote: RegExp | null }) {
   if (paragraphs.length === 0) return <p className="text-sm text-muted">This section has no text.</p>;
   return (
     <div className="flex flex-col gap-2">
@@ -309,7 +373,7 @@ function Paragraphs({ paragraphs }: { paragraphs: string[] }) {
           </h4>
         ) : (
           <p key={i} className="text-sm leading-relaxed text-fg">
-            {p}
+            <Marked text={p} quote={quote} />
           </p>
         ),
       )}

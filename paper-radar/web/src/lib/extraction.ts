@@ -7,6 +7,20 @@ export interface Source {
   doc: number;
   where: string;
   page: string | null;
+  /** In a full text: the id of the table, figure or section ("Tab1"). Older
+   *  extractions don't have it. */
+  anchor?: string | null;
+  /** A few words copied from there that show the main value. */
+  quote?: string | null;
+}
+
+/** Finds a source's quote in the paper's text however its spacing or table
+ *  cell breaks fall: words in order, separated by spaces or " | ". */
+export function quoteMatcher(quote: string | null | undefined): RegExp | null {
+  const words = (quote ?? "").replace(/[|…]/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(words.map(esc).join("[\\s|]+"), "i");
 }
 
 export interface Endpoint {

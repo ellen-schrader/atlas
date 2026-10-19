@@ -20,6 +20,18 @@ class Source(BaseModel):
     doc: int = Field(description="1-based number of the document, as listed in the request")
     where: str = Field(description='Where in it: "Table 1", "Figure 2A", "Methods", "Abstract"')
     page: str | None = Field(default=None, description="Page number, if the document has pages")
+    anchor: str | None = Field(
+        default=None,
+        description="In a full-text document, the id shown on the table, figure or section "
+        'the values come from ("Tab1" from "[Table id=Tab1]", "Sec3" from "[id=Sec3]")',
+    )
+    quote: str | None = Field(
+        default=None,
+        description="A few words copied exactly from that place that show the main value: "
+        'a table row as shown ("ECOG PS | 0 | 157 (95) | 154 (92)") or part of a sentence; '
+        "at most 25 words",
+        max_length=300,
+    )
 
 
 class Pico(BaseModel):

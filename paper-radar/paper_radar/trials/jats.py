@@ -4,8 +4,11 @@ The XML's markup costs more tokens than its words, and a third of an article is
 references, author lists and declarations that hold no trial data. Kept: the
 title, abstract, every body section about the trial (methods, results,
 discussion), every table (rows as " | "-separated cells, with footnotes) and
-every figure caption. The stored file stays the original; only what is sent to
-Claude is trimmed, and anything that can't be parsed is sent as it was.
+every figure caption. Tables, figures and sections carry their XML id
+("[Table id=Tab1]", "## Results [id=Sec2]") so an extraction can say exactly
+which one a value came from, and the trial page can show it. The stored file
+stays the original; only what is sent to Claude is trimmed, and anything that
+can't be parsed is sent as it was.
 
 Parsed with the standard library, refusing any document that declares entities
 (the "billion laughs" family), whatever its encoding.
@@ -36,11 +39,21 @@ def _text(el: ET.Element) -> str:
     return re.sub(r"\s+", " ", "".join(el.itertext())).strip()
 
 
+# An id worth showing: plain, short (an article's own "Tab1", "Sec3").
+_ID = re.compile(r"\w[\w.-]{0,63}")
+
+
+def _id(el: ET.Element, sep: str = " ") -> str:
+    """ " id=Tab1" for an element with a plain id, else ""."""
+    value = el.get("id") or ""
+    return f"{sep}id={value}" if _ID.fullmatch(value) else ""
+
+
 def _table(tw: ET.Element) -> str:
     lines = []
     head = " ".join(_text(x) for x in (tw.find("label"), tw.find("caption")) if x is not None)
     if head:
-        lines.append(f"[Table] {head}")
+        lines.append(f"[Table{_id(tw)}] {head}")
     for tr in tw.iter("tr"):
         cells = [_text(c) for c in tr if c.tag in ("td", "th")]
         if any(cells):
@@ -52,7 +65,7 @@ def _table(tw: ET.Element) -> str:
 
 def _figure(fig: ET.Element) -> str:
     head = " ".join(_text(x) for x in (fig.find("label"), fig.find("caption")) if x is not None)
-    return f"[Figure] {head}" if head else ""
+    return f"[Figure{_id(fig)}] {head}" if head else ""
 
 
 def _section(sec: ET.Element, depth: int, out: list[str]) -> None:
@@ -61,7 +74,8 @@ def _section(sec: ET.Element, depth: int, out: list[str]) -> None:
     if title_text and _DROP_SECTIONS.match(title_text):
         return
     if title_text:
-        out.append(f"\n{'#' * min(depth, 4)} {title_text}")
+        tag = f" [{_id(sec, '')}]" if _id(sec) else ""
+        out.append(f"\n{'#' * min(depth, 4)} {title_text}{tag}")
     for child in sec:
         if child.tag == "title" or child.tag in _DROP_TAGS:
             continue

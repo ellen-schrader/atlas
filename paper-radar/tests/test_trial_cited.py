@@ -172,6 +172,19 @@ def test_a_figures_full_image_not_its_thumbnail():
     assert _Article(xml).cite_one("Fig. 2").element.image.endswith("/bin/Fig2_HTML.jpg")
 
 
+def test_the_anchored_element_comes_first(article):
+    # Named by the part as well: that citation (with its rows) moves first.
+    cites = article.cite_all("Results (Patient disposition); Table 1 (Age)", "Tab1")
+    assert [c.element.id for c in cites] == ["Tab1", "Sec3"]
+    assert cites[0].rows == [2, 3]
+    # Named only by the anchor: added first.
+    cites = article.cite_all("Methods", "Fig2")
+    assert [(c.part, c.element.id) for c in cites] == [("Fig. 2", "Fig2"), ("Methods", "Sec9")]
+    assert [c.element.id for c in article.cite_all("", "Sec4")] == ["Sec4"]
+    # An anchor the article doesn't have, or that names something else, is ignored.
+    assert [c.element.id for c in article.cite_all("Methods", "nope")] == ["Sec9"]
+
+
 def test_every_part_of_a_source_once(article):
     cites = article.cite_all(
         "Results (Secondary outcomes); Fig. 2a; Extended Data Table 3; Fig. 2a"

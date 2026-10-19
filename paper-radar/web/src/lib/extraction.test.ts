@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractionState, firstPage, pmcUrl, treatmentName } from "./extraction";
+import { extractionState, firstPage, pmcUrl, quoteMatcher, treatmentName } from "./extraction";
 
 describe("treatmentName", () => {
   it("drops doses and schedules", () => {
@@ -73,5 +73,21 @@ describe("firstPage", () => {
     expect(firstPage(null)).toBeNull();
     expect(firstPage("cover")).toBeNull();
     expect(firstPage("0")).toBeNull();
+  });
+});
+
+describe("quoteMatcher", () => {
+  it("finds a table row however its cells are separated", () => {
+    const m = quoteMatcher("ECOG PS | 0 | 157 (95)")!;
+    expect(m.test("ECOG PS | 0 | 157 (95) | 154 (92) | 135 (97)")).toBe(true);
+    expect(quoteMatcher("ECOG PS 0 157 (95)")!.test("ECOG PS | 0 | 157 (95)")).toBe(true);
+    expect(m.test("ECOG PS | 1 | 8 (5)")).toBe(false);
+  });
+  it("finds words across line breaks, ignoring case and brackets' meaning", () => {
+    expect(quoteMatcher("hazard ratio (HR), 0.76")!.test("Hazard ratio (HR),\n0.76; 95% CI")).toBe(true);
+  });
+  it("is null without a quote", () => {
+    expect(quoteMatcher(null)).toBeNull();
+    expect(quoteMatcher("  | ")).toBeNull();
   });
 });

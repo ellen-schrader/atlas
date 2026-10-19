@@ -315,7 +315,8 @@ def source_cited(
     trial_id: str,
     source_id: str,
     team_id: str,
-    where: str = Query(min_length=1, max_length=500),
+    where: str = Query(default="", max_length=500),
+    anchor: str | None = Query(default=None, max_length=64),
     token: str = Depends(require_token),
 ) -> CitedOut:
     """The tables, figures and sections an extracted value's source names
@@ -348,7 +349,7 @@ def source_cited(
         raise HTTPException(status_code=415, detail=detail) from exc
     pmcid = article.pmcid
     return CitedOut(
-        parts=article.cite_all(where),
+        parts=article.cite_all(where, anchor),
         article_url=f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else None,
     )
 

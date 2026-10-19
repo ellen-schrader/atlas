@@ -527,8 +527,10 @@ export async function fetchCited(
   trialId: string,
   sourceId: string,
   where: string,
+  anchor?: string | null,
 ): Promise<{ parts: CitedPart[]; article_url: string | null }> {
   const q = new URLSearchParams({ team_id: teamId, where });
+  if (anchor) q.set("anchor", anchor);
   return authedRequest(`/trials/${trialId}/sources/${sourceId}/cited?${q}`);
 }
 
