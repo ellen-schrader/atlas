@@ -41,7 +41,16 @@ export function SourcePanel({
       if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
+    // Room for the panel beside the page on a wide screen (index.css).
+    document.body.classList.add("source-panel-open");
+    // That narrows the page and reflows it: keep what was clicked in view.
+    const trigger = lastFocused.current;
+    const raf = requestAnimationFrame(() => {
+      if (trigger instanceof HTMLElement) trigger.scrollIntoView({ block: "center" });
+    });
     return () => {
+      cancelAnimationFrame(raf);
+      document.body.classList.remove("source-panel-open");
       document.removeEventListener("keydown", onKey);
       if (lastFocused.current instanceof HTMLElement) lastFocused.current.focus();
     };
@@ -78,7 +87,7 @@ export function SourcePanel({
       role="dialog"
       aria-modal="false"
       aria-label="Source"
-      className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-border bg-surface shadow-2xl sm:w-[min(38rem,100vw)]"
+      className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-border bg-surface shadow-2xl sm:w-[38rem]"
     >
       <header className="flex items-start gap-3 border-b border-border p-4">
         <div className="min-w-0 flex-1">
