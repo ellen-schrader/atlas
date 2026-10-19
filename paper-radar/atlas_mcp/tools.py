@@ -1,9 +1,10 @@
 """Shared plumbing for the Atlas MCP tools: the audit decorator, the elicitation
 gate, untrusted-content framing, and citation formatting.
 
-Tool functions live in `papers` (the paper tools) and `figures` (the beta mood
-board). They are plain functions here; each server entry point registers the set it
-serves (`server` for stdio, everything; the hosted server, read-only papers).
+Tool functions live in `papers` (the paper tools), `figures` (the beta mood
+board) and `trials` (clinical trials). They are plain functions here; each server
+entry point registers the set it serves (`server` for stdio: papers and figures;
+the hosted server: read-only papers, plus the trial tools for those who have them).
 """
 
 from __future__ import annotations

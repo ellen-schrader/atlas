@@ -1,14 +1,18 @@
 """The hosted Atlas MCP server: the Claude connector, over Streamable HTTP + OAuth.
 
 Served by the API process for one host (``mcp_public_url``, e.g.
-https://mcp.labatlas.app), so it costs nothing extra to run. Read-only paper tools
-only — no writes, no mood board (docs/CLAUDE_CONNECTOR_PLAN.md).
+https://mcp.labatlas.app), so it costs nothing extra to run. Read-only paper tools,
+no mood board (docs/CLAUDE_CONNECTOR_PLAN.md); and for people with clinical
+trials switched on, the trial tools (atlas_mcp/trials.py), two of which write.
 
 Auth: this is an OAuth *resource server*. Supabase Auth's OAuth 2.1 server issues the
 tokens; we only verify them. The SDK publishes the protected-resource metadata and
 answers unauthenticated requests with the 401 that starts Claude's sign-in. Each tool
 call then runs as the token's user (`lab.act_as`), so RLS — and the database's
 connector gate (20261017150000_connector_lockdown.sql) — decide what it can see.
+The trial tools are the exception: the gate keeps connector tokens off the trial
+tables, so they check membership, Claude access and the trials switch
+themselves and then use the service role, pinned to the lab (see trials.py).
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ from api.ratelimit import PerUserRateLimiter
 
 from . import lab, trials
 from .papers import READ_TOOLS
-from .tools import SERVER_INSTRUCTIONS
+from .tools import SERVER_INSTRUCTIONS, TOOL_THREADS
 
 log = logging.getLogger("atlas_mcp.http")
 
@@ -192,7 +196,9 @@ class AtlasMCP(FastMCP):
         if token is None or not token.subject:
             return False
         try:
-            return await anyio.to_thread.run_sync(trials.entitled, token.subject)
+            return await anyio.to_thread.run_sync(
+                trials.entitled, token.subject, limiter=TOOL_THREADS
+            )
         except Exception:  # noqa: BLE001 — when in doubt, hide them
             log.warning("couldn't check clinical trials access; hiding the tools", exc_info=True)
             return False

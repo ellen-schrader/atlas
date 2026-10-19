@@ -129,6 +129,37 @@ def _collect_one(svc, client, batch_id: str, rows: dict[str, dict[str, Any]]) ->
     return stored
 
 
+def _claim(svc, team_id: str, trial_id: str) -> bool:
+    """queued → batched (no batch yet), only if it's still queued."""
+    taken = (
+        svc.table("trial_facts")
+        .update({"extraction_status": "batched", "extraction_batch_id": None})
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .eq("extraction_status", "queued")
+        .execute()
+        .data
+    )
+    return bool(taken)
+
+
+def _release(svc, team_id: str, trial_id: str, error: str | None) -> None:
+    """Back to the queue (it wasn't sent after all)."""
+    svc.table("trial_facts").update({"extraction_status": "queued", "extraction_error": error}).eq(
+        "team_id", team_id
+    ).eq("trial_id", trial_id).eq("extraction_status", "batched").is_(
+        "extraction_batch_id", "null"
+    ).execute()
+
+
+def _release_stranded(svc) -> None:
+    """Claimed but never sent (a run that died between the two): requeue. Runs
+    never overlap (the workflow's concurrency group), so any such row is stale."""
+    svc.table("trial_facts").update({"extraction_status": "queued"}).eq(
+        "extraction_status", "batched"
+    ).is_("extraction_batch_id", "null").execute()
+
+
 def estimate_usd(params: dict[str, Any]) -> float:
     """A cautious guess of a batch request's cost, before it runs: text at
     ~3.5 characters a token, a PDF page at ~3,000 tokens, ~10k tokens out."""
@@ -193,6 +224,10 @@ def submit(svc, client) -> int:
             # Stays queued; goes out when the month turns.
             te.update_facts(svc, team, trial, {"extraction_error": te.budget_message()})
             continue
+        # Claim it first (queued → batched): someone's own Claude may record an
+        # extraction meanwhile, and that must win rather than be overwritten.
+        if not _claim(svc, team, trial):
+            continue
         try:
             sources, registry, blocks, listing = te.load(svc, team, trial)
             params = te.request(registry, blocks, listing)
@@ -216,9 +251,10 @@ def submit(svc, client) -> int:
             )
             continue
         if estimate > left[team]:
-            te.update_facts(svc, team, trial, {"extraction_error": te.budget_message()})
+            _release(svc, team, trial, te.budget_message())
             continue
         if size + weight > MAX_BATCH_BYTES:
+            _release(svc, team, trial, None)
             break  # the rest go in the next run
         left[team] -= estimate
         size += weight
@@ -226,7 +262,12 @@ def submit(svc, client) -> int:
         sent.append({**row, "sources": [src["id"] for src in sources], "estimate": estimate})
     if not requests:
         return 0
-    batch = client.messages.batches.create(requests=requests)
+    try:
+        batch = client.messages.batches.create(requests=requests)
+    except Exception:
+        for row in sent:
+            _release(svc, row["team_id"], row["trial_id"], None)
+        raise
     for row in sent:
         te.update_facts(
             svc,
@@ -248,6 +289,7 @@ def submit(svc, client) -> int:
 def run() -> tuple[int, int]:
     svc = service_client()
     client = te.client()
+    _release_stranded(svc)
     return collect(svc, client), submit(svc, client)
 
 

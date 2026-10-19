@@ -239,14 +239,18 @@ def _documents(svc, sources: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                 "data": base64.standard_b64encode(data).decode("ascii"),
             }
         else:
-            # Trimmed to the article's trial content: a third of the tokens.
-            try:
-                text = jats.to_text(data)
-            except jats.NotJats:
-                text = data.decode("utf-8", "replace")
-            source = {"type": "text", "media_type": "text/plain", "data": text}
+            source = {"type": "text", "media_type": "text/plain", "data": source_text(data)}
         blocks.append({"type": "document", "source": source, "title": title})
     return blocks, listing
+
+
+def source_text(xml: bytes) -> str:
+    """A full-text source as Claude reads it: JATS trimmed to the article's trial
+    content (a third of the tokens), or as it is if it isn't JATS."""
+    try:
+        return jats.to_text(xml)
+    except jats.NotJats:
+        return xml.decode("utf-8", "replace")
 
 
 class ExtractionError(Exception):

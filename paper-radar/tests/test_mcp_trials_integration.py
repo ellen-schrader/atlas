@@ -103,8 +103,9 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _member(admin, marker: str, team: str, with_trials: bool) -> tuple[str, str]:
-    """A user in `team`, connected through Claude: (user id, connector token)."""
+def _member(admin, marker: str, team: str, with_trials: bool) -> tuple[str, str, str]:
+    """A user in `team`, connected through Claude: (user id, connector token,
+    web token)."""
     email = f"{marker}-{uuid.uuid4().hex[:6]}@example.test"
     user_id = httpx.post(
         f"{AUTH}/admin/users",
@@ -141,7 +142,7 @@ def _member(admin, marker: str, team: str, with_trials: bool) -> tuple[str, str]
         f"{REST}/rpc/set_mcp_access", headers=bearer(web), json={"p_team": team, "p_enabled": True}
     ).raise_for_status()
     connector, _client_id = connector_token(web)
-    return user_id, connector
+    return user_id, connector, web
 
 
 @pytest.fixture(scope="module")
@@ -156,8 +157,8 @@ def world():
     port = _free_port()
     server = None
     try:
-        on_user, on_token = _member(admin, marker, on_team, with_trials=True)
-        off_user, off_token = _member(admin, marker, off_team, with_trials=False)
+        on_user, on_token, on_web = _member(admin, marker, on_team, with_trials=True)
+        off_user, off_token, _off_web = _member(admin, marker, off_team, with_trials=False)
         users += [on_user, off_user]
         httpx.post(
             f"{REST}/trials",
@@ -205,6 +206,7 @@ def world():
         yield {
             "url": f"http://127.0.0.1:{port}/mcp",
             "on": on_token,
+            "on_web": on_web,
             "off": off_token,
             "on_team": on_team,
             "off_team": off_team,
@@ -274,7 +276,7 @@ def test_recording_an_extraction_previews_then_saves(world):
         world["on"],
         [("record_trial_extraction", args), ("record_trial_extraction", {**args, "confirm": True})],
     )
-    assert "Nothing saved yet" in preview and "pCR 58.0 vs 41.0%" in preview
+    assert "Nothing saved yet" in preview and "pCR 58.0% vs 41.0%" in preview
     assert saved.startswith("Saved."), saved
     row = httpx.get(
         f"{REST}/trial_facts?trial_id=eq.{world['trial_id']}&team_id=eq.{world['on_team']}"
@@ -291,6 +293,34 @@ def test_recording_an_extraction_previews_then_saves(world):
         world, world["on"], [("record_trial_extraction", {**args, "confirm": True})]
     )
     assert "already has extracted data" in again
+
+
+def test_writes_are_in_the_labs_audit_log(world):
+    rows = httpx.get(
+        f"{REST}/mcp_tool_calls?team_id=eq.{world['on_team']}&tool=eq.record_trial_extraction&select=ok",
+        # As the lab's member, as the web app's audit view reads it.
+        headers=bearer(world["on_web"]),
+    ).json()
+    assert rows and any(r["ok"] for r in rows)
+
+
+def test_atlas_documents_must_be_the_trials_own(world):
+    _names, [(_, text)] = _session(
+        world,
+        world["on"],
+        [
+            (
+                "record_trial_extraction",
+                {
+                    "trial": world["nct"],
+                    "extraction": EXTRACTION,
+                    "atlas_documents": [str(uuid.uuid4())],
+                    "replace": True,
+                },
+            )
+        ],
+    )
+    assert "atlas_documents must be the list" in text
 
 
 def test_connector_tokens_still_cant_touch_trial_tables_directly(world):
