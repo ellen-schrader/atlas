@@ -329,6 +329,22 @@ def test_quotes_with_other_dashes_and_dots():
     assert para[c.quote.start : c.quote.end] == "0.76 (0.61–0.94); P<0·001"
 
 
+def test_subsections_written_other_ways(article):
+    for where in ("Results, Patient disposition", "Results: Patient disposition"):
+        (c,) = article.cite_all(where)
+        assert c.element.id == "Sec3", where
+    # A comma that isn't a subsection leaves the section as it is.
+    (c,) = article.cite_all("Methods, randomisation")
+    assert c.element.id == "Sec9"
+
+
+def test_a_quote_found_where_the_source_didnt_say(article):
+    cites = article.cite_all("Table 1", "Tab1", quote="333 patients were randomised")
+    assert [c.element.id for c in cites] == ["Tab1", "Sec3"]
+    assert cites[0].quote is None and cites[1].quote.where == "paragraph"
+    assert article.cite_all("Table 1", quote="not in this paper at all")[-1].element.id == "Tab1"
+
+
 def test_an_anchored_subsection_isnt_shown_twice(article):
     cites = article.cite_all("Results", "Sec3")
     assert [c.element.id for c in cites] == ["Sec3"]

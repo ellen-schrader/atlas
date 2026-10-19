@@ -248,7 +248,7 @@ class Article:
             if name == want:
                 return sec
         for sec, name in titled:
-            if name and want.startswith(name + " "):
+            if name and want.startswith(name) and not want[len(name) : len(name) + 1].isalnum():
                 return sec
         return None
 
@@ -290,10 +290,16 @@ class Article:
             if abstract is not None:
                 return [Citation(part, _section(abstract, "Abstract"))]
         title, _, rest = part.partition("(")
+        note = _note("(" + rest if rest else "")
+        # "Results, Patient disposition", "Results: …", "Results > …": the
+        # subsection written another way.
+        if not note and (m := re.match(r"(.+?)\s*(?:,|:|>|/|\s[-–—])\s*(.+)", title)):
+            if self._find_section(m[1].strip()) is not None:
+                title, note = m[1], m[2].strip()
         sec = self._find_section(title.strip()) if title.strip() else None
         if sec is None:
             return [Citation(part, None)]
-        if note := _note("(" + rest if rest else ""):
+        if note:
             # "Results (Patient disposition)": the subsection, when it is one;
             # else the note is Claude's comment ("Main (introduction, …)").
             sub = self._find_section(note, within=sec)
@@ -356,7 +362,27 @@ class Article:
             for c in out:
                 if c.element is not None:
                     c.quote = _find_quote(c.element, pattern)
+            if not any(c.quote for c in out) and (found := self._quote_elsewhere(pattern)):
+                out.append(found)
         return out
+
+    def _quote_elsewhere(self, pattern: re.Pattern[str]) -> Citation | None:
+        """The quote in a part of the article the source didn't name (the place
+        written in a way that didn't match): the table or figure that has it,
+        else the smallest section."""
+        for el in self.root.iter():
+            if el.tag in ("table-wrap", "fig"):
+                e = _table(el) if el.tag == "table-wrap" else _figure(el, self.pmcid)
+                if hit := _find_quote(e, pattern):
+                    return Citation(e.label or e.id, e, quote=hit)
+        sections = [*self.root.iter("abstract"), *self.root.iter("sec")]
+        sections.sort(key=lambda sec: sum(1 for _ in sec.iter("sec")))  # leaves first
+        for sec in sections:
+            title = _text(sec.find("title")) or ("Abstract" if sec.tag == "abstract" else "")
+            e = _section(sec, title)
+            if hit := _find_quote(e, pattern):
+                return Citation(title or e.id, e, quote=hit)
+        return None
 
 
 def _norm(text: str) -> str:
