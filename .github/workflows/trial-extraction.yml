@@ -1,0 +1,39 @@
+# Clinical trials: send queued extractions through the Message Batches API and
+# store finished ones (api/trial_extract_batch.py). Half the price of "Extract
+# now"; batches usually end within the hour, so every two hours keeps the wait
+# short. A no-op for labs without the feature, and when nothing is queued.
+name: trial-extraction
+
+on:
+  schedule:
+    - cron: "15 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trial-extraction
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: preprint-watch
+    defaults:
+      run:
+        working-directory: paper-radar
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: paper-radar/uv.lock
+      - run: uv sync --frozen --extra api
+      - run: uv run --frozen python -m api.trial_extract_batch

@@ -65,6 +65,14 @@ class _Svc:
         return Q()
 
 
+@pytest.fixture(autouse=True)
+def no_open_access(monkeypatch):
+    """run() ends by fetching open access; these tests are about the registry."""
+    from api import trial_extract
+
+    monkeypatch.setattr(trial_extract, "fetch_missing_open_access", lambda _teams: 0)
+
+
 def test_run_tells_every_lab_holding_the_trial(monkeypatch):
     t = {"id": "t1", "nct_id": "NCT00000001", **OLD}
     svc = _Svc([{"team_id": "a", "trials": t}, {"team_id": "b", "trials": t}])

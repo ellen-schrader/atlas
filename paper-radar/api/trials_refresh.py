@@ -1,4 +1,5 @@
-"""Keep the lab's trials in step with ClinicalTrials.gov (daily).
+"""Keep the lab's trials in step with ClinicalTrials.gov, and fetch open-access
+full text for trials that have papers but no sources yet (daily).
 
 For every trial on an active lab's list, fetch the record; when the registry's
 last-update date has moved, store the new record and tell each lab that holds
@@ -16,6 +17,7 @@ from typing import Any
 
 from paper_radar.trials import ctgov
 
+from . import trial_extract
 from .supa import service_client
 from .trial_links import active_teams, upsert_trial
 
@@ -106,6 +108,11 @@ def run() -> int:
         upsert_trial(svc, rec)
         changed += 1
         log.info("%s: %s", old["nct_id"], ", ".join(k for k, _ in events))
+    # Open-access full text for trials with papers but no sources yet: free,
+    # and it queues them for the next extraction batch.
+    fetched = trial_extract.fetch_missing_open_access(teams)
+    if fetched:
+        log.info("open-access full text fetched for %d trials", fetched)
     return changed
 
 

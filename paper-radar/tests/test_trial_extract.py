@@ -227,7 +227,8 @@ def test_extract_records_through_one_tool_call(monkeypatch):
     assert call["tool_choice"] == {"type": "auto"}  # Opus 5.5 can't be forced
     assert [t["name"] for t in call["tools"]] == [te.TOOL]
     assert "strict" not in call["tools"][0]  # the grammar limit
-    assert call["messages"][0]["content"][1]["cache_control"] == {"type": "ephemeral"}
+    # One read of the documents: no cache write (it would cost 1.25× for nothing).
+    assert not any("cache_control" in b for b in call["messages"][0]["content"])
     assert result.enrolment.n_randomised == 333
     assert model == "claude-opus-5-5"
     assert cost == pytest.approx(1000 / 1e6 * 4 + 500 / 1e6 * 20)
@@ -355,21 +356,48 @@ AUTH = {"Authorization": "Bearer t"}
 def test_extract_endpoint_refuses_a_second_run(monkeypatch):
     monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
     monkeypatch.setattr(trials_api._extract_limiter, "check", lambda _u: None)
+    monkeypatch.setattr(trials_api, "service_client", lambda: None)
+    monkeypatch.setattr(te, "over_budget", lambda _s, _t: None)
     monkeypatch.setattr(te, "claim", lambda *_a: False)
     monkeypatch.setattr(te, "run", lambda *_a: pytest.fail("must not run"))
-    r = client.post("/trials/t1/extract", json={"team_id": "lab"}, headers=AUTH)
+    r = client.post("/trials/t1/extract", json={"team_id": "lab", "mode": "now"}, headers=AUTH)
     assert r.status_code == 409
 
 
-def test_extract_endpoint_starts_a_run(monkeypatch):
+def test_extract_endpoint_now_starts_a_run(monkeypatch):
     monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
     monkeypatch.setattr(trials_api._extract_limiter, "check", lambda _u: None)
+    monkeypatch.setattr(trials_api, "service_client", lambda: None)
+    monkeypatch.setattr(te, "over_budget", lambda _s, _t: None)
     monkeypatch.setattr(te, "claim", lambda *_a: True)
     ran = []
     monkeypatch.setattr(te, "run", lambda team, trial: ran.append((team, trial)))
-    r = client.post("/trials/t1/extract", json={"team_id": "lab"}, headers=AUTH)
+    r = client.post("/trials/t1/extract", json={"team_id": "lab", "mode": "now"}, headers=AUTH)
     assert r.status_code == 202
+    assert r.json() == {"status": "running"}
     assert ran == [("lab", "t1")]
+
+
+def test_extract_endpoint_now_respects_the_budget(monkeypatch):
+    monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
+    monkeypatch.setattr(trials_api._extract_limiter, "check", lambda _u: None)
+    monkeypatch.setattr(trials_api, "service_client", lambda: None)
+    used = "This month's extraction budget ($10) is used."
+    monkeypatch.setattr(te, "over_budget", lambda _s, _t: used)
+    monkeypatch.setattr(te, "claim", lambda *_a: pytest.fail("must not claim"))
+    r = client.post("/trials/t1/extract", json={"team_id": "lab", "mode": "now"}, headers=AUTH)
+    assert r.status_code == 402
+
+
+def test_extract_endpoint_queues_by_default(monkeypatch):
+    monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
+    monkeypatch.setattr(trials_api._extract_limiter, "check", lambda _u: None)
+    queued = []
+    monkeypatch.setattr(te, "queue", lambda team, trial: queued.append((team, trial)) or True)
+    monkeypatch.setattr(te, "run", lambda *_a: pytest.fail("must not run now"))
+    r = client.post("/trials/t1/extract", json={"team_id": "lab"}, headers=AUTH)
+    assert r.json() == {"status": "queued"}
+    assert queued == [("lab", "t1")]
 
 
 def test_endpoints_404_for_a_trial_not_on_the_list(monkeypatch):

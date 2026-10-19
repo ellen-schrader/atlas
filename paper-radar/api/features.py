@@ -49,7 +49,8 @@ def main() -> None:
     if args.action == "list":
         for r in svc.table("team_features").select("feature, teams(slug)").execute().data or []:
             print(f"lab  {r['teams']['slug']:<30} {r['feature']}")
-        for r in svc.table("user_features").select("feature, profiles(display_name)").execute().data or []:
+        people = svc.table("user_features").select("feature, profiles(display_name)").execute()
+        for r in people.data or []:
             print(f"user {r['profiles']['display_name'] or '?':<30} {r['feature']}")
         return
 

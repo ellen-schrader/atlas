@@ -110,6 +110,16 @@ Each PR gets `/code-review high` before it's called ready.
 
 PRs 1–4 deliver the core of the mock-ups. I'd seed the local stack with the four neoadjuvant TNBC trials (KEYNOTE-522, NeoTRIP, IMpassion031, GeparNuevo) and check every step against the MVP2 page.
 
+## 6a. Cheaper, automatic extraction (PR 7, decided 19 Oct)
+
+- **Measured:** one Opus 5.5 request per trial, $0.46 (IMpassion031, ~63k tokens of full-text XML).
+- **Trimmed input:** open-access JATS is converted to plain text before it's sent: title, abstract, body sections, every table (rows as `|` cells, with footnotes) and figure caption, including back-matter tables (Extended Data). References, author lists and declarations go. 120 KB → 39 KB. The stored file stays the original.
+- **No cache write:** one request reads the documents once, so the 1.25× write never paid off.
+- **Batches:** "Queue extraction" (the default) sends through the Message Batches API at half price. `api/trial_extract_batch.py` runs every two hours (`.github/workflows/trial-extraction.yml`), stores finished results and retries a failed one once. "Extract now" stays, at full price.
+- **Automatic:** a trial queues itself when it gets its first source. The daily job fetches open-access full text for trials with linked papers and no sources, so open-access trials extract with no clicks.
+- **Budget:** every paid call is recorded in `trial_extraction_spend`. Each lab has a monthly cap (`TRIAL_EXTRACTION_MONTHLY_USD`, default $5 while Atlas is self-funded, on both the API and the batch job: about 40 open-access trials). Past it, queued trials wait for the 1st, "Extract now" is refused, and both point people to extracting through their own Claude with the Atlas connector (PR 8). The trial page shows the month's spend.
+- **Next (PR 8):** MCP tools so a lab member's own Claude can record an extraction (no API cost), listed only to labs with the feature on.
+
 ## 7. Cost
 
 - ClinicalTrials.gov, PubMed and Europe PMC are free.
