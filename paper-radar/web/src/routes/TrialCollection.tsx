@@ -7,6 +7,7 @@ import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { CollectionForm } from "@/components/trials/CollectionForm";
+import { CompareView } from "@/components/trials/CompareView";
 import { RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,18 +16,21 @@ import { useMyRole } from "@/hooks/useMyRole";
 import {
   type CollectionDetail,
   type CollectionFields,
+  type TrialExtraction,
   addCollectionPaper,
   addCollectionTrials,
   addNote,
   deleteCollection,
   deleteNote,
   fetchCollection,
+  fetchExtractions,
   questionCaps,
   removeCollectionPaper,
   removeCollectionTrial,
   setFollowing,
   updateCollection,
 } from "@/lib/collections";
+import { type CompareTrial, headline, verification } from "@/lib/compare";
 import { supabase } from "@/lib/supabase";
 import {
   type LabTrial,
@@ -37,7 +41,7 @@ import {
   phaseLabel,
   statusLabel,
 } from "@/lib/trials";
-import { formatRelative, initials } from "@/lib/utils";
+import { cn, formatRelative, initials } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 export default function TrialCollection() {
@@ -130,6 +134,17 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
 
   const members = new Map(labTrials.map((t) => [t.id, t]));
   const inCollection = c.trial_ids.map((id) => members.get(id)).filter(Boolean) as LabTrial[];
+  const extractions = useQuery({
+    queryKey: ["collection-extractions", team.id, c.trial_ids],
+    queryFn: () => fetchExtractions(team.id, c.trial_ids),
+    // Adding a trial re-keys this: keep showing what we had meanwhile.
+    placeholderData: (prev) => prev,
+  });
+  const comparable: CompareTrial[] = inCollection.flatMap((t) => {
+    const e = extractions.data?.get(t.id);
+    return e ? [{ id: t.id, name: t.name, extraction: e.extraction }] : [];
+  });
+  const [view, setView] = useState<"overview" | "compare">("overview");
 
   const tags = [
     ...c.settings.map((s) => SETTINGS[s]),
@@ -211,12 +226,60 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
         </header>
       )}
 
-      <Section
-        title={`Trials in this collection · ${inCollection.length}`}
-        aside={<AddTrialMenu c={c} labTrials={labTrials} onAdded={refresh} />}
-      >
-        <TrialRows c={c} trials={inCollection} onChange={refresh} />
-      </Section>
+      <div role="tablist" aria-label="Collection views" className="flex gap-2">
+        {(
+          [
+            ["overview", "Overview"],
+            ["compare", `Compare trials${comparable.length >= 2 ? ` · ${comparable.length}` : ""}`],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            disabled={key === "compare" && comparable.length < 2}
+            title={
+              key === "compare" && comparable.length < 2
+                ? extractions.isLoading
+                  ? "Loading extracted data…"
+                  : "Needs two trials with extracted data"
+                : undefined
+            }
+            onClick={() => setView(key)}
+            className={cn(
+              "min-h-10 rounded-control border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
+              view === key
+                ? "border-border-strong bg-surface-2 text-fg"
+                : "border-border text-muted hover:text-fg",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "compare" && comparable.length >= 2 ? (
+        <CompareView available={comparable} />
+      ) : (
+        <Section
+          title={`Trials in this collection · ${inCollection.length}`}
+          aside={<AddTrialMenu c={c} labTrials={labTrials} onAdded={refresh} />}
+        >
+          {extractions.error && (
+            <p role="alert" className="text-sm text-danger">
+              Couldn’t load the trials’ extracted data. Try again.
+            </p>
+          )}
+          <TrialRows
+            c={c}
+            trials={inCollection}
+            extractions={extractions.data}
+            loading={extractions.isLoading}
+            onChange={refresh}
+          />
+        </Section>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
         <Section title="Lab notes">
@@ -247,10 +310,15 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 function TrialRows({
   c,
   trials,
+  extractions,
+  loading,
   onChange,
 }: {
   c: CollectionDetail;
   trials: LabTrial[];
+  extractions?: Map<string, TrialExtraction>;
+  /** Extracted data is still loading: don't claim it's missing. */
+  loading: boolean;
   onChange: () => void;
 }) {
   const toast = useToast();
@@ -291,6 +359,34 @@ function TrialRows({
                 .filter(Boolean)
                 .join(" · ")}
             </div>
+          </div>
+          <div className="min-w-40 text-sm">
+            {(() => {
+              const e = extractions?.get(t.id);
+              if (!e && (loading || !extractions)) return <span className="text-meta text-faint">…</span>;
+              if (!e)
+                return (
+                  <Link to={`/trials/${t.nct_id}`} className="text-meta text-faint hover:text-accent">
+                    Data not extracted yet
+                  </Link>
+                );
+              const status = verification(e.extraction, e.reviewed);
+              return (
+                <>
+                  <div className="font-mono text-fg">{headline(e.extraction) || "—"}</div>
+                  <span
+                    className={cn(
+                      "mt-0.5 inline-block rounded-full px-2 text-[11px]",
+                      status === "Verified"
+                        ? "border border-accent/50 text-accent"
+                        : "border border-dashed border-border-strong text-muted",
+                    )}
+                  >
+                    {status}
+                  </span>
+                </>
+              );
+            })()}
           </div>
           <div className="flex items-center gap-3 text-meta text-muted">
             <span>
