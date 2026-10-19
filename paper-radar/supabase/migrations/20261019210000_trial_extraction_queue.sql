@@ -21,7 +21,13 @@ alter table public.trial_facts
     add column extraction_batch_sources uuid[],
     -- Paid attempts for the current request: a failure is retried once.
     add column extraction_attempts  integer not null default 0,
-    add column extraction_mode      text check (extraction_mode in ('batch', 'now'));
+    add column extraction_mode      text check (extraction_mode in ('batch', 'now')),
+    -- What a sent batch request is expected to cost, so a lab's batches can't
+    -- overshoot its cap before their results (and real costs) come back.
+    add column extraction_estimate_usd numeric(8, 4),
+    -- When the daily job last looked for this trial's open-access full text,
+    -- so closed-access trials don't hold the queue.
+    add column open_access_checked_at timestamptz;
 
 create table public.trial_extraction_spend (
     id       uuid primary key default gen_random_uuid(),
@@ -45,6 +51,8 @@ grant select, insert, update, delete on public.trial_extraction_spend to service
 select public.close_to_connectors('public.trial_extraction_spend');
 
 -- A trial that gets its first source and was never extracted queues itself.
+-- The batch job waits half an hour after queueing before sending it, so the
+-- rest of a set of uploads (paper, then supplement) is read with it.
 -- A finished or running extraction is left alone: extracting again is a
 -- person's decision (it costs, and replaces checked values).
 create function public.trial_sources_queue_extraction()

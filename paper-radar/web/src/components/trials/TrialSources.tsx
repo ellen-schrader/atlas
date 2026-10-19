@@ -107,8 +107,11 @@ export function TrialSources({
     facts?.extraction_started_at ?? null,
   );
   const stalled = facts?.extraction_status === "running" && !running;
-  const waiting = facts?.extraction_status === "queued" || facts?.extraction_status === "batched";
-  const busy = running || waiting;
+  const queued = facts?.extraction_status === "queued";
+  const batched = facts?.extraction_status === "batched";
+  // Queued trials can still be extracted now (skipping the wait); a trial out
+  // in a batch can't: that result is paid for and on its way.
+  const busy = running || batched;
   // Numbered as the extraction read them ("Doc 2"); files added since are new.
   const readOrder = facts?.extraction_sources ?? [];
   const list = sources.data ?? [];
@@ -228,16 +231,16 @@ export function TrialSources({
           </Button>
           <Button
             size="sm"
-            disabled={list.length === 0 || busy || extract.isPending}
+            disabled={list.length === 0 || busy || queued || extract.isPending}
             onClick={() => extract.mutate("batch")}
             title="Half price; results usually within a few hours"
           >
-            {busy || extract.isPending ? (
+            {busy || queued || extract.isPending ? (
               <Loader2 size={14} className="animate-spin" aria-hidden />
             ) : (
               <Sparkles size={14} aria-hidden />
             )}
-            {facts?.extraction ? "Queue re-extraction" : "Queue extraction"}
+            {queued ? "Queued" : facts?.extraction ? "Queue re-extraction" : "Queue extraction"}
           </Button>
         </div>
       </div>

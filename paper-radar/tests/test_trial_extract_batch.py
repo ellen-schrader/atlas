@@ -50,6 +50,21 @@ def test_jats_keeps_trial_content_and_drops_the_rest():
         assert gone not in t
 
 
+def test_jats_reads_appendices_and_floats_groups_once():
+    xml = b"""<article><body><sec><title>Methods</title><p>Randomised.</p></sec></body>
+    <back><app-group><app><sec><title>Appendix A</title><p>Eligibility details.</p>
+      <sec><title>A.1</title><p>Nested once.</p></sec>
+      <table-wrap><label>Table A1</label><table><tr><td>x</td></tr></table></table-wrap>
+    </sec></app></app-group></back>
+    <floats-group><table-wrap><label>Table 2</label><caption><p>Efficacy</p></caption>
+      <table><tr><td>pCR</td><td>58%</td></tr></table></table-wrap></floats-group></article>"""
+    t = jats.to_text(xml)
+    assert t.count("Nested once.") == 1
+    assert t.count("Table A1") == 1
+    assert "Eligibility details." in t
+    assert "[Table] Table 2 Efficacy" in t and "pCR | 58%" in t
+
+
 def test_jats_refuses_entity_declarations_and_junk():
     with pytest.raises(jats.NotJats):
         jats.to_text(b'<!DOCTYPE a [<!ENTITY x "xx">]><article><body/></article>')
@@ -177,36 +192,107 @@ def _client(batches):
     return SimpleNamespace(messages=SimpleNamespace(batches=batches))
 
 
+def _budget(monkeypatch, spent: dict[str, float], cap: float = 5.0):
+    monkeypatch.setattr(te, "monthly_cap", lambda: cap)
+    monkeypatch.setattr(te, "spent_this_month", lambda _s, team: spent.get(team, 0.0))
+    monkeypatch.setattr(tb, "_committed", lambda _s, _t: 0.0)
+
+
+def _load_ok(_s, _team, trial):
+    if trial == "broken":
+        raise RuntimeError("storage said no")
+    return [{"id": f"{trial}-s1"}], {}, [], []
+
+
 def test_submit_sends_queued_trials_of_active_labs_under_budget(monkeypatch):
     svc = _Svc([_row("t1", "queued"), _row("t2", "queued") | {"team_id": "other"}])
     monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
-    monkeypatch.setattr(te, "over_budget", lambda _s, _t: None)
-    monkeypatch.setattr(te, "load", lambda _s, _t, _tr: ([{"id": "s1"}], {}, [], []))
+    _budget(monkeypatch, {})
+    monkeypatch.setattr(te, "load", _load_ok)
     batches = _Batches()
     assert tb.submit(svc, _client(batches)) == 1
     [requests] = batches.created
     assert [r["custom_id"] for r in requests] == [tb.custom_id("lab", "t1")]
     assert "fallbacks" not in requests[0]["params"]  # batches take none
-    sent = [f for n, f in svc.updates if f.get("extraction_status") == "batched"]
-    assert sent == [
-        {
-            "extraction_status": "batched",
-            "extraction_batch_id": "batch_1",
-            "extraction_batch_sources": ["s1"],
-            "extraction_attempts": 1,
-            "extraction_error": None,
-        }
+    [sent] = [f for n, f in svc.updates if f.get("extraction_status") == "batched"]
+    assert sent["extraction_batch_sources"] == ["t1-s1"]
+    assert sent["extraction_attempts"] == 1
+    assert 0 < sent["extraction_estimate_usd"] < 1
+
+
+def test_an_over_budget_lab_doesnt_hold_up_the_others(monkeypatch):
+    rows = [_row(f"a{i}", "queued") | {"team_id": "spent"} for i in range(60)] + [
+        _row("b1", "queued")
     ]
-
-
-def test_submit_holds_trials_of_a_lab_over_budget(monkeypatch):
-    svc = _Svc([_row("t1", "queued")])
-    monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
-    monkeypatch.setattr(te, "over_budget", lambda _s, _t: "budget used")
+    svc = _Svc(rows)
+    monkeypatch.setattr(tb, "active_teams", lambda: {"spent", "lab"})
+    _budget(monkeypatch, {"spent": 5.0})
+    monkeypatch.setattr(te, "load", _load_ok)
     batches = _Batches()
-    assert tb.submit(svc, _client(batches)) == 0
-    assert batches.created == []
-    assert svc.updates == [("trial_facts", {"extraction_error": "budget used"})]  # still queued
+    assert tb.submit(svc, _client(batches)) == 1
+    assert [r["custom_id"] for r in batches.created[0]] == [tb.custom_id("lab", "b1")]
+    waiting = [f for n, f in svc.updates if "budget" in (f.get("extraction_error") or "")]
+    assert len(waiting) == 60  # still queued, told why
+
+
+def test_estimates_stop_a_batch_overshooting_the_cap(monkeypatch):
+    svc = _Svc([_row(f"t{i}", "queued") for i in range(10)])
+    monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
+    _budget(monkeypatch, {"lab": 4.85})  # $0.15 left
+    monkeypatch.setattr(te, "load", _load_ok)
+    monkeypatch.setattr(tb, "estimate_usd", lambda _p: 0.1)
+    batches = _Batches()
+    assert tb.submit(svc, _client(batches)) == 1  # one fits, the second would overshoot
+
+
+def test_just_queued_trials_wait_for_their_other_files(monkeypatch):
+    now = datetime.now(UTC)
+    svc = _Svc(
+        [
+            _row("new", "queued") | {"extraction_queued_at": now.isoformat()},
+            _row("old", "queued")
+            | {"extraction_queued_at": (now - timedelta(hours=1)).isoformat()},
+        ]
+    )
+    monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
+    _budget(monkeypatch, {})
+    monkeypatch.setattr(te, "load", _load_ok)
+    batches = _Batches()
+    assert tb.submit(svc, _client(batches)) == 1
+    assert [r["custom_id"] for r in batches.created[0]] == [tb.custom_id("lab", "old")]
+
+
+def test_one_unreadable_trial_fails_alone(monkeypatch):
+    svc = _Svc([_row("broken", "queued"), _row("t1", "queued")])
+    monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
+    _budget(monkeypatch, {})
+    monkeypatch.setattr(te, "load", _load_ok)
+    batches = _Batches()
+    assert tb.submit(svc, _client(batches)) == 1
+    assert (
+        "trial_facts",
+        {
+            "extraction_status": "failed",
+            "extraction_error": "Couldn't read the sources. Try again.",
+        },
+    ) in svc.updates
+
+
+def test_one_failing_batch_doesnt_stop_collection(monkeypatch):
+    svc = _Svc([_row("t1", "batched", batch="gone"), _row("t2", "batched", batch="ok")])
+
+    class Flaky(_Batches):
+        def retrieve(self, batch_id):
+            if batch_id == "gone":
+                raise RuntimeError("results expired")
+            return super().retrieve(batch_id)
+
+    from tests.test_trial_extract import VALID
+
+    stored = []
+    monkeypatch.setattr(te, "store", lambda _s, team, trial, *_a: stored.append(trial))
+    assert tb.collect(svc, _client(Flaky([_succeeded("t2", _msg(VALID))]))) == 1
+    assert stored == ["t2"]
 
 
 def _succeeded(trial, msg):

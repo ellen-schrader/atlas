@@ -271,8 +271,9 @@ def request(
     registry: dict[str, Any], blocks: list[dict[str, Any]], listing: list[str]
 ) -> dict[str, Any]:
     """The request's parameters, the same for "now" and for a batch. No cache
-    write: one request reads the documents once, and a cache write would cost
-    1.25× for a read that never comes."""
+    write: most extractions read the documents once, and a cache write costs
+    1.25× for a read that rarely comes. (The rare schema-error retry in
+    "Extract now" pays full price for the documents again; cheaper overall.)"""
     return {
         "model": MODEL,
         "max_tokens": 32000,
@@ -440,9 +441,11 @@ def claim(team_id: str, trial_id: str) -> bool:
         )
         .eq("team_id", team_id)
         .eq("trial_id", trial_id)
+        # Not while it's running (unless that run crashed), and not while it's
+        # out in a batch: that result is paid for and on its way.
         .or_(
-            "extraction_status.is.null,extraction_status.neq.running,"
-            f"extraction_started_at.lt.{stale}"
+            "extraction_status.is.null,extraction_status.in.(queued,done,failed),"
+            f"and(extraction_status.eq.running,extraction_started_at.lt.{stale})"
         )
         .execute()
         .data
@@ -475,15 +478,18 @@ def spent_this_month(svc, team_id: str) -> float:
     return sum(float(r["usd"]) for r in rows)
 
 
+def budget_message() -> str:
+    return (
+        f"This month's extraction budget (${monthly_cap():.0f}) is used; it resets on the 1st. "
+        "Meanwhile, extract it with your own Claude through the Atlas connector: "
+        "ask Claude to extract this trial."
+    )
+
+
 def over_budget(svc, team_id: str) -> str | None:
     """Why the lab can't extract right now, or None."""
-    cap = monthly_cap()
-    if spent_this_month(svc, team_id) >= cap:
-        return (
-            f"This month's extraction budget (${cap:.0f}) is used; it resets on the 1st. "
-            "Meanwhile, extract it with your own Claude through the Atlas connector: "
-            "ask Claude to extract this trial."
-        )
+    if spent_this_month(svc, team_id) >= monthly_cap():
+        return budget_message()
     return None
 
 
@@ -625,29 +631,68 @@ def queue(team_id: str, trial_id: str) -> bool:
 # --- open access, daily ------------------------------------------------------------------
 
 
+def _paged(query_fn) -> list[dict[str, Any]]:
+    """All rows of a query, 1000 at a time (PostgREST's page)."""
+    out: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        page = query_fn().range(start, start + 999).execute().data or []
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+        start += 1000
+
+
+RECHECK_OPEN_ACCESS = timedelta(days=7)
+
+
 def fetch_missing_open_access(teams: set[str], limit: int = 20) -> int:
     """For trials with linked papers but no sources yet, fetch their open-access
-    full text (which queues them for extraction). Returns trials fetched for."""
+    full text (which queues them for extraction). Trials looked at in the last
+    week wait, so closed-access ones don't hold the queue. Returns trials
+    fetched for."""
     svc = service_client()
-    links = (
-        svc.table("paper_trials")
-        .select("team_id, trial_id")
-        .in_("team_id", sorted(teams))
-        .in_("status", ["auto", "confirmed"])
-        .execute()
-        .data
-        or []
+    team_list = sorted(teams)
+    links = _paged(
+        lambda: (
+            svc.table("paper_trials")
+            .select("team_id, trial_id")
+            .in_("team_id", team_list)
+            .in_("status", ["auto", "confirmed"])
+            .order("id")
+        )
     )
     have = {
         (r["team_id"], r["trial_id"])
-        for r in svc.table("trial_sources")
-        .select("team_id, trial_id")
-        .in_("team_id", sorted(teams))
-        .execute()
-        .data
-        or []
+        for r in _paged(
+            lambda: (
+                svc.table("trial_sources")
+                .select("team_id, trial_id")
+                .in_("team_id", team_list)
+                .order("id")
+            )
+        )
     }
-    todo = sorted({(r["team_id"], r["trial_id"]) for r in links} - have)[:limit]
+    checked = {
+        (r["team_id"], r["trial_id"]): r["open_access_checked_at"]
+        for r in _paged(
+            lambda: (
+                svc.table("trial_facts")
+                .select("team_id, trial_id, open_access_checked_at")
+                .in_("team_id", team_list)
+                .order("trial_id")
+            )
+        )
+    }
+    recent = (datetime.now(UTC) - RECHECK_OPEN_ACCESS).isoformat()
+    todo = sorted(
+        (
+            k
+            for k in {(r["team_id"], r["trial_id"]) for r in links} - have
+            if (checked.get(k) or "") < recent
+        ),
+        key=lambda k: checked.get(k) or "",  # never looked at first
+    )[:limit]
     n = 0
     for team_id, trial_id in todo:
         try:
@@ -655,4 +700,12 @@ def fetch_missing_open_access(teams: set[str], limit: int = 20) -> int:
                 n += 1
         except Exception as exc:  # noqa: BLE001 — one trial must not stop the rest
             log.warning("open access for trial %s failed: %s", trial_id, exc)
+        svc.table("trial_facts").upsert(
+            {
+                "team_id": team_id,
+                "trial_id": trial_id,
+                "open_access_checked_at": datetime.now(UTC).isoformat(),
+            },
+            on_conflict="team_id,trial_id",
+        ).execute()
     return n

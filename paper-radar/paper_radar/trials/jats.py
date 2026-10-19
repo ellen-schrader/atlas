@@ -72,11 +72,11 @@ def _section(sec: ET.Element, depth: int, out: list[str]) -> None:
             out.append(_figure(child))
         else:
             # A paragraph (or list) may hold tables and figures inline.
-            inner = [x for x in child.iter() if x.tag in ("table-wrap", "fig")]
+            inner = [x for x in child.iter() if x.tag in ("table-wrap", "fig") and x is not child]
             for x in inner:
-                if x is not child:
-                    out.append(_table(x) if x.tag == "table-wrap" else _figure(x))
-            text = _text(_without(child, ("table-wrap", "fig")))
+                out.append(_table(x) if x.tag == "table-wrap" else _figure(x))
+            # Copy-and-strip only when there's something inline to strip.
+            text = _text(_without(child, ("table-wrap", "fig")) if inner else child)
             if text:
                 out.append(text)
 
@@ -120,9 +120,23 @@ def to_text(xml: bytes) -> str:
             text = _text(child)
             if text:
                 out.append(text)
-    # Tables and figures in the back matter (appendices, supplementary tables).
+    # The back matter: appendix sections, and tables anywhere in it
+    # (Extended Data, supplementary tables).
     back = next(root.iter("back"), None)
     if back is not None:
+        done: set[int] = set()
+        for app in back.iter("app"):
+            for sec in app.findall("sec"):  # top level: _section recurses
+                _section(sec, 2, out)
+                done.update(id(t) for t in sec.iter("table-wrap"))
         for tw in back.iter("table-wrap"):
-            out.append(_table(tw))
+            if id(tw) not in done:
+                out.append(_table(tw))
+    # Some publishers put every table and figure in a <floats-group> after it.
+    for floats in root.iter("floats-group"):
+        for x in floats:
+            if x.tag == "table-wrap":
+                out.append(_table(x))
+            elif x.tag == "fig":
+                out.append(_figure(x))
     return "\n".join(x for x in out if x).strip()
