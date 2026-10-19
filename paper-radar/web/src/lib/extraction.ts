@@ -107,6 +107,18 @@ export const DIMENSION_LABELS: Record<string, string> = {
   menopausal_status: "Menopausal status",
 };
 
+/** The categories of each baseline dimension (paper_radar/trials/extraction.py). */
+export const DIMENSION_CATEGORIES: Record<string, string[]> = {
+  t_stage: ["T1", "T2", "T3", "T4"],
+  nodal_status: ["N0", "N1", "N2–3"],
+  overall_stage: ["I", "II", "III"],
+  ecog: ["0", "1", "2+"],
+  tils: ["High", "Int", "Low"],
+  age: ["<40", "40–49", "50–64", "≥65"],
+  pdl1: ["Positive", "Negative"],
+  menopausal_status: ["Pre", "Post"],
+};
+
 export const CONTEXT_LABELS: Record<string, string> = {
   pcr_definition: "pCR definition",
   pathology_review: "Pathology review",

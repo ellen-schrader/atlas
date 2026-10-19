@@ -1,35 +1,33 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, Plus, X } from "lucide-react";
 
 import { useDismissable } from "@/hooks/useDismissable";
 import {
   type CompareTrial,
   DIFF_PP,
+  HR_PREFERENCE,
   MAX_COMPARE,
   MARKERS,
   type Marker,
   diffItems,
   enrolmentRows,
+  hrDomain,
+  hrLabel,
   hrOf,
+  pcrDelta,
+  pcrDomain,
   pcrNotComparable,
   pcrOf,
   sharedHrEndpoint,
   trialColour,
 } from "@/lib/compare";
-import { CONTEXT_LABELS, DIMENSION_LABELS, type Phase } from "@/lib/extraction";
+import {
+  CONTEXT_LABELS,
+  DIMENSION_CATEGORIES,
+  DIMENSION_LABELS,
+  type Phase,
+} from "@/lib/extraction";
 import { cn } from "@/lib/utils";
-
-/** The categories compared per dimension (paper_radar/trials/extraction.py). */
-const DIMENSIONS: Record<string, string[]> = {
-  t_stage: ["T1", "T2", "T3", "T4"],
-  nodal_status: ["N0", "N1", "N2–3"],
-  overall_stage: ["I", "II", "III"],
-  ecog: ["0", "1", "2+"],
-  tils: ["High", "Int", "Low"],
-  age: ["<40", "40–49", "50–64", "≥65"],
-  pdl1: ["Positive", "Negative"],
-  menopausal_status: ["Pre", "Post"],
-};
 
 // What makes trials hard to compare, most consequential first.
 const DIFF_KEYS = [
@@ -74,12 +72,30 @@ export function TrialMark({
 
 /** Side-by-side view of 2–4 trials' extracted data. Descriptive only. */
 export function CompareView({ available }: { available: CompareTrial[] }) {
-  const [picked, setPicked] = useState<string[]>(() =>
-    available.slice(0, MAX_COMPARE).map((t) => t.id),
+  // Each picked trial holds a slot (0–3): its colour and shape. A slot stays
+  // with its trial while it's picked, and a newly added trial takes a free one,
+  // so no two trials ever share a mark and none is repainted.
+  const [slots, setSlots] = useState<Record<string, number>>(() =>
+    Object.fromEntries(available.slice(0, MAX_COMPARE).map((t, i) => [t.id, i])),
   );
-  // Colours follow the trial, not its position in the selection.
-  const indexOf = (id: string) => available.findIndex((t) => t.id === id);
-  const trials = available.filter((t) => picked.includes(t.id));
+  // Trials that left (removed from the lab, extraction cleared) drop out; if
+  // fewer than two remain, the free slots are filled from the rest.
+  const live: Record<string, number> = {};
+  for (const [id, slot] of Object.entries(slots))
+    if (available.some((t) => t.id === id)) live[id] = slot;
+  for (const t of available) {
+    if (Object.keys(live).length >= 2) break;
+    if (!(t.id in live)) live[t.id] = freeSlot(live);
+  }
+  const picked = available.filter((t) => t.id in live).map((t) => t.id);
+  const slotOf = (id: string) => live[id] ?? 0;
+  const trials = available.filter((t) => t.id in live);
+  const add = (id: string) => setSlots({ ...live, [id]: freeSlot(live) });
+  const remove = (id: string) => {
+    const next = { ...live };
+    delete next[id];
+    setSlots(next);
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -90,31 +106,45 @@ export function CompareView({ available }: { available: CompareTrial[] }) {
             Descriptive comparison across trials, not randomised.
           </p>
         </div>
-        <TrialPicker available={available} picked={picked} setPicked={setPicked} indexOf={indexOf} />
+        <TrialPicker
+          available={available}
+          picked={picked}
+          onAdd={add}
+          onRemove={remove}
+          indexOf={slotOf}
+        />
       </div>
       {trials.length < 2 ? (
         <p className="text-sm text-muted">Pick at least two trials with extracted data.</p>
       ) : (
         <>
-          <Schedules trials={trials} indexOf={indexOf} />
-          <Results trials={trials} indexOf={indexOf} />
-          <Differences trials={trials} indexOf={indexOf} />
-          <EnrolmentTable trials={trials} indexOf={indexOf} />
+          <Schedules trials={trials} indexOf={slotOf} />
+          <Results trials={trials} indexOf={slotOf} />
+          <Differences trials={trials} indexOf={slotOf} />
+          <EnrolmentTable trials={trials} indexOf={slotOf} />
         </>
       )}
     </div>
   );
 }
 
+function freeSlot(taken: Record<string, number>): number {
+  const used = new Set(Object.values(taken));
+  for (let i = 0; i < MAX_COMPARE; i++) if (!used.has(i)) return i;
+  return 0;
+}
+
 function TrialPicker({
   available,
   picked,
-  setPicked,
+  onAdd,
+  onRemove,
   indexOf,
 }: {
   available: CompareTrial[];
   picked: string[];
-  setPicked: (ids: string[]) => void;
+  onAdd: (id: string) => void;
+  onRemove: (id: string) => void;
   indexOf: (id: string) => number;
 }) {
   const [open, setOpen] = useState(false);
@@ -126,7 +156,8 @@ function TrialPicker({
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm text-muted">Comparing</span>
       {picked.map((id) => {
-        const t = available.find((x) => x.id === id)!;
+        const t = available.find((x) => x.id === id);
+        if (!t) return null;
         return (
           <span
             key={id}
@@ -138,7 +169,7 @@ function TrialPicker({
               type="button"
               aria-label={`Remove ${t.name} from the comparison`}
               disabled={picked.length <= 2}
-              onClick={() => setPicked(picked.filter((x) => x !== id))}
+              onClick={() => onRemove(id)}
               className="grid h-6 w-6 place-items-center rounded-full text-muted hover:text-fg disabled:invisible"
             >
               <X size={13} aria-hidden />
@@ -165,12 +196,12 @@ function TrialPicker({
                   <button
                     type="button"
                     onClick={() => {
-                      setPicked([...picked, t.id]);
+                      onAdd(t.id);
                       setOpen(false);
                     }}
                     className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg hover:bg-surface-2"
                   >
-                    <TrialMark index={indexOf(t.id)} size={10} /> {t.name}
+                    {t.name}
                   </button>
                 </li>
               ))}
@@ -325,23 +356,21 @@ function Axis({ ticks, pos, label }: { ticks: number[]; pos: (v: number) => numb
 function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: string) => number }) {
   const notComparable = pcrNotComparable(trials);
   const shared = sharedHrEndpoint(trials);
-  const hrNames = ["EFS", "IDFS", "DFS", "PFS", "OS"].filter((n) => trials.some((t) => hrOf(t.extraction, n)));
+  const hrNames = HR_PREFERENCE.filter((n) => trials.some((t) => hrOf(t.extraction, n)));
   const [hrName, setHrName] = useState<string | null>(shared);
   const hrPick = hrName && hrNames.includes(hrName) ? hrName : shared;
 
   // pCR axis: the data's range, padded to tens.
   const pcrs = trials.map((t) => pcrOf(t.extraction));
   const pv = pcrs.flatMap((e) => (e ? [e.exp_value!, e.ctrl_value!] : []));
-  const lo = Math.max(0, Math.floor((Math.min(...pv, 40) - 5) / 10) * 10);
-  const hi = Math.min(100, Math.ceil((Math.max(...pv, 60) + 5) / 10) * 10);
+  const [lo, hi] = pcrDomain(pv);
   const pP = (v: number) => ((v - lo) / (hi - lo)) * 100;
   const pTicks = Array.from({ length: (hi - lo) / 10 + 1 }, (_, i) => lo + i * 10).filter((_, i, a) => a.length < 8 || i % 2 === 0);
 
   // HR axis: log scale around 1.
   const hrs = trials.map((t) => (hrPick ? hrOf(t.extraction, hrPick) : null));
   const hv = hrs.flatMap((e) => (e ? [e.hr!, e.hr_ci_low ?? e.hr!, e.hr_ci_high ?? e.hr!] : []));
-  const hLo = Math.min(0.25, ...hv) * 0.9;
-  const hHi = Math.max(1.5, ...hv) * 1.1;
+  const [hLo, hHi] = hrDomain(hv);
   const hP = (v: number) => ((Math.log(v) - Math.log(hLo)) / (Math.log(hHi) - Math.log(hLo))) * 100;
   const hTicks = [0.25, 0.5, 1, 2, 4].filter((v) => v >= hLo && v <= hHi);
 
@@ -378,7 +407,7 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
               if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "—");
               const [c, x] = [e.ctrl_value!, e.exp_value!];
               const dashed = notComparable.has(k);
-              const d = Math.round((x - c) * 10) / 10;
+              const d = pcrDelta(e);
               const tip = `${t.name}: control ${c}%, experimental ${x}% (${d >= 0 ? "+" : ""}${d} pp)${dashed ? ". Not directly comparable: pCR defined differently" : ""}`;
               return row(
                 t,
@@ -425,12 +454,12 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
               >
                 {hrNames.map((n) => (
                   <option key={n} value={n}>
-                    {n === "IDFS" ? "iDFS" : n}
+                    {hrLabel(n)}
                   </option>
                 ))}
               </select>
             ) : (
-              <span className="text-sm text-muted">{hrPick ?? ""}</span>
+              <span className="text-sm text-muted">{hrPick ? hrLabel(hrPick) : ""}</span>
             )}
           </div>
           {!hrPick ? (
@@ -442,7 +471,7 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
                 const i = indexOf(t.id);
                 if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "—");
                 const ci = e.hr_ci_low != null && e.hr_ci_high != null;
-                const tip = `${t.name}: ${hrPick} HR ${e.hr}${ci ? ` (${e.hr_ci_low}–${e.hr_ci_high})` : ""} · ${e.role.replace("_", "-")}`;
+                const tip = `${t.name}: ${hrLabel(hrPick)} HR ${e.hr}${ci ? ` (${e.hr_ci_low}–${e.hr_ci_high})` : ""} · ${e.role.replace("_", "-")}`;
                 return row(
                   t,
                   <div className="absolute inset-0" title={tip}>
@@ -487,7 +516,13 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
 function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: string) => number }) {
   const [all, setAll] = useState(false);
   const items = diffItems(trials, DIFF_KEYS);
-  const notable = items.filter((i) => i.status !== "same");
+  // Real disagreements first, then items only some trials report; items no
+  // trial reports are just listed at the end.
+  const notable = [
+    ...items.filter((i) => i.status === "differs"),
+    ...items.filter((i) => i.status === "unknown" && i.groups.length > 0),
+  ];
+  const missing = items.filter((i) => i.groups.length === 0);
   const same = items.filter((i) => i.status === "same");
   const shown = all ? notable : notable.slice(0, 3);
   return (
@@ -497,26 +532,21 @@ function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id
       ) : (
         <ul className="flex flex-col gap-3">
           {shown.map((item) => {
-            const groups = new Map<string, number[]>();
-            const unknown: number[] = [];
-            item.values.forEach((v, k) => {
-              if (!v) unknown.push(k);
-              else groups.set(v, [...(groups.get(v) ?? []), k]);
-            });
+            const unknown = item.values.flatMap((v, k) => (v ? [] : [k]));
             return (
               <li key={item.key} className="grid gap-2 sm:grid-cols-[180px_1fr]">
                 <span className="text-sm text-fg">{CONTEXT_LABELS[item.key] ?? item.key}</span>
                 <div className="flex flex-wrap gap-1.5">
-                  {[...groups].map(([v, ks]) => (
+                  {item.groups.map((g) => (
                     <span
-                      key={v}
+                      key={g.value}
                       className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-0.5 text-meta text-fg"
-                      title={ks.map((k) => trials[k].name).join(", ")}
+                      title={g.trials.map((k) => trials[k].name).join(", ")}
                     >
-                      {ks.map((k) => (
+                      {g.trials.map((k) => (
                         <TrialMark key={k} index={indexOf(trials[k].id)} size={9} />
                       ))}
-                      {v}
+                      {g.value}
                     </span>
                   ))}
                   {unknown.length > 0 && (
@@ -541,6 +571,12 @@ function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id
           {same.map((i) => `${CONTEXT_LABELS[i.key] ?? i.key}: ${i.values.find(Boolean)}`).join(" · ")}
         </p>
       )}
+      {missing.length > 0 && (
+        <p className="text-meta text-faint">
+          Not extracted for any of these trials:{" "}
+          {missing.map((i) => CONTEXT_LABELS[i.key] ?? i.key).join(", ")}
+        </p>
+      )}
     </Card>
   );
 }
@@ -549,7 +585,7 @@ function Differences({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id
 
 function EnrolmentTable({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: string) => number }) {
   const [all, setAll] = useState(false);
-  const rows = useMemo(() => enrolmentRows(trials, DIMENSIONS), [trials]);
+  const rows = enrolmentRows(trials, DIMENSION_CATEGORIES);
   const reported = rows.filter((r) => r.cells.some((c) => c.state !== "not_reported"));
   const shown = all ? reported : reported.filter((r) => r.differs);
   return (

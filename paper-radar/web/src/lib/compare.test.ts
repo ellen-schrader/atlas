@@ -74,6 +74,18 @@ describe("endpoints", () => {
     expect(pcrOf(ex)?.exp_value).toBe(58);
   });
 
+  it("never passes a subgroup off as the whole population", () => {
+    const only = x({ endpoints: [ep({ name: "EFS (PD-L1-positive)", kind: "hazard_ratio", hr: 0.52 })] });
+    expect(hrOf(only, "EFS")).toBeNull();
+    const qualified = x({ endpoints: [ep({ name: "pCR (ypT0/is ypN0)", exp_value: 60, ctrl_value: 50 })] });
+    expect(pcrOf(qualified)?.exp_value).toBe(60);
+  });
+
+  it("shows the plotted difference, not a differently computed one", () => {
+    const stratified = x({ endpoints: [ep({ exp_value: 64.8, ctrl_value: 51.2, difference: 13.1 })] });
+    expect(headline(stratified)).toBe("pCR +13.6 pp");
+  });
+
   it("finds a hazard ratio by endpoint name", () => {
     expect(hrOf(ex, "EFS")?.hr).toBe(0.76);
     expect(hrOf(ex, "iDFS")).toBeNull();
@@ -105,6 +117,8 @@ describe("what differs", () => {
     ];
     const [item] = diffItems(trials, ["pcr_definition"]);
     expect(item.status).toBe("differs");
+    // Equal after normalising: one chip for the first two trials.
+    expect(item.groups.map((g) => g.trials)).toEqual([[0, 1], [2]]);
     expect([...pcrNotComparable(trials)]).toEqual([2]);
   });
 

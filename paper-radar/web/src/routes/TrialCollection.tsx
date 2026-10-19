@@ -137,6 +137,8 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
   const extractions = useQuery({
     queryKey: ["collection-extractions", team.id, c.trial_ids],
     queryFn: () => fetchExtractions(team.id, c.trial_ids),
+    // Adding a trial re-keys this: keep showing what we had meanwhile.
+    placeholderData: (prev) => prev,
   });
   const comparable: CompareTrial[] = inCollection.flatMap((t) => {
     const e = extractions.data?.get(t.id);
@@ -239,7 +241,9 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
             disabled={key === "compare" && comparable.length < 2}
             title={
               key === "compare" && comparable.length < 2
-                ? "Needs two trials with extracted data"
+                ? extractions.isLoading
+                  ? "Loading extracted data…"
+                  : "Needs two trials with extracted data"
                 : undefined
             }
             onClick={() => setView(key)}
@@ -262,10 +266,16 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
           title={`Trials in this collection · ${inCollection.length}`}
           aside={<AddTrialMenu c={c} labTrials={labTrials} onAdded={refresh} />}
         >
+          {extractions.error && (
+            <p role="alert" className="text-sm text-danger">
+              Couldn’t load the trials’ extracted data. Try again.
+            </p>
+          )}
           <TrialRows
             c={c}
             trials={inCollection}
             extractions={extractions.data}
+            loading={extractions.isLoading}
             onChange={refresh}
           />
         </Section>
@@ -301,11 +311,14 @@ function TrialRows({
   c,
   trials,
   extractions,
+  loading,
   onChange,
 }: {
   c: CollectionDetail;
   trials: LabTrial[];
   extractions?: Map<string, TrialExtraction>;
+  /** Extracted data is still loading: don't claim it's missing. */
+  loading: boolean;
   onChange: () => void;
 }) {
   const toast = useToast();
@@ -350,6 +363,7 @@ function TrialRows({
           <div className="min-w-40 text-sm">
             {(() => {
               const e = extractions?.get(t.id);
+              if (!e && (loading || !extractions)) return <span className="text-meta text-faint">…</span>;
               if (!e)
                 return (
                   <Link to={`/trials/${t.nct_id}`} className="text-meta text-faint hover:text-accent">

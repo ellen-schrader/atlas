@@ -15,7 +15,15 @@ import {
   questionCaps,
   suggestCollections,
 } from "@/lib/collections";
-import { hrOf, pcrOf, sharedHrEndpoint } from "@/lib/compare";
+import {
+  hrDomain,
+  hrLabel,
+  hrOf,
+  pcrDelta,
+  pcrDomain,
+  pcrOf,
+  sharedHrEndpoint,
+} from "@/lib/compare";
 import type { Endpoint, Extraction } from "@/lib/extraction";
 import { type LabTrial, THERAPY_CLASSES, THERAPY_COLOR, fetchLabTrials } from "@/lib/trials";
 import { cn, formatRelative } from "@/lib/utils";
@@ -303,7 +311,7 @@ function MiniPlot({
   const asX = (t: LabTrial) => ({ endpoints: endpoints.get(t.id) ?? [] }) as unknown as Extraction;
   const pcr = trials.flatMap((t) => {
     const e = pcrOf(asX(t));
-    return e ? [{ t, c: e.ctrl_value!, x: e.exp_value! }] : [];
+    return e ? [{ t, c: e.ctrl_value!, x: e.exp_value!, d: pcrDelta(e) }] : [];
   });
   const hrName = pcr.length ? null : sharedHrEndpoint(trials.map((t) => ({ id: t.id, name: t.name, extraction: asX(t) })));
   const hr = hrName
@@ -314,15 +322,19 @@ function MiniPlot({
     : [];
   if (!pcr.length && !hr.length) return null;
 
-  const pP = (v: number) => Math.max(0, Math.min(100, ((v - 20) / 60) * 100));
-  const hP = (v: number) =>
-    Math.max(0, Math.min(100, ((Math.log(v) - Math.log(0.25)) / (Math.log(1.5) - Math.log(0.25))) * 100));
-  const label = pcr.length ? "pCR · control ○ → experimental ●" : `${hrName === "IDFS" ? "iDFS" : hrName} hazard ratio (95% CI)`;
+  // Axes fitted to the data (as in Compare), so no value is pinned to an edge.
+  const [pLo, pHi] = pcrDomain(pcr.flatMap(({ c, x }) => [c, x]));
+  const [hLo, hHi] = hrDomain(hr.flatMap(({ hr: v, lo, hi }) => [v, lo ?? v, hi ?? v]));
+  const pP = (v: number) => ((v - pLo) / (pHi - pLo)) * 100;
+  const hP = (v: number) => ((Math.log(v) - Math.log(hLo)) / (Math.log(hHi) - Math.log(hLo))) * 100;
+  const label = pcr.length
+    ? `pCR · control ○ → experimental ● · ${pLo}–${pHi}%`
+    : `${hrLabel(hrName!)} hazard ratio (95% CI)`;
 
   return (
     <div className="mt-1 flex flex-col gap-1" aria-label={label}>
       <div className="text-meta text-faint">{label}</div>
-      {pcr.map(({ t, c, x }) => (
+      {pcr.map(({ t, c, x, d }) => (
         <div key={t.id} className="grid grid-cols-[96px_1fr_56px] items-center gap-2" title={`${t.name}: ${c}% → ${x}%`}>
           <span className="truncate text-meta text-muted">{t.name}</span>
           <div className="relative h-3">
@@ -337,8 +349,8 @@ function MiniPlot({
             <span className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full" style={{ left: `${pP(x)}%`, background: colour }} />
           </div>
           <span className="text-right font-mono text-meta text-fg">
-            {x - c >= 0 ? "+" : ""}
-            {Math.round((x - c) * 10) / 10} pp
+            {d >= 0 ? "+" : ""}
+            {d} pp
           </span>
         </div>
       ))}

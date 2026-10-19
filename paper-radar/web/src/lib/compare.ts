@@ -24,8 +24,16 @@ export function trialColour(i: number): string {
 const norm = (s: string | null | undefined) =>
   (s ?? "").toLowerCase().replace(/\s+/g, " ").replace(/[‐–—]/g, "-").trim();
 
-/** A subgroup row ("pCR (PD-L1-positive)") rather than the whole population. */
-const isSubgroup = (e: Endpoint) => /\(.+\)/.test(e.name);
+/** A subgroup row ("pCR (PD-L1-positive)", "EFS (node-positive)") rather than
+ *  the whole population. A bracket that only qualifies the measure
+ *  ("pCR (ypT0/is ypN0)", "EFS (ITT)") isn't one. */
+function isSubgroup(e: Endpoint): boolean {
+  const q = e.name.match(/\((.+)\)/)?.[1];
+  return !!q && !/^(itt|intention[- ]to[- ]treat|yp|overall|all patients)/i.test(q.trim());
+}
+
+/** The endpoint's name without its bracket: "EFS (ITT)" → "EFS". */
+const baseName = (e: Endpoint) => e.name.replace(/\(.+\)/, "").trim().toUpperCase();
 
 const ROLE_ORDER: Endpoint["role"][] = [
   "primary",
@@ -35,11 +43,13 @@ const ROLE_ORDER: Endpoint["role"][] = [
   "exploratory",
 ];
 
+/** The whole-population row, most primary role first. A subgroup is never
+ *  passed off as the trial's result: no whole-population row means none. */
 function best(cands: Endpoint[]): Endpoint | null {
-  const whole = cands.filter((e) => !isSubgroup(e));
-  const pool = whole.length ? whole : cands;
   return (
-    [...pool].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))[0] ?? null
+    cands
+      .filter((e) => !isSubgroup(e))
+      .sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))[0] ?? null
   );
 }
 
@@ -47,12 +57,32 @@ function best(cands: Endpoint[]): Endpoint | null {
 export function pcrOf(x: Extraction): Endpoint | null {
   return best(
     x.endpoints.filter(
-      (e) => e.kind === "rate" && /\bpcr\b/i.test(e.name) && e.exp_value != null && e.ctrl_value != null,
+      (e) => e.kind === "rate" && baseName(e) === "PCR" && e.exp_value != null && e.ctrl_value != null,
     ),
   );
 }
 
-const HR_PREFERENCE = ["EFS", "IDFS", "DFS", "PFS", "OS"];
+/** Time-to-event endpoints, the most useful to compare first. */
+export const HR_PREFERENCE = ["EFS", "IDFS", "DFS", "PFS", "OS"];
+
+/** "IDFS" → "iDFS", as papers write it. */
+export const hrLabel = (name: string) => (name === "IDFS" ? "iDFS" : name);
+
+/** pCR difference in percentage points, as the plots draw it (experimental −
+ *  control), so every view of a trial shows the same number. */
+export const pcrDelta = (e: Endpoint) => Math.round((e.exp_value! - e.ctrl_value!) * 10) / 10;
+
+/** An axis covering these percentages, padded to tens. */
+export function pcrDomain(values: number[]): [number, number] {
+  const lo = Math.max(0, Math.floor((Math.min(...values, 40) - 5) / 10) * 10);
+  const hi = Math.min(100, Math.ceil((Math.max(...values, 60) + 5) / 10) * 10);
+  return [lo, hi];
+}
+
+/** A log axis covering these hazard ratios and 1. */
+export function hrDomain(values: number[]): [number, number] {
+  return [Math.min(0.25, ...values) * 0.9, Math.max(1.5, ...values) * 1.1];
+}
 
 /** The trial's hazard ratio for an endpoint ("EFS"), whole population. */
 export function hrOf(x: Extraction, name: string): Endpoint | null {
@@ -62,7 +92,7 @@ export function hrOf(x: Extraction, name: string): Endpoint | null {
       (e) =>
         e.kind === "hazard_ratio" &&
         e.hr != null &&
-        e.name.replace(/\(.+\)/, "").trim().toUpperCase() === target,
+        baseName(e) === target,
     ),
   );
 }
@@ -86,13 +116,13 @@ export function headline(x: Extraction): string {
   const parts: string[] = [];
   const pcr = pcrOf(x);
   if (pcr) {
-    const d = pcr.difference ?? (pcr.exp_value! - pcr.ctrl_value!);
-    parts.push(`pCR ${d >= 0 ? "+" : ""}${Math.round(d * 10) / 10} pp`);
+    const d = pcrDelta(pcr);
+    parts.push(`pCR ${d >= 0 ? "+" : ""}${d} pp`);
   }
   for (const name of HR_PREFERENCE) {
     const e = hrOf(x, name);
     if (e) {
-      parts.push(`${name === "IDFS" ? "iDFS" : name} HR ${e.hr}`);
+      parts.push(`${hrLabel(name)} HR ${e.hr}`);
       break;
     }
   }
@@ -105,6 +135,9 @@ export interface DiffItem {
   key: string;
   /** Value per trial, in trial order; null where not extracted. */
   values: (string | null)[];
+  /** The values as shown: one per distinct (normalised) value, with the trials
+   *  (indexes) giving it. */
+  groups: { value: string; trials: number[] }[];
   /** "same" only when every trial reports the same value; "differs" when two
    *  reported values disagree; otherwise "unknown" (some trials don't say). */
   status: "same" | "differs" | "unknown";
@@ -120,7 +153,14 @@ export function diffItems(trials: CompareTrial[], keys: string[]): DiffItem[] {
   return keys.map((key) => {
     const values = trials.map((t) => contextValue(t.extraction, key));
     const known = values.map((v, i) => [norm(v), i] as const).filter(([v]) => v);
-    if (!known.length) return { key, values, status: "unknown" as const, outliers: [] };
+    const byValue = new Map<string, { value: string; trials: number[] }>();
+    for (const [v, i] of known) {
+      const g = byValue.get(v) ?? { value: values[i]!, trials: [] };
+      g.trials.push(i);
+      byValue.set(v, g);
+    }
+    const groups = [...byValue.values()];
+    if (!known.length) return { key, values, groups, status: "unknown" as const, outliers: [] };
     const counts = new Map<string, number>();
     for (const [v] of known) counts.set(v, (counts.get(v) ?? 0) + 1);
     const [top, topN] = [...counts].sort((a, b) => b[1] - a[1])[0];
@@ -128,6 +168,7 @@ export function diffItems(trials: CompareTrial[], keys: string[]): DiffItem[] {
     return {
       key,
       values,
+      groups,
       status: differs
         ? ("differs" as const)
         : known.length === trials.length
