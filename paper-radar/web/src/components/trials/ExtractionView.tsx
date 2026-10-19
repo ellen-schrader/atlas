@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleDashed, ClipboardCheck, ExternalLink, FileText, Pencil } from "lucide-react";
+import { Check, CircleDashed, ClipboardCheck, ExternalLink, FileText, Pencil, X } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
@@ -731,6 +731,12 @@ function Schedule({
   // Surgery is a fixed block, wide enough to say what it is; other blocks
   // scale with their weeks.
   const flex = (p: Phase) => (p.kind === "surgery" ? "0 0 58px" : `${p.weeks ?? 8} 1 0`);
+  // The phase whose full doses are open below the chart. The blocks carry
+  // short names only; the exact regimen is a click (or tap) away, never only
+  // on hover.
+  const [open, setOpen] = useState<number | null>(null);
+  const shown = open != null && phases[open] ? open : null;
+  const full = (p: Phase, a: string | null) => (a ? `${p.label} + ${a}` : p.label);
   const row = (arm: "exp" | "ctrl") => {
     const add = (p: Phase) => (arm === "exp" ? p.experimental_add : p.control_add);
     return (
@@ -740,7 +746,21 @@ function Schedule({
           const first = a && (i === 0 || add(phases[i - 1]) !== a);
           const placebo = a && /placebo/i.test(a);
           return (
-            <div key={i} className="flex min-w-0 flex-col gap-1" style={{ flex: flex(p) }} title={`${p.label}${a ? ` + ${a}` : ""}`}>
+            <button
+              key={i}
+              type="button"
+              aria-pressed={shown === i}
+              aria-label={`${p.kind === "surgery" ? "Surgery" : p.label}: show doses`}
+              onClick={() => setOpen(shown === i ? null : i)}
+              className={cn(
+                "flex min-w-0 cursor-pointer flex-col gap-1 rounded-[5px] text-left outline-offset-2 transition",
+                "hover:outline hover:outline-1 hover:outline-border-strong",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                shown === i && "outline outline-2 outline-accent hover:outline-2 hover:outline-accent",
+              )}
+              style={{ flex: flex(p) }}
+              title={full(p, a)}
+            >
               <div
                 className={cn(
                   "flex h-4 items-center overflow-hidden whitespace-nowrap rounded-[3px] px-1.5 text-[10px] font-semibold",
@@ -760,7 +780,7 @@ function Schedule({
                 {/* Its own span, so a long name ends in "…" instead of losing both ends. */}
                 <span className="min-w-0 truncate">{p.kind === "surgery" ? "Surgery" : treatmentName(p.label)}</span>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -768,8 +788,10 @@ function Schedule({
   };
   const n = (v: number | null) => (v != null ? ` · n ${v}` : "");
   return (
-    <div className="flex flex-col gap-3 overflow-x-auto">
-      <div className="min-w-[560px]">
+    <div className="flex flex-col gap-3">
+      {/* Only the chart scrolls sideways on a phone; the doses below wrap. */}
+      <div className="overflow-x-auto p-0.5">
+        <div className="min-w-[560px]">
         <div className="mb-1 flex items-center gap-2 text-sm text-fg">
           <span aria-hidden className="h-2.5 w-2.5 rounded-full" style={{ background: colours.exp }} />
           {expLabel}
@@ -789,6 +811,69 @@ function Schedule({
             </div>
           ))}
         </div>
+        </div>
+      </div>
+      {shown == null ? (
+        <p className="text-meta text-faint">Select a block for its doses.</p>
+      ) : (
+        <PhaseDoses
+          phase={phases[shown]}
+          index={shown}
+          expLabel={expLabel}
+          ctrlLabel={ctrlLabel}
+          colours={colours}
+          onClose={() => setOpen(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One phase's full regimen, both arms side by side: where they share a
+ *  backbone, the difference is the part in bold. */
+function PhaseDoses({
+  phase: p,
+  index,
+  expLabel,
+  ctrlLabel,
+  colours,
+  onClose,
+}: {
+  phase: Phase;
+  index: number;
+  expLabel: string;
+  ctrlLabel: string;
+  colours: ArmColours;
+  onClose: () => void;
+}) {
+  const arm = (label: string, colour: string, add: string | null) => (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5 text-meta text-muted">
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: colour }} />
+        {label}
+      </div>
+      <p className="mt-0.5 text-sm text-fg">
+        {p.kind === "surgery" ? "Surgery" : p.label}
+        {add && <span className="font-medium"> + {add}</span>}
+      </p>
+    </div>
+  );
+  return (
+    <div
+      role="region"
+      aria-label={`Phase ${index + 1} doses`}
+      aria-live="polite"
+      className="flex gap-3 rounded-control border border-border bg-surface-2 p-3"
+    >
+      <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-2">
+        {arm(expLabel, colours.exp, p.experimental_add)}
+        {arm(ctrlLabel, colours.ctrl, p.control_add)}
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <Button variant="ghost" size="icon" aria-label="Close doses" onClick={onClose} className="h-7 w-7">
+          <X size={14} aria-hidden />
+        </Button>
+        {p.weeks != null && <span className="font-mono text-meta text-faint">{p.weeks} wk</span>}
       </div>
     </div>
   );
