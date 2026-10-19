@@ -153,6 +153,9 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
   });
   const [picked, setView] = useState<"overview" | "compare">("overview");
   const canCompare = comparable.length >= 2;
+  // As with the papers: remove buttons only after "Edit", so a stray click
+  // can't take a trial out.
+  const [editingTrials, setEditingTrials] = useState(false);
   const countries = useTrialCountries(team.id);
   // Compare falls back to Overview when it stops being possible (a trial
   // removed), so the selected tab and what's on screen always agree.
@@ -301,7 +304,28 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
       ) : (
         <Section
           title={`Trials in this collection · ${inCollection.length}`}
-          aside={<AddTrialMenu c={c} labTrials={labTrials} onAdded={refresh} />}
+          aside={
+            <div className="flex items-center gap-3">
+              {inCollection.length > 0 && (
+                <button
+                  type="button"
+                  aria-pressed={editingTrials}
+                  onClick={() => setEditingTrials((e) => !e)}
+                  className="text-meta font-medium text-accent hover:underline"
+                >
+                  {editingTrials ? "Done" : "Edit"}
+                </button>
+              )}
+              <AddTrialMenu
+                c={c}
+                labTrials={labTrials}
+                onAdded={() => {
+                  setEditingTrials(false);
+                  refresh();
+                }}
+              />
+            </div>
+          }
         >
           {extractions.error && (
             <p role="alert" className="text-sm text-danger">
@@ -314,6 +338,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
             extractions={extractions.data}
             loading={extractions.isLoading}
             onChange={refresh}
+            editing={editingTrials}
           />
         </Section>
       )}
@@ -352,6 +377,7 @@ function TrialRows({
   extractions,
   loading,
   onChange,
+  editing,
 }: {
   c: CollectionDetail;
   trials: LabTrial[];
@@ -359,6 +385,8 @@ function TrialRows({
   /** Extracted data is still loading: don't claim it's missing. */
   loading: boolean;
   onChange: () => void;
+  /** Show each row's remove button. */
+  editing: boolean;
 }) {
   const toast = useToast();
   const { userId } = useAppContext();
@@ -447,16 +475,18 @@ function TrialRows({
             <span>
               {t.papers} {t.papers === 1 ? "paper" : "papers"}
             </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Remove ${t.name} from this collection`}
-              title="Remove from this collection"
-              disabled={remove.isPending}
-              onClick={() => remove.mutate(t)}
-            >
-              <X size={15} aria-hidden />
-            </Button>
+            {editing && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Remove ${t.name} from this collection`}
+                title="Remove from this collection"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(t)}
+              >
+                <X size={15} aria-hidden />
+              </Button>
+            )}
           </div>
         </li>
       ))}
