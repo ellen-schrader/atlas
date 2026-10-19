@@ -233,10 +233,20 @@ function Part({ part, articleUrl }: { part: CitedPart; articleUrl: string | null
       </section>
     );
   const anchor = articleUrl && e.id ? `${articleUrl}#${encodeURIComponent(e.id)}` : null;
+  // A quote matching only the label ("Table 1"): the heading is where it is.
+  const inHeading = !!hitIn(part, "heading");
   return (
     <section className="flex flex-col gap-2">
+      {part.elsewhere && (
+        <p className="text-meta text-muted">
+          Claude’s quote is here, not in the place it named:
+        </p>
+      )}
       <div className="flex items-baseline gap-2">
-        <h3 className="min-w-0 flex-1 text-sm font-semibold text-fg">
+        <h3
+          data-marked={inHeading ? "" : undefined}
+          className={cn("min-w-0 flex-1 text-sm font-semibold text-fg", inHeading && "text-accent")}
+        >
           {e.kind === "section" ? e.label || part.part : e.label}
           {e.kind === "figure" && part.panel && (
             <span className="font-normal text-muted"> · panel {part.panel}</span>

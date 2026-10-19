@@ -317,7 +317,9 @@ def test_quotes_from_footnotes_headings_and_with_gaps(article):
     (c,) = article.cite_all("Table 1", quote="bPneumonia.")
     assert (c.quote.where, c.quote.index) == ("footnote", 1)
     (c,) = article.cite_all("Table 1", quote="Table 1 Baseline characteristics")
-    assert c.quote.where == "heading"
+    assert (c.quote.where, c.quote.start) == ("caption", 0)  # marked in the caption
+    (c,) = article.cite_all("Table 1", quote="Table 1")
+    assert c.quote.where == "heading"  # only the label: nothing to mark but found
     (c,) = article.cite_all("Results (Patient disposition)", quote="333 patients … (Table 1)")
     assert (c.quote.where, c.quote.start) == ("paragraph", 0)
 
@@ -342,12 +344,17 @@ def test_a_quote_found_where_the_source_didnt_say(article):
     cites = article.cite_all("Table 1", "Tab1", quote="333 patients were randomised")
     assert [c.element.id for c in cites] == ["Tab1", "Sec3"]
     assert cites[0].quote is None and cites[1].quote.where == "paragraph"
+    assert cites[1].elsewhere and not cites[0].elsewhere
     assert article.cite_all("Table 1", quote="not in this paper at all")[-1].element.id == "Tab1"
 
 
 def test_an_anchored_subsection_isnt_shown_twice(article):
     cites = article.cite_all("Results", "Sec3")
     assert [c.element.id for c in cites] == ["Sec3"]
+    # Nor a cited subsection of an anchored section.
+    assert [c.element.id for c in article.cite_all("Results (Patient disposition)", "Sec2")] == [
+        "Sec2"
+    ]
     # A table inside a cited section isn't in its text: both stay.
     assert [c.element.id for c in article.cite_all("Results", "Tab1")] == ["Tab1", "Sec2"]
 
@@ -357,9 +364,12 @@ def test_a_source_keeps_a_malformed_anchor_or_long_quote_out_of_the_way():
 
     s = Source(doc=1, where="Table 1", anchor="[Table id=Tab1] Baseline", quote="x " * 400)
     assert s.anchor == "Tab1"
-    assert len(s.quote) == 300
+    assert 290 <= len(s.quote) <= 300 and s.quote.endswith("x")
     assert Source(doc=1, where="x", anchor="no anchor here!").anchor is None
     assert Source(doc=1, where="x", anchor=" Sec3 ", quote="  ").model_dump()["quote"] is None
+    # Cut at a word's end: a number cut short would no longer be found.
+    long = "a" * 294 + " HR 0.76"  # 300 characters end at "0."
+    assert Source(doc=1, where="x", quote=long).quote == "a" * 294 + " HR"
 
 
 def test_cited_endpoint_says_whether_the_quote_was_found(monkeypatch):
@@ -377,3 +387,40 @@ def test_cited_endpoint_says_whether_the_quote_was_found(monkeypatch):
     assert r.json()["quote_found"] is False
     r = client.get("/trials/t1/sources/s1/cited", params=params, headers=AUTH)
     assert r.json()["quote_found"] is None
+
+
+def test_a_section_titled_with_a_comma_isnt_split():
+    xml = XML.replace(
+        b'<sec id="Sec8"><title>Discussion</title>',
+        b'<sec id="Sec7"><title>Discussion, limitations</title><p>Open label.</p></sec>'
+        b'<sec id="Sec8"><title>Discussion</title>',
+    )
+    (c,) = _Article(xml).cite_all("Discussion, limitations")
+    assert c.element.id == "Sec7"
+
+
+def test_a_quote_in_a_caption_or_title_is_marked_there(article):
+    (c,) = article.cite_all("Fig. 2", quote="Fig. 2 EFS, DFS")
+    assert (c.quote.where, c.quote.start, c.quote.end) == ("caption", 0, len("EFS, DFS"))
+
+
+def test_quote_positions_count_as_the_browser_does():
+    xml = XML.replace(b"EFS HR 0.76.", "𝑃 &lt; 0.05; EFS HR 0.76.".encode())
+    (c,) = _Article(xml).cite_all("Results (Secondary outcomes)", quote="EFS HR 0.76")
+    text = c.element.paragraphs[0]
+    units = text.encode("utf-16-le")
+    assert units[c.quote.start * 2 : c.quote.end * 2].decode("utf-16-le") == "EFS HR 0.76"
+
+
+def test_cited_endpoint_quote_found_only_where_the_source_said(monkeypatch):
+    _source(monkeypatch)
+
+    def found(params):
+        r = client.get("/trials/t1/sources/s1/cited", params=params, headers=AUTH)
+        return r.json()["quote_found"], [p["elsewhere"] for p in r.json()["parts"]]
+
+    base = {"team_id": "lab", "where": "Table 1"}
+    # In Sec3, not Table 1: shown, but still flagged.
+    assert found({**base, "quote": "333 patients were randomised"}) == (False, [False, True])
+    # A quote with no words to find: nothing to say about it.
+    assert found({**base, "quote": "…"}) == (None, [False])

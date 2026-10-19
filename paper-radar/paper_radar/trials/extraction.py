@@ -17,6 +17,24 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+def clean_anchor(v: str | None) -> str | None:
+    """An anchor as a plain id ("Tab1"), from "[Table id=Tab1]" too; else None."""
+    if not v:
+        return None
+    m = re.fullmatch(r"\s*(\w[\w.-]{0,63})\s*", v) or re.search(r"\bid=(\w[\w.-]{0,63})", v)
+    return m.group(1) if m else None
+
+
+def clean_quote(v: str | None, limit: int = 300) -> str | None:
+    """A quote cut to `limit` characters at a word's end (a number cut short
+    would no longer be found)."""
+    v = (v or "").strip()
+    if len(v) > limit:
+        cut = v[:limit]
+        v = cut.rsplit(None, 1)[0] if v[limit].strip() and " " in cut else cut
+    return v.strip() or None
+
+
 class Source(BaseModel):
     doc: int = Field(description="1-based number of the document, as listed in the request")
     where: str = Field(description='Where in it: "Table 1", "Figure 2A", "Methods", "Abstract"')
@@ -38,15 +56,12 @@ class Source(BaseModel):
     @field_validator("anchor")
     @classmethod
     def _plain_anchor(cls, v: str | None) -> str | None:
-        if not v:
-            return None
-        m = re.fullmatch(r"\s*(\w[\w.-]{0,63})\s*", v) or re.search(r"\bid=(\w[\w.-]{0,63})", v)
-        return m.group(1) if m else None
+        return clean_anchor(v)
 
     @field_validator("quote")
     @classmethod
     def _short_quote(cls, v: str | None) -> str | None:
-        return v.strip()[:300] or None if v else None
+        return clean_quote(v)
 
 
 class Pico(BaseModel):

@@ -79,6 +79,8 @@ class Citation:
     rows: list[int] = field(default_factory=list)  # a table's rows the part names
     panel: str | None = None  # a figure's panel ("d")
     quote: QuoteHit | None = None  # where the source's quote is in it
+    # Not a place the source named: where its quote turned up instead.
+    elsewhere: bool = False
 
 
 def _text(el: ET.Element | None) -> str:
@@ -218,7 +220,10 @@ class Article:
         except ET.ParseError as exc:
             raise jats.NotJats(str(exc)) from exc
         self.floats: dict[str, ET.Element] = {}
+        self.by_id: dict[str, ET.Element] = {}
         for el in self.root.iter():
+            if el.get("id"):
+                self.by_id.setdefault(el.get("id") or "", el)
             if el.tag in ("table-wrap", "fig"):
                 key = _label_key(_text(el.find("label")))
                 if key and key not in self.floats:  # the first, not a later copy
@@ -292,10 +297,14 @@ class Article:
         title, _, rest = part.partition("(")
         note = _note("(" + rest if rest else "")
         # "Results, Patient disposition", "Results: …", "Results > …": the
-        # subsection written another way.
-        if not note and (m := re.match(r"(.+?)\s*(?:,|:|>|/|\s[-–—])\s*(.+)", title)):
-            if self._find_section(m[1].strip()) is not None:
-                title, note = m[1], m[2].strip()
+        # subsection written another way, unless that is a section's own title.
+        if (
+            not note
+            and not self._has_title(title)
+            and (m := re.match(r"(.+?)\s*(?:,|:|>|/|\s[-–—])\s*(.+)", title))
+            and self._find_section(m[1].strip()) is not None
+        ):
+            title, note = m[1], m[2].strip()
         sec = self._find_section(title.strip()) if title.strip() else None
         if sec is None:
             return [Citation(part, None)]
@@ -307,26 +316,30 @@ class Article:
                 sec = sub
         return [Citation(part, _section(sec, _text(sec.find("title"))))]
 
-    def cite_id(self, anchor: str) -> Citation | None:
-        """The table, figure or section with this id (an extraction's anchor)."""
-        for el in self.root.iter():
-            if el.get("id") != anchor:
-                continue
-            if el.tag == "table-wrap":
-                table = _table(el)
-                return Citation(table.label or anchor, table)
-            if el.tag == "fig":
-                fig = _figure(el, self.pmcid)
-                return Citation(fig.label or anchor, fig)
-            if el.tag in ("sec", "abstract"):
-                title = _text(el.find("title")) or ("Abstract" if el.tag == "abstract" else "")
-                return Citation(title or anchor, _section(el, title))
-            return None
+    def _has_title(self, title: str) -> bool:
+        want = _norm(title)
+        return any(_norm(_text(sec.find("title"))) == want for sec in self.root.iter("sec"))
+
+    def _element(self, el: ET.Element) -> Element | None:
+        if el.tag == "table-wrap":
+            return _table(el)
+        if el.tag == "fig":
+            return _figure(el, self.pmcid)
+        if el.tag in ("sec", "abstract"):
+            title = _text(el.find("title")) or ("Abstract" if el.tag == "abstract" else "")
+            return _section(el, title)
         return None
 
+    def cite_id(self, anchor: str) -> Citation | None:
+        """The table, figure or section with this id (an extraction's anchor)."""
+        el = self.by_id.get(anchor)
+        e = self._element(el) if el is not None else None
+        return Citation(e.label or anchor, e) if e is not None else None
+
     def _contains(self, outer_id: str, inner_id: str) -> bool:
-        outer = next((el for el in self.root.iter() if el.get("id") == outer_id), None)
-        return outer is not None and any(el.get("id") == inner_id for el in outer.iter())
+        outer = self.by_id.get(outer_id)
+        inner = self.by_id.get(inner_id)
+        return outer is not None and inner is not None and any(el is inner for el in outer.iter())
 
     def cite_all(
         self, where: str, anchor: str | None = None, quote: str | None = None
@@ -351,37 +364,40 @@ class Article:
                 for c in out
                 if c is not first
                 and not (
+                    # One section inside the other: its text would show twice.
                     named.element.kind == "section"
                     and c.element is not None
                     and c.element.kind == "section"
-                    and self._contains(c.element.id, nid)
+                    and (self._contains(c.element.id, nid) or self._contains(nid, c.element.id))
                 )
             ]
             out.insert(0, first)
-        if pattern := _quote_pattern(quote):
+        if pattern := quote_pattern(quote):
             for c in out:
                 if c.element is not None:
                     c.quote = _find_quote(c.element, pattern)
+            # Not where the source said: shown where it is, marked as such (the
+            # place it named still needs a look).
             if not any(c.quote for c in out) and (found := self._quote_elsewhere(pattern)):
                 out.append(found)
         return out
 
     def _quote_elsewhere(self, pattern: re.Pattern[str]) -> Citation | None:
-        """The quote in a part of the article the source didn't name (the place
-        written in a way that didn't match): the table or figure that has it,
-        else the smallest section."""
+        """The quote in a part of the article the source didn't name: the
+        table or figure that has it, else the section whose own paragraphs do
+        (the body's before the abstract's)."""
         for el in self.root.iter():
             if el.tag in ("table-wrap", "fig"):
-                e = _table(el) if el.tag == "table-wrap" else _figure(el, self.pmcid)
-                if hit := _find_quote(e, pattern):
-                    return Citation(e.label or e.id, e, quote=hit)
-        sections = [*self.root.iter("abstract"), *self.root.iter("sec")]
-        sections.sort(key=lambda sec: sum(1 for _ in sec.iter("sec")))  # leaves first
-        for sec in sections:
-            title = _text(sec.find("title")) or ("Abstract" if sec.tag == "abstract" else "")
-            e = _section(sec, title)
-            if hit := _find_quote(e, pattern):
-                return Citation(title or e.id, e, quote=hit)
+                e = self._element(el)
+                if e is not None and (hit := _find_quote(e, pattern)):
+                    return Citation(e.label or e.id, e, quote=hit, elsewhere=True)
+        for el in [*self.root.iter("sec"), *self.root.iter("abstract")]:
+            own = [c for c in el if c.tag in ("p", "list", "disp-quote")]
+            if not any(pattern.search(_plain(_text(c))) for c in own):
+                continue
+            e = self._element(el)
+            if e is not None and (hit := _find_quote(e, pattern)):
+                return Citation(e.label or e.id, e, quote=hit, elsewhere=True)
         return None
 
 
@@ -431,7 +447,7 @@ def _plain(text: str) -> str:
     return text.translate(_SAME)
 
 
-def _quote_pattern(quote: str | None) -> re.Pattern[str] | None:
+def quote_pattern(quote: str | None) -> re.Pattern[str] | None:
     """A quote as a pattern: its words in order, whatever spacing or table
     cell breaks (" | ") fall between them, a gap where it says "…", and
     whole numbers and words at its ends ("HR 0.7" doesn't match "HR 0.76")."""
@@ -461,5 +477,19 @@ def _find_quote(e: Element, pattern: re.Pattern[str]) -> QuoteHit | None:
     ]
     for where, i, text in texts:
         if m := pattern.search(_plain(text)):
-            return QuoteHit(where, i, m.start(), m.end())  # type: ignore[arg-type]
+            start, end = m.start(), m.end()
+            if where == "heading" and end > len(e.label) + 1:
+                # Mostly in the caption: mark that part of it.
+                where, start, end = (
+                    "caption",
+                    max(0, start - len(e.label) - 1),
+                    end - len(e.label) - 1,
+                )
+                text = e.caption
+            # Positions as the browser counts them (UTF-16), not Python.
+            return QuoteHit(where, i, _utf16(text[:start]), _utf16(text[:end]))  # type: ignore[arg-type]
     return None
+
+
+def _utf16(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2

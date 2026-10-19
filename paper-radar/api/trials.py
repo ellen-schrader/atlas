@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from paper_radar.ingest.urls import _normalize_key
 from paper_radar.trials import FEATURE, cited, ctgov, jats, pubmed
+from paper_radar.trials.extraction import clean_anchor, clean_quote
 
 from . import trial_extract, trial_links
 from .deps import require_token
@@ -351,14 +352,16 @@ def source_cited(
         detail = "That file can't be read as an article."
         raise HTTPException(status_code=415, detail=detail) from exc
     # Anchor and quote only help find the value: an odd one is ignored, not refused.
-    anchor = anchor if anchor and len(anchor) <= 64 else None
-    quote = (quote or "").strip()[:300] or None
+    anchor, quote = clean_anchor(anchor), clean_quote(quote)
     parts = article.cite_all(where, anchor, quote)
     pmcid = article.pmcid
     return CitedOut(
         parts=parts,
         article_url=f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else None,
-        quote_found=any(p.quote for p in parts) if quote else None,
+        # Found where the source said, not elsewhere; None when there's no quote to find.
+        quote_found=(
+            any(p.quote and not p.elsewhere for p in parts) if cited.quote_pattern(quote) else None
+        ),
     )
 
 

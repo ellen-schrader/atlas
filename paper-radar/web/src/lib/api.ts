@@ -530,6 +530,8 @@ export interface CitedPart {
   panel: string | null;
   /** Where the source's quote is in this part's element. */
   quote: QuoteHit | null;
+  /** Not a place the source named: where its quote turned up instead. */
+  elsewhere: boolean;
 }
 
 /** What a source's "where" (and anchor) point at in one of the trial's
