@@ -116,3 +116,82 @@ def test_refuses_entities_and_junk():
         Article(b'<!DOCTYPE a [<!ENTITY x "xx">]><article/>')
     with pytest.raises(jats.NotJats):
         Article(b"%PDF-1.7")
+
+
+# --- the API ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import api.trials as trials_api  # noqa: E402
+from api.app import app  # noqa: E402
+
+client = TestClient(app)
+AUTH = {"Authorization": "Bearer t"}
+PMC_XML = XML.replace(
+    b"<article-meta>", b'<article-meta><article-id pub-id-type="pmcid">PMC123</article-id>'
+)
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __getattr__(self, _a):
+        return lambda *a, **k: self
+
+    def execute(self):
+        return SimpleNamespace(data=self.rows)
+
+
+def _source(monkeypatch, media_type="application/xml", data=PMC_XML):
+    monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
+    row = {"storage_path": "lab/t1/PMC123.xml", "media_type": media_type}
+    monkeypatch.setattr(
+        trials_api, "user_client", lambda _t: SimpleNamespace(table=lambda _n: _Rows([row]))
+    )
+    bucket = SimpleNamespace(download=lambda path: data)
+    monkeypatch.setattr(
+        trials_api,
+        "service_client",
+        lambda: SimpleNamespace(storage=SimpleNamespace(from_=lambda _b: bucket)),
+    )
+
+
+def test_cited_endpoint_returns_each_part_and_the_pmc_page(monkeypatch):
+    _source(monkeypatch)
+    r = client.get(
+        "/trials/t1/sources/s1/cited",
+        params={"team_id": "lab", "where": "Results (Patient disposition); Table 1 (ECOG PS)"},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["article_url"] == "https://pmc.ncbi.nlm.nih.gov/articles/PMC123/"
+    section, table = body["parts"]
+    assert section["element"]["id"] == "Sec3"
+    assert table["element"]["kind"] == "table"
+    assert table["rows"] == [4, 5]
+    assert table["element"]["rows"][0][0] == {
+        "text": "Characteristic",
+        "header": True,
+        "colspan": 2,
+        "rowspan": 2,
+    }
+
+
+def test_cited_endpoint_only_reads_full_text_files(monkeypatch):
+    _source(monkeypatch, media_type="application/pdf")
+    r = client.get(
+        "/trials/t1/sources/s1/cited", params={"team_id": "lab", "where": "Table 1"}, headers=AUTH
+    )
+    assert r.status_code == 404
+
+
+def test_cited_endpoint_refuses_a_file_that_isnt_an_article(monkeypatch):
+    _source(monkeypatch, data=b'<!DOCTYPE a [<!ENTITY x "xx">]><article/>')
+    r = client.get(
+        "/trials/t1/sources/s1/cited", params={"team_id": "lab", "where": "Table 1"}, headers=AUTH
+    )
+    assert r.status_code == 422

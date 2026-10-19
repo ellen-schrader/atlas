@@ -20,6 +20,7 @@ from typing import Literal
 from . import jats
 
 _XLINK = "{http://www.w3.org/1999/xlink}href"
+_PMCID = re.compile(r"^PMC\d{1,10}$")
 
 # "Table 1", "Extended Data Table 3", "Supplementary Table S2", "Fig. 2d",
 # "Figure 3", "Extended Data Fig. 4b": a prefix, the kind, a number and a panel.
@@ -172,6 +173,14 @@ class Article:
                 key = _key(_text(el.find("label")))
                 if key and key not in self.floats:  # the first, not a later copy
                     self.floats[key] = el
+
+    @property
+    def pmcid(self) -> str | None:
+        """The article's PMC id ("PMC12283416"), if it gives a well-formed one."""
+        for el in self.root.iter("article-id"):
+            if el.get("pub-id-type") == "pmcid" and _PMCID.match(_text(el)):
+                return _text(el)
+        return None
 
     def _find_section(self, title: str, within: ET.Element | None = None) -> ET.Element | None:
         """A section by its title: exactly, else the first whose title the
