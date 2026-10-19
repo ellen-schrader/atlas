@@ -70,3 +70,7 @@ jobs:
       # feature on; a no-op otherwise). Writes, so a manual dry run skips it.
       - if: ${{ !cancelled() && !inputs.dry_run }}
         run: uv run --frozen python -m api.trial_links
+      # Refresh the labs' clinical trials from ClinicalTrials.gov and record what
+      # changed for the trials feed (a no-op for labs without the feature).
+      - if: ${{ !cancelled() && !inputs.dry_run }}
+        run: uv run --frozen python -m api.trials_refresh

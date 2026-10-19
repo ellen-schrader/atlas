@@ -7,6 +7,7 @@ import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { ExtractionView } from "@/components/trials/ExtractionView";
+import { PubMedHint } from "@/components/trials/PubMedHint";
 import { TrialSources } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
 import { extractionRunning, fetchSources } from "@/lib/extraction";
@@ -165,6 +166,7 @@ function TrialBody({ d }: { d: TrialDetail }) {
 
       <Section title="Papers in Atlas">
         <Papers d={d} onChange={refresh} />
+        <PubMedHint trialId={t.id} onAdded={refresh} />
       </Section>
 
       <Section title="Data from the papers">
