@@ -6,7 +6,7 @@ import { ArrowLeft, Check, ExternalLink, Loader2, Pencil, Plus, Undo2, X } from 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
-import { RequireTrials, TherapyList, TherapySwatch, TrialsDisclaimer } from "@/components/trials/parts";
+import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,7 +14,6 @@ import {
   PATIENT_GROUPS,
   SETTINGS,
   THERAPY_CLASSES,
-  type TherapyClass,
   type TrialDetail,
   type TrialLink,
   classification,
@@ -28,7 +27,6 @@ import {
   statusLabel,
   trialName,
 } from "@/lib/trials";
-import { cn } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 export default function TrialPage() {
@@ -388,50 +386,6 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">{label}</dt>
       <dd className="mt-1 text-fg">{children}</dd>
     </div>
-  );
-}
-
-function ChipGroup({
-  legend,
-  options,
-  selected,
-  onToggle,
-  swatches = false,
-}: {
-  legend: string;
-  options: Record<string, string>;
-  selected: string[];
-  onToggle: (value: string) => void;
-  swatches?: boolean;
-}) {
-  return (
-    <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1.5 text-sm font-medium text-fg">{legend}</legend>
-      <div className="flex flex-wrap gap-2">
-        {Object.entries(options).map(([value, label]) => {
-          const on = selected.includes(value);
-          return (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => onToggle(value)}
-              className={cn(
-                "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm transition",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                on
-                  ? "border-accent/50 bg-accent-weak text-fg"
-                  : "border-border text-muted hover:text-fg",
-              )}
-            >
-              {on && <Check size={13} aria-hidden />}
-              {swatches && <TherapySwatch therapy={value as TherapyClass} />}
-              {label}
-            </button>
-          );
-        })}
-      </div>
-    </fieldset>
   );
 }
 

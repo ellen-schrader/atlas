@@ -1,5 +1,6 @@
 import {
   Bookmark,
+  Layers,
   FlaskConical,
   Image,
   LayoutGrid,
@@ -61,13 +62,21 @@ export const LAB_NAV: NavItem[] = [
   },
 ];
 
-/** Clinical trials: its own group, headed "Clinical trials" with a New pill.
- *  Collections joins it in the next PR. */
+/** Clinical trials: its own group, headed "Clinical trials" with a New pill. */
 export const TRIALS_NAV: NavItem[] = [
+  {
+    to: "/trials/collections",
+    label: "Collections",
+    icon: Layers,
+    feature: TRIALS_FEATURE,
+    description: (lab) => `Clinical questions ${lab} follows`,
+  },
   {
     to: "/trials",
     label: "All trials",
     icon: FlaskConical,
+    // Not a prefix match: /trials/collections is its own entry.
+    end: true,
     feature: TRIALS_FEATURE,
     description: (lab) => `Breast cancer trials ${lab} follows`,
   },

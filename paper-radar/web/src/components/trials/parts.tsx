@@ -163,3 +163,48 @@ export function FilterMenu({
     </div>
   );
 }
+
+/** Pick any of a fixed set of tags (taxonomy values), as toggle chips. */
+export function ChipGroup({
+  legend,
+  options,
+  selected,
+  onToggle,
+  swatches = false,
+}: {
+  legend: string;
+  options: Record<string, string>;
+  selected: string[];
+  onToggle: (value: string) => void;
+  swatches?: boolean;
+}) {
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="mb-1.5 text-sm font-medium text-fg">{legend}</legend>
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(options).map(([value, label]) => {
+          const on = selected.includes(value);
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onToggle(value)}
+              className={cn(
+                "inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm transition",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                on
+                  ? "border-accent/50 bg-accent-weak text-fg"
+                  : "border-border text-muted hover:text-fg",
+              )}
+            >
+              {on && <Check size={13} aria-hidden />}
+              {swatches && <TherapySwatch therapy={value as TherapyClass} />}
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
