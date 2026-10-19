@@ -1,4 +1,14 @@
-import { Bookmark, Image, LayoutGrid, LibraryBig, Map as MapIcon, type LucideIcon } from "lucide-react";
+import {
+  Bookmark,
+  FlaskConical,
+  Image,
+  LayoutGrid,
+  LibraryBig,
+  Map as MapIcon,
+  type LucideIcon,
+} from "lucide-react";
+
+import { TRIALS_FEATURE } from "@/lib/trials";
 
 export interface NavItem {
   to: string;
@@ -9,6 +19,9 @@ export interface NavItem {
   /** Shows a Beta pill (or "(Beta)" in the collapsed bar). Drop the flag to
    *  graduate a page — nothing else needs to change. */
   beta?: boolean;
+  /** Only shown when this feature is on for the user in the lab
+   *  (public.my_features). Dark features stay out of the nav entirely. */
+  feature?: string;
   /** Hover text; supplementary, never the only place something is said. */
   description?: (labName: string) => string;
 }
@@ -47,6 +60,23 @@ export const LAB_NAV: NavItem[] = [
     description: () => "See how the lab’s papers connect by subject",
   },
 ];
+
+/** Clinical trials: its own group, headed "Clinical trials" with a New pill.
+ *  Collections joins it in the next PR. */
+export const TRIALS_NAV: NavItem[] = [
+  {
+    to: "/trials",
+    label: "All trials",
+    icon: FlaskConical,
+    feature: TRIALS_FEATURE,
+    description: (lab) => `Breast cancer trials ${lab} follows`,
+  },
+];
+
+/** The items of `items` the user has the features for. */
+export function visible(items: NavItem[], features: readonly string[]): NavItem[] {
+  return items.filter((item) => !item.feature || features.includes(item.feature));
+}
 
 /** The label an icon-only control carries: "Topic map (Beta)". */
 export function navTitle(item: NavItem): string {

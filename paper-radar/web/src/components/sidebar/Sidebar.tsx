@@ -6,7 +6,15 @@ import type { Team } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { ClaudeButton, ClaudeRow } from "./ClaudeEntry";
-import { FOCUS_RING, LAB_NAV, type NavItem, PERSONAL_NAV, navTitle } from "./nav";
+import {
+  FOCUS_RING,
+  LAB_NAV,
+  type NavItem,
+  PERSONAL_NAV,
+  TRIALS_NAV,
+  navTitle,
+  visible,
+} from "./nav";
 import { ProfileMenu } from "./ProfileMenu";
 
 export interface SidebarProps {
@@ -16,6 +24,8 @@ export interface SidebarProps {
   team: Team;
   labs: Team[];
   onSwitchLab: (teamId: string) => boolean;
+  /** Features on for the user in this lab (public.my_features). */
+  features: readonly string[];
 }
 
 function NavRow({
@@ -84,6 +94,17 @@ export function Sidebar({
 
       {navGroup("Main", PERSONAL_NAV)}
       {navGroup("Lab", LAB_NAV)}
+      {visible(TRIALS_NAV, p.features).length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 px-2.5 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
+            Clinical trials
+            <span className="rounded-full border border-border-strong px-1.5 py-[3px] text-[10px] leading-none text-muted">
+              New
+            </span>
+          </div>
+          {navGroup("Clinical trials", visible(TRIALS_NAV, p.features))}
+        </div>
+      )}
 
       <div className="mt-auto">
         <ClaudeRow teamId={p.team.id} userId={p.userId} onNavigate={onNavigate} />
@@ -135,6 +156,11 @@ export function CollapsedBar(p: SidebarProps) {
         <nav aria-label="Lab" className="flex flex-col items-center gap-1">
           {LAB_NAV.map(icon)}
         </nav>
+        {visible(TRIALS_NAV, p.features).length > 0 && (
+          <nav aria-label="Clinical trials" className="flex flex-col items-center gap-1">
+            {visible(TRIALS_NAV, p.features).map(icon)}
+          </nav>
+        )}
       </div>
 
       <div className="mt-auto flex flex-col items-center gap-2">

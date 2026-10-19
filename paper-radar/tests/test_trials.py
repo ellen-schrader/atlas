@@ -174,7 +174,8 @@ def test_search_by_nct_fetches_that_trial(monkeypatch):
 
 # --- linking papers to trials ------------------------------------------------------
 
-trial_links = pytest.importorskip("api.trial_links")
+from api import trial_links  # noqa: E402
+
 # conftest turns link_paper into a no-op for every test; keep the real one.
 _real_link_paper = trial_links.link_paper
 
@@ -352,7 +353,6 @@ def test_link_paper_links_for_labs_with_the_feature(monkeypatch):
 
 # --- the API ---------------------------------------------------------------------
 
-pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.trials as trials_api  # noqa: E402
@@ -405,3 +405,150 @@ def test_add_rejects_bad_ids_and_non_breast_trials(monkeypatch):
     )
     r = client.post("/trials", json={"team_id": "lab", "nct_id": "NCT00000001"}, headers=AUTH)
     assert r.status_code == 422
+
+
+# --- classification (PR 2) ----------------------------------------------------------
+
+from api import trial_classify  # noqa: E402
+
+
+def test_registry_digest_carries_what_classification_needs():
+    digest = json.loads(trial_classify.registry_digest(_fixture("NCT03036488")["protocolSection"]))
+    assert digest["conditions"] == ["Triple Negative Breast Neoplasms"]
+    assert {a["type"] for a in digest["arms"]} == {"EXPERIMENTAL", "ACTIVE_COMPARATOR"}
+    assert any(i["name"] == "Pembrolizumab" for i in digest["interventions"])
+    assert "eligibility" in digest
+
+
+class _FakeAnthropic:
+    def __init__(self, parsed, stop_reason="end_turn"):
+        self.parsed, self.stop_reason, self.calls = parsed, stop_reason, []
+        self.messages = self
+
+    def __call__(self, **_k):
+        return self
+
+    def parse(self, **kw):
+        self.calls.append(kw)
+        return SimpleNamespace(parsed_output=self.parsed, stop_reason=self.stop_reason)
+
+
+def _with_claude(monkeypatch, fake):
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "Anthropic", fake)
+    monkeypatch.setattr(
+        trial_classify,
+        "get_settings",
+        lambda: SimpleNamespace(anthropic_api_key="k", anthropic_model="m"),
+    )
+
+
+def test_classify_orders_and_dedupes(monkeypatch):
+    C = trial_classify.Classification
+    fake = _FakeAnthropic(
+        C(
+            settings=["adjuvant", "neoadjuvant", "adjuvant"],
+            patient_groups=["tnbc"],
+            therapy_classes=["chemotherapy", "immunotherapy"],
+        )
+    )
+    _with_claude(monkeypatch, fake)
+    out = trial_classify.classify(_fixture("NCT03036488")["protocolSection"])
+    assert out.settings == ["neoadjuvant", "adjuvant"]
+    assert out.therapy_classes == ["immunotherapy", "chemotherapy"]
+    (call,) = fake.calls
+    assert call["output_format"] is C
+    assert "<registry_record>" in call["messages"][0]["content"]
+
+
+def test_classify_gives_up_quietly(monkeypatch):
+    _with_claude(monkeypatch, _FakeAnthropic(None, stop_reason="max_tokens"))
+    assert trial_classify.classify({}) is None
+    monkeypatch.setattr(
+        trial_classify, "get_settings", lambda: SimpleNamespace(anthropic_api_key="")
+    )
+    assert trial_classify.classify({}) is None
+
+
+def test_classify_lab_claims_and_fills_only_pending_trials(monkeypatch):
+    svc = _FakeSvc(
+        {
+            "trial_posts": [{"trial_id": "t1"}, {"trial_id": "t2"}],
+            # A person did t1. Reads of trial_facts also answer _claim's update,
+            # which only needs to come back non-empty.
+            "trial_facts": [
+                {
+                    "trial_id": "t1",
+                    "classified_by": "person",
+                    "classify_attempts": 0,
+                    "classify_claimed_at": None,
+                }
+            ],
+            "trials": [{"registry": {"identificationModule": {}}}],
+        }
+    )
+    monkeypatch.setattr(trial_classify, "service_client", lambda: svc)
+    C = trial_classify.Classification
+    seen = []
+
+    def classify(reg):
+        seen.append(reg)
+        return C(settings=["metastatic"], patient_groups=[], therapy_classes=["adc"])
+
+    monkeypatch.setattr(trial_classify, "classify", classify)
+    assert trial_classify.classify_lab("lab") == 1
+    assert len(seen) == 1
+    # The placeholder row carries no short name: the registry's shows until a
+    # person sets one.
+    assert svc.upserts == [("trial_facts", {"team_id": "lab", "trial_id": "t2"})]
+
+
+def test_pending_skips_given_up_and_claimed_trials():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    row = {"classified_by": None, "classify_attempts": 0, "classify_claimed_at": None}
+    svc = _FakeSvc(
+        {
+            "trial_posts": [{"trial_id": t} for t in ("new", "retry", "gave-up", "busy", "stale")],
+            "trial_facts": [
+                {
+                    **row,
+                    "trial_id": "retry",
+                    "classify_attempts": 1,
+                    "classify_claimed_at": (now - timedelta(hours=1)).isoformat(),
+                },
+                {**row, "trial_id": "gave-up", "classify_attempts": trial_classify.MAX_ATTEMPTS},
+                {
+                    **row,
+                    "trial_id": "busy",
+                    "classify_attempts": 1,
+                    "classify_claimed_at": now.isoformat(),
+                },
+                {
+                    **row,
+                    "trial_id": "stale",
+                    "classify_attempts": 2,
+                    "classify_claimed_at": (now - timedelta(minutes=30)).isoformat(),
+                },
+            ],
+        }
+    )
+    assert trial_classify._pending(svc, "lab") == [("new", 0), ("retry", 1), ("stale", 2)]
+
+
+def test_lab_trials_match_the_labs_short_name_too():
+    svc = _FakeSvc(
+        {
+            "trial_posts": [
+                {
+                    "trial_id": "t",
+                    "trials": {"id": "t", "nct_id": "NCT02620280", "acronym": "NeoTRIPaPDL1"},
+                }
+            ],
+            "trial_facts": [{"trial_id": "t", "acronym": "NeoTRIP"}],
+        }
+    )
+    trials = trial_links._lab_trials(svc, "lab")
+    assert trials["NCT02620280"]["names"] == ["NeoTRIP", "NeoTRIPaPDL1"]

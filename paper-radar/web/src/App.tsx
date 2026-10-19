@@ -16,6 +16,8 @@ import Connect from "@/routes/Connect";
 import MapView from "@/routes/Map";
 import MapDashboard from "@/routes/MapDashboard";
 import MapsLibrary from "@/routes/MapsLibrary";
+import TrialPage from "@/routes/TrialPage";
+import Trials from "@/routes/Trials";
 import MoodBoard from "@/routes/MoodBoard";
 import OAuthConsent from "@/routes/OAuthConsent";
 import Onboarding from "@/routes/Onboarding";
@@ -231,6 +233,9 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/maps" element={<MapsLibrary />} />
         <Route path="/maps/overview" element={<MapView />} />
         <Route path="/maps/:mapId" element={<MapDashboard />} />
+        {/* Clinical trials: dark unless the feature is on (RequireTrials). */}
+        <Route path="/trials" element={<Trials />} />
+        <Route path="/trials/:nct" element={<TrialPage />} />
         <Route path="/connect" element={<Connect />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

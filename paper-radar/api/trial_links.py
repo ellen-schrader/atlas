@@ -25,6 +25,7 @@ from typing import Any
 
 from paper_radar.trials import FEATURE, ctgov
 
+from . import trial_classify
 from .merge_suggestions import lab_papers
 from .supa import service_client
 
@@ -55,7 +56,9 @@ def acronym_pattern(acronym: str | None) -> re.Pattern[str] | None:
 
 
 def _lab_trials(svc, team_id: str) -> dict[str, dict[str, Any]]:
-    """The lab's trials by NCT ID: {nct_id: {id, acronym}}."""
+    """The lab's trials by NCT ID: {nct_id: {id, nct_id, acronym, names}}, where
+    `names` are the short names to look for in titles: the lab's own (trial_facts)
+    and the registry's."""
     rows = (
         svc.table("trial_posts")
         .select("trial_id, trials(id, nct_id, acronym)")
@@ -64,7 +67,24 @@ def _lab_trials(svc, team_id: str) -> dict[str, dict[str, Any]]:
         .data
         or []
     )
-    return {r["trials"]["nct_id"]: r["trials"] for r in rows if r.get("trials")}
+    own = {
+        r["trial_id"]: r["acronym"]
+        for r in svc.table("trial_facts")
+        .select("trial_id, acronym")
+        .eq("team_id", team_id)
+        .execute()
+        .data
+        or []
+        if r.get("acronym")
+    }
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        t = r.get("trials")
+        if not t:
+            continue
+        names = [n for n in (own.get(t["id"]), t.get("acronym")) if n]
+        out[t["nct_id"]] = {**t, "names": list(dict.fromkeys(names))}
+    return out
 
 
 def _decided(svc, team_id: str, paper_ids: list[str]) -> set[tuple[str, str]]:
@@ -154,7 +174,12 @@ def link_papers(
     removed = _removed(svc, team_id)
     have = _decided(svc, team_id, [p["id"] for p in papers])
     posted: set[str] = {t["id"] for t in trials.values()}
-    patterns = [(t["id"], acronym_pattern(t.get("acronym"))) for t in trials.values()]
+    patterns = [
+        (t["id"], pattern)
+        for t in trials.values()
+        for pattern in map(acronym_pattern, t.get("names") or [t.get("acronym")])
+        if pattern
+    ]
 
     new_links: dict[tuple[str, str], dict[str, Any]] = {}
     for p in papers:
@@ -175,12 +200,7 @@ def link_papers(
                 new_links[key] = {"source": "nct_in_abstract", "status": "auto"}
         for trial_id, pattern in patterns:
             key = (p["id"], trial_id)
-            if (
-                pattern
-                and key not in have
-                and key not in new_links
-                and pattern.search(p.get("title") or "")
-            ):
+            if key not in have and key not in new_links and pattern.search(p.get("title") or ""):
                 new_links[key] = {"source": "acronym_in_title", "status": "suggested"}
 
     if not new_links:
@@ -213,6 +233,8 @@ def link_paper(team_id: str, paper_id: str) -> None:
         link_papers(team_id, rows or [])
     except Exception as exc:  # noqa: BLE001 — a background task must not raise
         log.warning("linking paper %s to trials failed: %s", paper_id, exc)
+        return
+    trial_classify.classify_lab(team_id)  # trials the paper added; never raises
 
 
 def _lab_papers(svc, team_id: str) -> list[dict[str, Any]]:
@@ -228,6 +250,7 @@ def link_lab(team_id: str) -> None:
         link_papers(team_id, _lab_papers(service_client(), team_id))
     except Exception as exc:  # noqa: BLE001 — a background task must not raise
         log.warning("linking lab %s papers to trials failed: %s", team_id, exc)
+    trial_classify.classify_lab(team_id)  # never raises
 
 
 def run() -> int:
@@ -244,7 +267,8 @@ def run() -> int:
             log.warning("lab %s: linking failed: %s", team_id, exc)
             failed += 1
             continue
-        log.info("lab %s: %d new trial links", team_id, n)
+        classified = trial_classify.classify_lab(team_id)
+        log.info("lab %s: %d new trial links, %d trials classified", team_id, n, classified)
         total += n
     if failed:
         raise SystemExit(f"{failed} lab(s) failed; see the log")
