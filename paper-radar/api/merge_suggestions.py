@@ -89,14 +89,17 @@ def find_pairs(rows: list[dict], only: str | None = None) -> list[tuple[dict, di
     return pairs
 
 
-def lab_papers(svc, team_id: str) -> list[dict]:
-    """Every paper the lab holds, with what matching needs."""
+def lab_papers(
+    svc, team_id: str, columns: str = "id, doi, url, venue, title, authors"
+) -> list[dict]:
+    """Every paper the lab holds, with the given columns (by default, what
+    matching needs)."""
     rows: list[dict] = []
     start = 0
     while True:
         page = (
             svc.table("paper_posts")
-            .select("papers(id, doi, url, venue, title, authors)")
+            .select(f"papers({columns})")
             .eq("team_id", team_id)
             .order("id")
             .range(start, start + _PAGE - 1)
