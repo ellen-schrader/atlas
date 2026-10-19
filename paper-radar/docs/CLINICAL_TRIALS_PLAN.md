@@ -117,7 +117,7 @@ PRs 1–4 deliver the core of the mock-ups. I'd seed the local stack with the fo
 - **No cache write:** one request reads the documents once, so the 1.25× write never paid off.
 - **Batches:** "Queue extraction" (the default) sends through the Message Batches API at half price. `api/trial_extract_batch.py` runs every two hours (`.github/workflows/trial-extraction.yml`), stores finished results and retries a failed one once. "Extract now" stays, at full price.
 - **Automatic:** a trial queues itself when it gets its first source. The daily job fetches open-access full text for trials with linked papers and no sources, so open-access trials extract with no clicks.
-- **Budget:** every paid call is recorded in `trial_extraction_spend`. Each lab has a monthly cap (`TRIAL_EXTRACTION_MONTHLY_USD`, default $10, on both the API and the batch job). Past it, queued trials wait for the 1st and "Extract now" is refused. The trial page shows the month's spend.
+- **Budget:** every paid call is recorded in `trial_extraction_spend`. Each lab has a monthly cap (`TRIAL_EXTRACTION_MONTHLY_USD`, default $5 while Atlas is self-funded, on both the API and the batch job: about 40 open-access trials). Past it, queued trials wait for the 1st, "Extract now" is refused, and both point people to extracting through their own Claude with the Atlas connector (PR 8). The trial page shows the month's spend.
 - **Next (PR 8):** MCP tools so a lab member's own Claude can record an extraction (no API cost), listed only to labs with the feature on.
 
 ## 7. Cost

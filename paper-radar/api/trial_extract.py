@@ -456,9 +456,9 @@ def claim(team_id: str, trial_id: str) -> bool:
 def monthly_cap() -> float:
     """Dollars each lab may spend on extraction per calendar month."""
     try:
-        return float(os.environ.get("TRIAL_EXTRACTION_MONTHLY_USD", "10"))
+        return float(os.environ.get("TRIAL_EXTRACTION_MONTHLY_USD", "5"))
     except ValueError:
-        return 10.0
+        return 5.0
 
 
 def spent_this_month(svc, team_id: str) -> float:
@@ -479,7 +479,11 @@ def over_budget(svc, team_id: str) -> str | None:
     """Why the lab can't extract right now, or None."""
     cap = monthly_cap()
     if spent_this_month(svc, team_id) >= cap:
-        return f"This month's extraction budget (${cap:.0f}) is used. It resets on the 1st."
+        return (
+            f"This month's extraction budget (${cap:.0f}) is used; it resets on the 1st. "
+            "Meanwhile, extract it with your own Claude through the Atlas connector: "
+            "ask Claude to extract this trial."
+        )
     return None
 
 
