@@ -11,15 +11,57 @@ A value the papers don't report is null, never a guess.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def clean_anchor(v: str | None) -> str | None:
+    """An anchor as a plain id ("Tab1"), from "[Table id=Tab1]" too; else None."""
+    if not v:
+        return None
+    m = re.fullmatch(r"\s*(\w[\w.-]{0,63})\s*", v) or re.search(r"\bid=(\w[\w.-]{0,63})", v)
+    return m.group(1) if m else None
+
+
+def clean_quote(v: str | None, limit: int = 300) -> str | None:
+    """A quote cut to `limit` characters at a word's end (a number cut short
+    would no longer be found)."""
+    v = (v or "").strip()
+    if len(v) > limit:
+        cut = v[:limit]
+        v = cut.rsplit(None, 1)[0] if v[limit].strip() and " " in cut else cut
+    return v.strip() or None
 
 
 class Source(BaseModel):
     doc: int = Field(description="1-based number of the document, as listed in the request")
     where: str = Field(description='Where in it: "Table 1", "Figure 2A", "Methods", "Abstract"')
     page: str | None = Field(default=None, description="Page number, if the document has pages")
+    anchor: str | None = Field(
+        default=None,
+        description="In a full-text document, the id shown on the table, figure or section "
+        'the values come from ("Tab1" from "[Table id=Tab1]", "Sec3" from "[id=Sec3]")',
+    )
+    quote: str | None = Field(
+        default=None,
+        description="A few words copied exactly from that place that show the main value: "
+        'a table row as shown ("ECOG PS | 0 | 157 (95) | 154 (92)") or part of a sentence; '
+        "at most 25 words",
+    )
+
+    # Both only help find the value: a malformed one is dropped or cut, never
+    # a reason to fail (and pay again for) the whole extraction.
+    @field_validator("anchor")
+    @classmethod
+    def _plain_anchor(cls, v: str | None) -> str | None:
+        return clean_anchor(v)
+
+    @field_validator("quote")
+    @classmethod
+    def _short_quote(cls, v: str | None) -> str | None:
+        return clean_quote(v)
 
 
 class Pico(BaseModel):

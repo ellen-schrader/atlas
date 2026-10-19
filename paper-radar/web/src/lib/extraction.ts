@@ -7,6 +7,11 @@ export interface Source {
   doc: number;
   where: string;
   page: string | null;
+  /** In a full text: the id of the table, figure or section ("Tab1"). Older
+   *  extractions don't have it. */
+  anchor?: string | null;
+  /** A few words copied from there that show the main value. */
+  quote?: string | null;
 }
 
 export interface Endpoint {
@@ -276,6 +281,29 @@ export async function sourceUrl(s: TrialSource): Promise<string> {
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(s.storage_path, 300);
   if (error) throw error;
   return data.signedUrl;
+}
+
+/** The PMC page of a full text fetched from Europe PMC (stored as
+ *  "<team>/<trial>/PMC123.xml"): readable, where the stored XML isn't. */
+export function pmcUrl(s: Pick<TrialSource, "origin" | "storage_path">): string | null {
+  const m = s.origin === "europepmc" ? /\/(PMC\d{1,10})\.xml$/.exec(s.storage_path) : null;
+  return m ? `https://pmc.ncbi.nlm.nih.gov/articles/${m[1]}/` : null;
+}
+
+/** The first page a source names ("5", "p. 5–6", "S3" → 5, 5, 3), for
+ *  opening a PDF there. */
+export function firstPage(page: string | null): number | null {
+  const m = page ? /\d+/.exec(page) : null;
+  const n = m ? Number(m[0]) : 0;
+  return n > 0 ? n : null;
+}
+
+/** Opens a trial's file where a source points: a PDF at its page, a Europe
+ *  PMC full text on PMC (the stored XML isn't readable), anything else as is. */
+export async function openSourceFile(s: TrialSource, page: string | null = null): Promise<void> {
+  const n = s.media_type === "application/pdf" ? firstPage(page) : null;
+  const url = pmcUrl(s) ?? (await sourceUrl(s)) + (n ? `#page=${n}` : "");
+  window.open(url, "_blank", "noopener");
 }
 
 // --- checking and correcting ------------------------------------------------------

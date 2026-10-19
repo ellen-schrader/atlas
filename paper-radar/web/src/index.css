@@ -286,3 +286,11 @@ body {
   }
   .reveal-caret { animation: reveal-blink 1s steps(1) infinite; }
 }
+
+/* The source panel (trials) sits beside the page on a wide screen rather
+   than over the values being checked against it. */
+@media (min-width: 1280px) {
+  body.source-panel-open main {
+    padding-right: 38rem;
+  }
+}

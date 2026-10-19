@@ -389,3 +389,16 @@ def test_jats_refuses_entities_in_any_encoding():
     ).encode("utf-16")
     with pytest.raises(jats.NotJats):
         jats.to_text(doc)
+
+
+def test_jats_tags_tables_figures_and_sections_with_their_ids():
+    xml = b"""<article><body><sec id="Sec2"><title>Results</title><p>Randomised.</p>
+      <table-wrap id="Tab1"><label>Table 1</label><table><tr><td>x</td></tr></table></table-wrap>
+      <fig id="Fig2"><label>Fig. 2</label><caption><p>EFS</p></caption></fig>
+      <fig id="odd id&quot;"><label>Fig. 3</label></fig>
+    </sec></body></article>"""
+    t = jats.to_text(xml)
+    assert "## Results [id=Sec2]" in t
+    assert "[Table id=Tab1] Table 1" in t
+    assert "[Figure id=Fig2] Fig. 2 EFS" in t
+    assert "[Figure] Fig. 3" in t  # an id that isn't plain isn't shown

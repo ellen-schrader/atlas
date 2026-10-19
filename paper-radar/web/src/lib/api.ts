@@ -487,6 +487,70 @@ export async function fetchOpenAccess(
   });
 }
 
+/** One cell of a table in a full-text source, with its spans. */
+export interface CitedCell {
+  text: string;
+  header: boolean;
+  colspan: number;
+  rowspan: number;
+}
+
+/** A table, figure or section of a full-text source, ready to show. */
+export interface CitedElement {
+  id: string;
+  kind: "table" | "figure" | "section";
+  label: string;
+  caption: string;
+  rows: CitedCell[][];
+  /** A section's text; "## " starts a subheading. */
+  paragraphs: string[];
+  footnotes: string[];
+  /** A figure's image on PMC (served from NCBI's image host). */
+  image: string | null;
+}
+
+/** Where a source's quote is in an element: a table row, footnote,
+ *  paragraph or caption by index ("heading": the label and caption read
+ *  together), and the characters it covers there. */
+export interface QuoteHit {
+  where: "row" | "footnote" | "paragraph" | "caption" | "heading";
+  index: number;
+  start: number;
+  end: number;
+}
+
+/** One part of an extracted value's source ("Table 1 (ECOG PS)"), and what
+ *  it points at (null when nothing in the article matched). */
+export interface CitedPart {
+  part: string;
+  element: CitedElement | null;
+  /** The table rows the part names. */
+  rows: number[];
+  /** The figure panel the part names ("d"). */
+  panel: string | null;
+  /** Where the source's quote is in this part's element. */
+  quote: QuoteHit | null;
+  /** Not a place the source named: where its quote turned up instead. */
+  elsewhere: boolean;
+}
+
+/** What a source's "where" (and anchor) point at in one of the trial's
+ *  full-text files, where its quote is (quote_found null: it has none), and
+ *  the article on PMC (each element's id is its anchor there). */
+export async function fetchCited(
+  teamId: string,
+  trialId: string,
+  sourceId: string,
+  where: string,
+  anchor?: string | null,
+  quote?: string | null,
+): Promise<{ parts: CitedPart[]; article_url: string | null; quote_found: boolean | null }> {
+  const q = new URLSearchParams({ team_id: teamId, where });
+  if (anchor) q.set("anchor", anchor);
+  if (quote) q.set("quote", quote);
+  return authedRequest(`/trials/${trialId}/sources/${sourceId}/cited?${q}`);
+}
+
 /** Start Claude's extraction of the trial's data from its sources: queued for
  *  the next batch (half price, within hours) or now (full price). */
 export async function startExtraction(

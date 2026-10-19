@@ -19,7 +19,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from paper_radar.ingest.urls import _normalize_key
-from paper_radar.trials import FEATURE, ctgov, pubmed
+from paper_radar.trials import FEATURE, cited, ctgov, jats, pubmed
+from paper_radar.trials.extraction import clean_anchor, clean_quote
 
 from . import trial_extract, trial_links
 from .deps import require_token
@@ -299,6 +300,69 @@ def get_data(req: GetData, token: str = Depends(require_token)) -> GotData:
     if reason:
         raise HTTPException(status_code=402, detail=reason)
     return GotData(**trial_extract.get_data(req.team_id, ids))
+
+
+# --- what a source points at ------------------------------------------------------------
+
+
+class CitedOut(BaseModel):
+    parts: list[cited.Citation]
+    # The article on PMC, to open in full; each element's id is its anchor there.
+    article_url: str | None
+    # Whether the source's quote is in what's shown (None: it has no quote).
+    quote_found: bool | None = None
+
+
+@router.get("/{trial_id}/sources/{source_id}/cited", response_model=CitedOut)
+def source_cited(
+    trial_id: str,
+    source_id: str,
+    team_id: str,
+    where: str = Query(default="", max_length=500),
+    anchor: str | None = None,
+    quote: str | None = None,
+    token: str = Depends(require_token),
+) -> CitedOut:
+    """The tables, figures and sections an extracted value's source names
+    ("Results (Patient disposition); Table 1"), from one of the trial's
+    full-text (JATS) files, ready to show beside the value."""
+    _require_lab_trial(token, team_id, trial_id)
+    rows = (
+        user_client(token)
+        .table("trial_sources")
+        .select("storage_path, media_type")
+        .eq("id", source_id)
+        .eq("team_id", team_id)
+        .eq("trial_id", trial_id)
+        .execute()
+        .data
+    )
+    if not rows or rows[0]["media_type"] != "application/xml":
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    bucket = service_client().storage.from_(trial_extract.BUCKET)
+    try:
+        xml = bucket.download(rows[0]["storage_path"])
+    except Exception as exc:  # gone from storage, or storage is down
+        log.warning("Couldn't read trial source %s: %s", source_id, exc)
+        raise HTTPException(status_code=404, detail=_NOT_FOUND) from exc
+    try:
+        article = cited.Article(xml)
+    except jats.NotJats as exc:
+        # 415, not 422: a 422 is also FastAPI's answer to a malformed request.
+        detail = "That file can't be read as an article."
+        raise HTTPException(status_code=415, detail=detail) from exc
+    # Anchor and quote only help find the value: an odd one is ignored, not refused.
+    anchor, quote = clean_anchor(anchor), clean_quote(quote)
+    parts = article.cite_all(where, anchor, quote)
+    pmcid = article.pmcid
+    return CitedOut(
+        parts=parts,
+        article_url=f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/" if pmcid else None,
+        # Found where the source said, not elsewhere; None when there's no quote to find.
+        quote_found=(
+            any(p.quote and not p.elsewhere for p in parts) if cited.quote_pattern(quote) else None
+        ),
+    )
 
 
 # --- PubMed (PR 6) -----------------------------------------------------------------
