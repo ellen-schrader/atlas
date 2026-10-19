@@ -500,6 +500,15 @@ export async function startExtraction(
   });
 }
 
+/** Where each trial has sites: country and number of sites, most first. */
+export type SiteCountries = Record<string, { country: string; sites: number }[]>;
+
+/** For each of the lab's trials (by id), the countries it has sites in, from
+ *  the stored registry record. */
+export async function fetchTrialCountries(teamId: string): Promise<SiteCountries> {
+  return authedRequest(`/trials/countries?${new URLSearchParams({ team_id: teamId })}`);
+}
+
 /** This month's extraction spend for the lab, and its cap. */
 export async function fetchExtractionBudget(
   teamId: string,

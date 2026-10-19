@@ -14,6 +14,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { Textarea } from "@/components/ui/textarea";
 import { useDismissable } from "@/hooks/useDismissable";
 import { useMyRole } from "@/hooks/useMyRole";
+import { useTrialCountries } from "@/hooks/useTrialCountries";
 import {
   type CollectionDetail,
   type CollectionFields,
@@ -151,6 +152,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
   });
   const [picked, setView] = useState<"overview" | "compare">("overview");
   const canCompare = comparable.length >= 2;
+  const countries = useTrialCountries(team.id);
   // Compare falls back to Overview when it stops being possible (a trial
   // removed), so the selected tab and what's on screen always agree.
   const view = canCompare ? picked : "overview";
@@ -294,7 +296,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
       </div>
 
       {view === "compare" && canCompare ? (
-        <CompareView available={comparable} />
+        <CompareView available={comparable} countries={countries.data} />
       ) : (
         <Section
           title={`Trials in this collection · ${inCollection.length}`}

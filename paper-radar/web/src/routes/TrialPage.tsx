@@ -13,6 +13,7 @@ import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/compo
 import { extractionRunning, extractionState, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
+import { useTrialCountries } from "@/hooks/useTrialCountries";
 import { Input } from "@/components/ui/input";
 import {
   type FactsEdit,
@@ -184,6 +185,7 @@ function TrialBody({ d }: { d: TrialDetail }) {
             · {[statusLabel(t.status), ...facts, t.sponsor].filter(Boolean).join(" · ")}
           </span>
         </div>
+        <SiteCountries trialId={t.id} />
         <Classification d={d} onSaved={refresh} />
       </header>
 
@@ -281,6 +283,56 @@ function TrialBody({ d }: { d: TrialDetail }) {
       </Section>
       {confirmDialog}
     </>
+  );
+}
+
+/** "68 sites in 13 countries · Germany, United States, Japan +10", and the
+ *  full list a click away. Sites, not participants: the registry doesn't say
+ *  how many each enrolled. */
+function SiteCountries({ trialId }: { trialId: string }) {
+  const { team } = useAppContext();
+  const { data } = useTrialCountries(team.id);
+  const [open, setOpen] = useState(false);
+  const countries = data?.[trialId];
+  if (!countries?.length) return null;
+  const sites = countries.reduce((n, c) => n + c.sites, 0);
+  const lead = countries.slice(0, 3).map((c) => c.country);
+  const more = countries.length - lead.length;
+  return (
+    <div className="flex flex-col gap-2 text-meta text-muted">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex w-fit flex-wrap items-center gap-x-1.5 text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <span className="font-medium text-fg">
+          {sites} {sites === 1 ? "site" : "sites"} in{" "}
+          {countries.length === 1 ? countries[0].country : `${countries.length} countries`}
+        </span>
+        {countries.length > 1 && (
+          <span>
+            · {lead.join(", ")}
+            {more > 0 && ` +${more}`}
+          </span>
+        )}
+        <ChevronDown size={14} aria-hidden className={cn("transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1.5">
+          <ul className="flex flex-wrap gap-1.5">
+            {countries.map((c) => (
+              <li key={c.country} className="rounded-full border border-border px-2.5 py-0.5 text-fg">
+                {c.country} <span className="font-mono text-muted">{c.sites}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-faint">
+            Sites listed on ClinicalTrials.gov. The registry doesn’t say how many people each enrolled.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 

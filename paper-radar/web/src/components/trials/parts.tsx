@@ -126,7 +126,8 @@ export function FilterMenu({
         <div
           role="group"
           aria-label={label}
-          className="absolute left-0 top-full z-30 mt-1.5 min-w-60 rounded-card border border-border bg-surface p-1.5 shadow-lg"
+          // Scrolls past ~10 options (Country can run to dozens).
+          className="absolute left-0 top-full z-30 mt-1.5 max-h-80 min-w-60 overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-lg"
         >
           {options.map((o) => {
             const on = selected.includes(o.value);

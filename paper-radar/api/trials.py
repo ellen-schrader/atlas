@@ -331,6 +331,54 @@ def pubmed_hint(trial_id: str, team_id: str, token: str = Depends(require_token)
     )
 
 
+# --- where trials have sites -----------------------------------------------------------
+
+
+class SiteCountry(BaseModel):
+    country: str
+    sites: int
+
+
+# Trials per request to the database: a location list can run to 100 kB, so
+# a lab's trials are read a few at a time.
+_COUNTRY_BATCH = 20
+
+
+@router.get("/countries", response_model=dict[str, list[SiteCountry]])
+def trial_countries(
+    team_id: str, token: str = Depends(require_token)
+) -> dict[str, list[SiteCountry]]:
+    """For each of the lab's trials, the countries it has sites in, from the
+    stored registry record (no call to ClinicalTrials.gov). Done here so the
+    web app gets a few bytes per trial instead of every site's address."""
+    _require_feature(token, team_id)
+    client = user_client(token)
+    ids = [
+        r["trial_id"]
+        for r in client.table("trial_posts")
+        .select("trial_id")
+        .eq("team_id", team_id)
+        .execute()
+        .data
+        or []
+    ]
+    out: dict[str, list[SiteCountry]] = {}
+    for i in range(0, len(ids), _COUNTRY_BATCH):
+        rows = (
+            client.table("trials")
+            .select("id, locations:registry->contactsLocationsModule->locations")
+            .in_("id", ids[i : i + _COUNTRY_BATCH])
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            out[r["id"]] = [
+                SiteCountry(country=c, sites=n) for c, n in ctgov.site_countries(r.get("locations"))
+            ]
+    return out
+
+
 # --- extraction budget (PR 7) ---------------------------------------------------------
 
 

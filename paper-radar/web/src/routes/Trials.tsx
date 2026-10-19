@@ -36,9 +36,11 @@ import {
   statusLabel,
 } from "@/lib/trials";
 import { cn } from "@/lib/utils";
+import { useTrialCountries } from "@/hooks/useTrialCountries";
+import type { SiteCountries } from "@/lib/api";
 import { useAppContext } from "@/routes/Layout";
 
-type FilterKey = "therapy" | "group" | "setting" | "phase";
+type FilterKey = "therapy" | "group" | "setting" | "phase" | "country";
 type Sort = "papers" | "name" | "added";
 
 const MENUS: { key: FilterKey; label: string }[] = [
@@ -46,10 +48,15 @@ const MENUS: { key: FilterKey; label: string }[] = [
   { key: "group", label: "Patient group" },
   { key: "setting", label: "Setting" },
   { key: "phase", label: "Phase" },
+  { key: "country", label: "Country" },
 ];
 
-function valuesOf(t: LabTrial, key: FilterKey): string[] {
+/** Where each trial has sites (registry), by trial id. */
+type Countries = SiteCountries | undefined;
+
+function valuesOf(t: LabTrial, key: FilterKey, countries: Countries): string[] {
   if (key === "phase") return [phaseLabel(t.phases)];
+  if (key === "country") return (countries?.[t.id] ?? []).map((c) => c.country);
   const f = t.facts;
   if (!f) return [];
   return key === "therapy" ? f.therapy_classes : key === "group" ? f.patient_groups : f.settings;
@@ -122,6 +129,7 @@ function AllTrials() {
     () => collectionsByTrial(collections.data ?? []),
     [collections.data],
   );
+  const { data: countries } = useTrialCountries(team.id);
   const { data: trials, isLoading, error } = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
@@ -162,7 +170,7 @@ function AllTrials() {
     MENUS.every(({ key }) => {
       if (key === skip) return true;
       const sel = selected(key);
-      return sel.length === 0 || sel.some((s) => valuesOf(t, key).includes(s));
+      return sel.length === 0 || sel.some((s) => valuesOf(t, key, countries).includes(s));
     });
 
   const shown = useMemo(() => {
@@ -177,9 +185,15 @@ function AllTrials() {
     );
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [all, params]);
+  }, [all, params, countries]);
 
   const phaseValues = [...new Set(all.map((t) => phaseLabel(t.phases)))].sort();
+  // Countries the lab's trials have sites in, the most trials first.
+  const countryValues = (() => {
+    const n = new Map<string, number>();
+    for (const t of all) for (const c of valuesOf(t, "country", countries)) n.set(c, (n.get(c) ?? 0) + 1);
+    return [...n.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([c]) => c);
+  })();
   const optionsFor = (key: FilterKey): FilterOption[] => {
     const values =
       key === "therapy"
@@ -188,11 +202,13 @@ function AllTrials() {
           ? Object.keys(PATIENT_GROUPS)
           : key === "setting"
             ? Object.keys(SETTINGS)
-            : phaseValues;
+            : key === "country"
+              ? countryValues
+              : phaseValues;
     return values.map((v) => ({
       value: v,
       label: labelOf(key, v),
-      count: all.filter((t) => matches(t, key) && valuesOf(t, key).includes(v)).length,
+      count: all.filter((t) => matches(t, key) && valuesOf(t, key, countries).includes(v)).length,
       swatch: key === "therapy" ? (v as TherapyClass) : undefined,
     }));
   };
@@ -240,7 +256,7 @@ function AllTrials() {
       {trials && trials.length > 0 && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="relative min-w-56 flex-1 sm:max-w-xs">
+            <label className="relative min-w-56 flex-1 sm:max-w-sm">
               <span className="sr-only">Search trials</span>
               <Search
                 size={15}
@@ -263,7 +279,41 @@ function AllTrials() {
                 onToggle={(v) => toggle(m.key, v)}
               />
             ))}
-            <div className="ml-auto flex items-center gap-2">
+          </div>
+
+          <div className="flex min-h-10 flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted" aria-live="polite">
+              {shown.length} {shown.length === 1 ? "trial" : "trials"}
+              {shown.length !== all.length && ` (of ${all.length})`}
+            </span>
+            {active.map(({ key, v }) => (
+              <button
+                key={`${key}:${v}`}
+                type="button"
+                onClick={() => toggle(key, v)}
+                aria-label={`Remove filter ${labelOf(key, v)}`}
+                className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-weak px-2.5 py-0.5 text-meta text-fg hover:border-accent"
+              >
+                {labelOf(key, v)} <X size={12} aria-hidden />
+              </button>
+            ))}
+            {(active.length > 0 || needle) && (
+              <button
+                type="button"
+                onClick={clearAll}
+                className="text-meta font-medium text-accent hover:underline"
+              >
+                Clear all
+              </button>
+            )}
+            {/* Sort and view sit with the count they act on, which leaves the
+                row above to search and filters. */}
+            <div className="ml-auto flex items-center gap-3">
+              {picked.length === 0 && (
+                <span className="hidden text-meta text-faint lg:inline">
+                  Tick trials to save them as a collection
+                </span>
+              )}
               <label className="flex items-center gap-2 text-sm text-muted">
                 Sort
                 <select
@@ -297,38 +347,6 @@ function AllTrials() {
                 })}
               </div>
             </div>
-          </div>
-
-          <div className="flex min-h-7 flex-wrap items-center gap-2 text-sm">
-            <span className="text-muted" aria-live="polite">
-              {shown.length} {shown.length === 1 ? "trial" : "trials"}
-              {shown.length !== all.length && ` (of ${all.length})`}
-            </span>
-            {active.map(({ key, v }) => (
-              <button
-                key={`${key}:${v}`}
-                type="button"
-                onClick={() => toggle(key, v)}
-                aria-label={`Remove filter ${labelOf(key, v)}`}
-                className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-weak px-2.5 py-0.5 text-meta text-fg hover:border-accent"
-              >
-                {labelOf(key, v)} <X size={12} aria-hidden />
-              </button>
-            ))}
-            {(active.length > 0 || needle) && (
-              <button
-                type="button"
-                onClick={clearAll}
-                className="text-meta font-medium text-accent hover:underline"
-              >
-                Clear all
-              </button>
-            )}
-            {picked.length === 0 && (
-              <span className="ml-auto hidden text-meta text-faint sm:inline">
-                Tick trials to save them as a collection
-              </span>
-            )}
           </div>
 
           {shown.length === 0 ? (

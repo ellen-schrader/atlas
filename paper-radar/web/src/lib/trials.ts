@@ -351,3 +351,10 @@ export async function removeTrial(teamId: string, trialId: string) {
     .eq("trial_id", trialId);
   if (error) throw error;
 }
+
+/** "13 countries", "Germany only": where a trial's sites are, in a few words. */
+export function countriesSummary(countries: { country: string; sites: number }[]): string {
+  if (countries.length === 0) return "No sites listed";
+  if (countries.length === 1) return `${countries[0].country} only`;
+  return `${countries.length} countries`;
+}
