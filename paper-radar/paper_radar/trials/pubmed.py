@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from . import ctgov
+
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _TOOL = {"tool": "paper-radar", "email": "atlas@ellen-schrader.de"}
 _UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
@@ -43,7 +45,7 @@ def _get(path: str, params: dict[str, str]) -> dict:
 
 def papers_naming(nct_id: str) -> tuple[int, list[PubMedPaper]]:
     """(how many PubMed records list this NCT ID, the first MAX_PAPERS of them)."""
-    if not (nct_id.startswith("NCT") and nct_id[3:].isdigit() and len(nct_id) == 11):
+    if ctgov.normalise_nct(nct_id) != nct_id:
         raise ValueError(f"not an NCT ID: {nct_id!r}")
     found = _get(
         "esearch.fcgi", {"db": "pubmed", "term": f"{nct_id}[si]", "retmax": str(MAX_PAPERS)}

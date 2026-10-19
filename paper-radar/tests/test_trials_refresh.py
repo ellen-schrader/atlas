@@ -81,17 +81,56 @@ def test_run_tells_every_lab_holding_the_trial(monkeypatch):
     }
 
 
-def test_run_stops_when_the_registry_is_down(monkeypatch):
-    t = {"id": "t1", "nct_id": "NCT00000001", **OLD}
-    monkeypatch.setattr(tr, "service_client", lambda: _Svc([{"team_id": "a", "trials": t}]))
+def test_run_skips_one_bad_record_but_stops_when_the_registry_is_down(monkeypatch):
+    posts = [
+        {"team_id": "a", "trials": {"id": f"t{i}", "nct_id": f"NCT0000000{i}", **OLD}}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(tr, "service_client", lambda: _Svc(posts))
     monkeypatch.setattr(tr, "active_teams", lambda: {"a"})
+    monkeypatch.setattr(tr, "upsert_trial", lambda _s, _r: None)
+    asked = []
 
-    def down(_n):
+    def flaky(nct):
+        asked.append(nct)
+        if nct == "NCT00000000":
+            raise ctgov.RegistryError("record too large")
+        return None
+
+    monkeypatch.setattr(ctgov, "fetch", flaky)
+    assert tr.run() == 0
+    assert len(asked) == 5  # the bad one was skipped, the rest still checked
+
+    def down(nct):
+        asked.append(nct)
         raise ctgov.RegistryError("503")
 
+    asked.clear()
     monkeypatch.setattr(ctgov, "fetch", down)
     with pytest.raises(SystemExit):
         tr.run()
+    assert len(asked) == tr.MAX_FAILURES
+
+
+def test_events_are_stored_before_the_record(monkeypatch):
+    t = {"id": "t1", "nct_id": "NCT00000001", **OLD}
+    order = []
+    svc = _Svc([{"team_id": "a", "trials": t}])
+    real_table = svc.table
+
+    def table(name):
+        q = real_table(name)
+        if name == "trial_events":
+            order.append("events")
+        return q
+
+    svc.table = table
+    monkeypatch.setattr(tr, "service_client", lambda: svc)
+    monkeypatch.setattr(tr, "active_teams", lambda: {"a"})
+    monkeypatch.setattr(tr, "upsert_trial", lambda _s, _r: order.append("record"))
+    monkeypatch.setattr(ctgov, "fetch", lambda _n: rec())
+    tr.run()
+    assert order == ["events", "record"]
 
 
 def test_run_does_nothing_without_active_labs(monkeypatch):
@@ -134,7 +173,7 @@ def test_papers_naming(monkeypatch):
 
 def test_pubmed_endpoint_leaves_out_papers_the_lab_has(monkeypatch):
     monkeypatch.setattr(trials_api, "_require_lab_trial", lambda *_a: "u1")
-    monkeypatch.setattr(trials_api._open_access_limiter, "check", lambda _u: None)
+    monkeypatch.setattr(trials_api._pubmed_limiter, "check", lambda _u: None)
 
     class Rows:
         def __init__(self, data):
@@ -154,16 +193,25 @@ def test_pubmed_endpoint_leaves_out_papers_the_lab_has(monkeypatch):
     monkeypatch.setattr(
         trials_api,
         "user_client",
-        lambda _t: SimpleNamespace(table=lambda _n: Rows([{"papers": {"doi": "10.1/held"}}])),
+        # One answer for both lookups: a paper held by DOI, one by its PubMed page.
+        lambda _t: SimpleNamespace(
+            table=lambda _n: Rows(
+                [
+                    {"papers": {"doi": "10.1/held", "url_norm": "x"}},
+                    {"papers": {"doi": None, "url_norm": "//pubmed.ncbi.nlm.nih.gov/3"}},
+                ]
+            )
+        ),
     )
     monkeypatch.setattr(
         pubmed,
         "papers_naming",
         lambda _n: (
-            2,
+            5,
             [
                 pubmed.PubMedPaper("1", "Held", None, None, "10.1/held"),
                 pubmed.PubMedPaper("2", "New", "J", "2025", "10.1/new"),
+                pubmed.PubMedPaper("3", "Held, no DOI", None, None, None),
             ],
         ),
     )
@@ -172,5 +220,5 @@ def test_pubmed_endpoint_leaves_out_papers_the_lab_has(monkeypatch):
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["count"] == 2
+    assert (body["count"], body["checked"]) == (5, 3)
     assert [p["pmid"] for p in body["not_in_lab"]] == ["2"]

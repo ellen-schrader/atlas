@@ -497,6 +497,8 @@ export async function startExtraction(teamId: string, trialId: string): Promise<
 
 export interface PubMedHint {
   count: number;
+  /** How many of `count` were compared with the library (the most recent). */
+  checked: number;
   not_in_lab: { pmid: string; title: string; journal: string | null; year: string | null; doi: string | null }[];
   search_url: string;
 }

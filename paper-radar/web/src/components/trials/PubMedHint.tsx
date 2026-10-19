@@ -4,13 +4,14 @@ import { ExternalLink, Loader2, Plus } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
-import { ApiError, fetchPubMedHint, postPaper } from "@/lib/api";
+import { ApiError, type PubMedHint as PubMedHintData, fetchPubMedHint, postPaper } from "@/lib/api";
+import { linkPaper } from "@/lib/trials";
 import { useAppContext } from "@/routes/Layout";
 
 /** "N more papers on PubMed name this trial": asked on request (it's a call
  *  to PubMed), with the ones the lab doesn't have, each one click to add. */
 export function PubMedHint({ trialId, onAdded }: { trialId: string; onAdded: () => void }) {
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const qc = useQueryClient();
   const toast = useToast();
   const [asked, setAsked] = useState(false);
@@ -22,12 +23,25 @@ export function PubMedHint({ trialId, onAdded }: { trialId: string; onAdded: () 
     retry: false,
   });
   const add = useMutation({
-    // Posting resolves the paper; its abstract names the trial, so Atlas links it.
-    mutationFn: (pmid: string) => postPaper(`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, team.id),
-    onSuccess: () => {
-      toast({ message: "Added to the library. Atlas links it to this trial in a moment." });
-      qc.invalidateQueries({ queryKey: ["pubmed-hint", team.id, trialId] });
-      setTimeout(onAdded, 4000);
+    // Post the paper, then link it to this trial ourselves: PubMed knows the
+    // trial from a field Atlas doesn't read, so the abstract may not name it.
+    mutationFn: async (pmid: string) => {
+      const posted = await postPaper(`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, team.id);
+      try {
+        await linkPaper(team.id, trialId, posted.paper_id, userId);
+      } catch (e) {
+        // Already linked (found by its NCT ID meanwhile): that's the goal.
+        if ((e as { code?: string }).code !== "23505") throw e;
+      }
+      return pmid;
+    },
+    onSuccess: (pmid) => {
+      // Drop it from the list without asking PubMed again.
+      qc.setQueryData<PubMedHintData>(["pubmed-hint", team.id, trialId], (h) =>
+        h ? { ...h, not_in_lab: h.not_in_lab.filter((p) => p.pmid !== pmid) } : h,
+      );
+      toast({ message: "Added to the library and linked to this trial." });
+      onAdded();
     },
     onError: (e) => toast({ message: e instanceof ApiError ? e.message : "Couldn’t add that paper." }),
   });
@@ -55,9 +69,12 @@ export function PubMedHint({ trialId, onAdded }: { trialId: string; onAdded: () 
     <div className="flex flex-col gap-2 rounded-control border border-border p-3">
       <p className="text-sm text-fg">
         {h.count} {h.count === 1 ? "paper" : "papers"} on PubMed name this trial
+        {h.checked < h.count && ` (the ${h.checked} most recent checked)`}
         {h.not_in_lab.length > 0
           ? `; ${h.not_in_lab.length} ${h.not_in_lab.length === 1 ? "isn’t" : "aren’t"} in your library.`
-          : ", all in your library."}{" "}
+          : h.checked < h.count
+            ? "; those are all in your library."
+            : ", all in your library."}{" "}
         <a href={h.search_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">
           Open in PubMed <ExternalLink size={12} aria-hidden />
         </a>

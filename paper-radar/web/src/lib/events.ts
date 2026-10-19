@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { statusLabel } from "@/lib/trials";
 
 /** What changed on the lab's trials (public.trial_events), for the feed. */
 
@@ -45,7 +46,8 @@ export async function fetchEvents(teamId: string, days = 30): Promise<TrialEvent
 export function foldEvents(events: TrialEvent[]): FeedItem[] {
   const out = new Map<string, FeedItem>();
   for (const e of events) {
-    const key = `${e.trial_id}|${e.kind}|${e.created_at.slice(0, 10)}`;
+    // Per person too: one line never credits Bob's checks to Ada.
+    const key = `${e.trial_id}|${e.kind}|${e.created_at.slice(0, 10)}|${e.actor?.display_name ?? ""}`;
     const item = out.get(key);
     if (item) item.count += 1;
     else
@@ -62,8 +64,7 @@ export function foldEvents(events: TrialEvent[]): FeedItem[] {
   return [...out.values()];
 }
 
-const STATUS = (s: unknown) =>
-  typeof s === "string" ? s.toLowerCase().replace(/_/g, " ") : "unknown";
+const STATUS = (s: unknown) => statusLabel(typeof s === "string" ? s : null);
 
 export function describe(i: FeedItem): string {
   switch (i.kind) {

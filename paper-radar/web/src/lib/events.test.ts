@@ -28,8 +28,16 @@ describe("the feed", () => {
     expect(say(items[0])).toBe("2 value groups verified by Ada");
   });
 
+  it("keeps people apart", () => {
+    const items = foldEvents([ev({}), ev({ actor: { display_name: "Bob" } })]);
+    expect(items.map((i) => say(i))).toEqual([
+      "A value group verified by Ada",
+      "A value group verified by Bob",
+    ]);
+  });
+
   it("says what the registry changed", () => {
     const [i] = foldEvents([ev({ kind: "status_changed", detail: { from: "RECRUITING", to: "ACTIVE_NOT_RECRUITING" } })]);
-    expect(say(i)).toBe("Status changed: recruiting → active not recruiting");
+    expect(say(i)).toBe("Status changed: Recruiting → Active, not recruiting");
   });
 });

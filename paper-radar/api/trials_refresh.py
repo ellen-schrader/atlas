@@ -22,24 +22,34 @@ from .trial_links import active_teams, upsert_trial
 log = logging.getLogger(__name__)
 
 
+_PAGE = 500
+MAX_FAILURES = 3  # in a row: past that the registry is down, not one record
+
+
 def _lab_trials(svc, teams: set[str]) -> dict[str, dict[str, Any]]:
     """{trial_id: {nct_id, status, has_results, registry_updated_at, teams}}."""
-    rows = (
-        svc.table("trial_posts")
-        .select("team_id, trials(id, nct_id, status, has_results, registry_updated_at)")
-        .in_("team_id", sorted(teams))
-        .execute()
-        .data
-        or []
-    )
     out: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        t = r.get("trials")
-        if not t:
-            continue
-        entry = out.setdefault(t["id"], {**t, "teams": []})
-        entry["teams"].append(r["team_id"])
-    return out
+    start = 0
+    while True:
+        rows = (
+            svc.table("trial_posts")
+            .select("id, team_id, trials(id, nct_id, status, has_results, registry_updated_at)")
+            .in_("team_id", sorted(teams))
+            .order("id")
+            .range(start, start + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            t = r.get("trials")
+            if not t:
+                continue
+            entry = out.setdefault(t["id"], {**t, "teams": []})
+            entry["teams"].append(r["team_id"])
+        if len(rows) < _PAGE:
+            return out
+        start += _PAGE
 
 
 def changes(old: dict[str, Any], rec: ctgov.TrialRecord) -> list[tuple[str, dict[str, Any]]]:
@@ -64,19 +74,28 @@ def run() -> int:
     svc = service_client()
     trials = _lab_trials(svc, teams)
     changed = 0
+    failures = 0
     for trial_id, old in trials.items():
         try:
             rec = ctgov.fetch(old["nct_id"])
         except ctgov.RegistryError as exc:
-            # Down for one is down for all: stop rather than wait on each.
-            log.warning("ClinicalTrials.gov failed on %s; stopping: %s", old["nct_id"], exc)
-            raise SystemExit(f"ClinicalTrials.gov failed: {exc}") from exc
+            # One bad record is skipped; several in a row means the registry
+            # is down, and waiting on each of the rest would only time out.
+            failures += 1
+            log.warning("ClinicalTrials.gov failed on %s: %s", old["nct_id"], exc)
+            if failures >= MAX_FAILURES:
+                raise SystemExit(
+                    f"ClinicalTrials.gov failed {failures} times in a row: {exc}"
+                ) from exc
+            continue
+        failures = 0
         if rec is None:
             continue
         events = changes(old, rec)
         if not events:
             continue
-        upsert_trial(svc, rec)
+        # Events first: if storing them fails, the record isn't updated either,
+        # so tomorrow's run sees the same change and tries again.
         svc.table("trial_events").insert(
             [
                 {"team_id": team, "trial_id": trial_id, "kind": kind, "detail": detail}
@@ -84,6 +103,7 @@ def run() -> int:
                 for kind, detail in events
             ]
         ).execute()
+        upsert_trial(svc, rec)
         changed += 1
         log.info("%s: %s", old["nct_id"], ", ".join(k for k, _ in events))
     return changed

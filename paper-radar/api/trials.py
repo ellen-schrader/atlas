@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from paper_radar.ingest.urls import _normalize_key
 from paper_radar.trials import FEATURE, ctgov, pubmed
 
 from . import trial_extract, trial_links
@@ -254,38 +255,64 @@ class PubMedPaperOut(BaseModel):
 
 class PubMedHint(BaseModel):
     count: int
+    checked: int  # how many of `count` were compared with the library
     not_in_lab: list[PubMedPaperOut]
     search_url: str
+
+
+# PubMed's own budget, so checking papers doesn't eat the open-access one.
+_pubmed_limiter = PerUserRateLimiter(
+    30,
+    3600.0,
+    lambda: HTTPException(status_code=429, detail="Too many PubMed lookups. Try again later."),
+)
 
 
 @router.get("/{trial_id}/pubmed", response_model=PubMedHint)
 def pubmed_hint(trial_id: str, team_id: str, token: str = Depends(require_token)) -> PubMedHint:
     """Papers on PubMed that name this trial and aren't in the lab's library."""
     user_id = _require_lab_trial(token, team_id, trial_id)
-    _open_access_limiter.check(user_id)
+    _pubmed_limiter.check(user_id)
     rows = service_client().table("trials").select("nct_id").eq("id", trial_id).execute().data
     nct = rows[0]["nct_id"]
     try:
         count, papers = pubmed.papers_naming(nct)
     except pubmed.PubMedError as exc:
         raise HTTPException(status_code=503, detail="PubMed is unreachable.") from exc
+    # Held by DOI, or by its PubMed page (papers added from PubMed without one).
     dois = sorted({p.doi for p in papers if p.doi})
-    held: set[str] = set()
+    pages = {_normalize_key(f"https://pubmed.ncbi.nlm.nih.gov/{p.pmid}/"): p.pmid for p in papers}
+    held_dois: set[str] = set()
+    held_pmids: set[str] = set()
+    uc = user_client(token)
     if dois:
-        held = {
-            (r["papers"]["doi"] or "").lower()
-            for r in user_client(token)
-            .table("paper_posts")
+        for r in (
+            uc.table("paper_posts")
             .select("papers!inner(doi)")
             .eq("team_id", team_id)
             .in_("papers.doi", dois)
             .execute()
             .data
             or []
-            if r.get("papers")
-        }
+        ):
+            held_dois.add((r["papers"]["doi"] or "").lower())
+    for r in (
+        uc.table("paper_posts")
+        .select("papers!inner(url_norm)")
+        .eq("team_id", team_id)
+        .in_("papers.url_norm", sorted(pages))
+        .execute()
+        .data
+        or []
+    ):
+        held_pmids.add(pages.get(r["papers"]["url_norm"], ""))
     return PubMedHint(
         count=count,
-        not_in_lab=[PubMedPaperOut(**vars(p)) for p in papers if not (p.doi and p.doi in held)],
+        checked=len(papers),
+        not_in_lab=[
+            PubMedPaperOut(**vars(p))
+            for p in papers
+            if not ((p.doi and p.doi in held_dois) or p.pmid in held_pmids)
+        ],
         search_url=f"https://pubmed.ncbi.nlm.nih.gov/?term={nct}%5Bsi%5D",
     )
