@@ -473,6 +473,7 @@ def test_fetch_full_texts_carries_on_past_a_failing_trial(monkeypatch):
         done.append((team, trial))
 
     monkeypatch.setattr(trial_extract, "fetch_open_access", fetch)
+    monkeypatch.setattr(trial_links, "service_client", lambda: _FakeSvc())
     trial_links.fetch_full_texts("lab", {"t2", "t1", "t3"})
     assert done == [("lab", "t2"), ("lab", "t3")]
 
