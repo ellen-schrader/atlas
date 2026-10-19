@@ -2,6 +2,7 @@ import { type ReactNode, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Check, ChevronDown } from "lucide-react";
 
+import { Input } from "@/components/ui/input";
 import { useDismissable } from "@/hooks/useDismissable";
 import { THERAPY_CLASSES, THERAPY_COLOR, TRIALS_FEATURE, type TherapyClass } from "@/lib/trials";
 import { cn } from "@/lib/utils";
@@ -171,6 +172,46 @@ export interface FilterGroup {
   label: string;
   options: FilterOption[];
   selected: string[];
+  /** A long list (countries): a search box, and only the most used options
+   *  until someone types. */
+  searchable?: boolean;
+}
+
+/** Options shown before anyone types in a searchable group. */
+const TOP_OPTIONS = 5;
+
+/** A searchable group's options: what's ticked, then the most used ones, or
+ *  every match for what's typed. */
+function SearchableGroup({ g, onToggle }: { g: FilterGroup; onToggle: (value: string) => void }) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const ticked = g.options.filter((o) => g.selected.includes(o.value));
+  const shown = needle
+    ? g.options.filter((o) => o.label.toLowerCase().includes(needle))
+    : [...ticked, ...g.options.filter((o) => !g.selected.includes(o.value)).slice(0, TOP_OPTIONS)];
+  const hidden = g.options.length - shown.length;
+  return (
+    <>
+      <div className="px-1 pb-1">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Find a ${g.label.toLowerCase()}`}
+          aria-label={`Find a ${g.label.toLowerCase()}`}
+          className="h-8 text-sm"
+        />
+      </div>
+      {shown.map((o) => (
+        <OptionRow key={o.value} o={o} on={g.selected.includes(o.value)} onToggle={() => onToggle(o.value)} />
+      ))}
+      {needle && shown.length === 0 && (
+        <p className="px-2 py-1.5 text-meta text-muted">No {g.label.toLowerCase()} matches “{q.trim()}”.</p>
+      )}
+      {!needle && hidden > 0 && (
+        <p className="px-2 py-1.5 text-meta text-faint">+{hidden} more: type to find them</p>
+      )}
+    </>
+  );
 }
 
 /** "More": the less used filters (phase, country) in one menu, each under
@@ -215,20 +256,24 @@ export function MoreFilters({
         <ChevronDown size={14} aria-hidden className="text-muted" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1.5 max-h-96 w-64 overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-lg">
+        <div className="absolute right-0 top-full z-30 mt-1.5 max-h-[30rem] w-64 overflow-y-auto rounded-card border border-border bg-surface p-1.5 shadow-lg">
           {groups.map((g) => (
             <div key={g.key} role="group" aria-label={g.label} className="pb-1">
               <div className="px-2 pb-1 pt-2 text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
                 {g.label}
               </div>
-              {g.options.map((o) => (
-                <OptionRow
-                  key={o.value}
-                  o={o}
-                  on={g.selected.includes(o.value)}
-                  onToggle={() => onToggle(g.key, o.value)}
-                />
-              ))}
+              {g.searchable ? (
+                <SearchableGroup g={g} onToggle={(v) => onToggle(g.key, v)} />
+              ) : (
+                g.options.map((o) => (
+                  <OptionRow
+                    key={o.value}
+                    o={o}
+                    on={g.selected.includes(o.value)}
+                    onToggle={() => onToggle(g.key, o.value)}
+                  />
+                ))
+              )}
             </div>
           ))}
         </div>

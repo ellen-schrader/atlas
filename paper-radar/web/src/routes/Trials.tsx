@@ -288,6 +288,7 @@ function AllTrials() {
                 label: m.label,
                 options: optionsFor(m.key),
                 selected: selected(m.key),
+                searchable: m.key === "country",
               }))}
               onToggle={(key, v) => toggle(key as FilterKey, v)}
             />
