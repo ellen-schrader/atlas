@@ -11,8 +11,8 @@ import {
   type TrialSource,
   extractionState,
   fetchSources,
+  openSourceFile,
   removeSource,
-  sourceUrl,
   uploadSource,
 } from "@/lib/extraction";
 import type { TrialFacts } from "@/lib/trials";
@@ -133,7 +133,8 @@ export function TrialSources({
 
   const open = async (s: TrialSource) => {
     try {
-      window.open(await sourceUrl(s), "_blank", "noopener");
+      // A Europe PMC full text opens on PMC: the stored XML isn't readable.
+      await openSourceFile(s);
     } catch {
       toast({ message: "Couldn’t open that file." });
     }

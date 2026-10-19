@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleDashed, ClipboardCheck, ExternalLink, FileText, Pencil, X } from "lucide-react";
 
 import { useToast } from "@/components/Toast";
+import { SourcePanel } from "@/components/trials/SourcePanel";
 import { Button } from "@/components/ui/button";
 import {
   CONTEXT_LABELS,
@@ -17,8 +18,8 @@ import {
   countEdits,
   editFact,
   fetchReviews,
+  openSourceFile,
   setVerified,
-  sourceUrl,
   treatmentName,
 } from "@/lib/extraction";
 import { headline, reviewGroups } from "@/lib/compare";
@@ -44,9 +45,12 @@ interface Ctx {
   reviewing: boolean;
   /** The group being reviewed. */
   current: string | null;
+  /** Shows where a value came from: the cited part of a full text in the
+   *  source panel, a PDF at its page in a new tab. */
+  showSource: (source: Source) => void;
 }
 
-/** Each review group's source, for "Open source" in the review bar. */
+/** Each review group's source, for "Show source" in the review bar. */
 function groupSource(x: Extraction, path: string): Source | null {
   if (path === "design") return x.design.source;
   if (path === "schedule") return x.arms.find((a) => a.role === "experimental")?.source ?? null;
@@ -114,8 +118,28 @@ export function ExtractionView({
   const [chosen, setCurrent] = useState<string | null>(null);
   // A group a fresh extraction no longer has (fewer endpoints) ends the review.
   const current = chosen && groups.includes(chosen) ? chosen : null;
+  // The source in the panel, if it's open.
+  const [shown, setShown] = useState<Source | null>(null);
   // A new extraction is a new set of values: start its review from scratch.
-  useEffect(() => setCurrent(null), [extractedAt]);
+  useEffect(() => {
+    setCurrent(null);
+    setShown(null);
+  }, [extractedAt]);
+  // While reviewing with the panel open, it follows the group being checked.
+  useEffect(() => {
+    if (current) setShown((s) => (s ? (groupSource(x, current) ?? s) : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
+  const toast = useToast();
+  const showSource = async (source: Source) => {
+    const doc = sources[source.doc - 1];
+    if (doc?.media_type !== "application/pdf") return setShown(source);
+    try {
+      await openSourceFile(doc, source.page);
+    } catch {
+      toast({ message: "Couldn’t open the source." });
+    }
+  };
   const reviewing = current !== null;
   const ctx: Ctx = {
     trialId,
@@ -125,6 +149,7 @@ export function ExtractionView({
     onChange,
     reviewing,
     current,
+    showSource,
   };
   const exp = x.arms.find((a) => a.role === "experimental");
   const ctrl = x.arms.find((a) => a.role === "control");
@@ -257,6 +282,15 @@ export function ExtractionView({
         </details>
       )}
 
+      {shown && (
+        <SourcePanel
+          trialId={trialId}
+          source={shown}
+          doc={sources[shown.doc - 1] ?? null}
+          onClose={() => setShown(null)}
+        />
+      )}
+
       {current && (
         <ReviewBar
           x={x}
@@ -336,19 +370,14 @@ function ReviewBar({
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        {doc && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={async () => {
-              try {
-                window.open(await sourceUrl(doc), "_blank", "noopener");
-              } catch {
-                toast({ message: "Couldn’t open the source." });
-              }
-            }}
-          >
-            <ExternalLink size={14} aria-hidden /> Open source
+        {doc && source && (
+          <Button variant="secondary" size="sm" onClick={() => ctx.showSource(source)}>
+            {doc.media_type === "application/pdf" ? (
+              <ExternalLink size={14} aria-hidden />
+            ) : (
+              <FileText size={14} aria-hidden />
+            )}
+            Show source
           </Button>
         )}
         <Button size="sm" disabled={verify.isPending || verified} onClick={() => verify.mutate()}>
@@ -373,7 +402,6 @@ function ReviewBar({
 // --- building blocks -------------------------------------------------------------
 
 function SourceLink({ source, ctx }: { source: Source; ctx: Ctx }) {
-  const toast = useToast();
   const doc = ctx.sources[source.doc - 1];
   const label = [`Doc ${source.doc}`, source.where, source.page && `p. ${source.page}`]
     .filter(Boolean)
@@ -387,14 +415,12 @@ function SourceLink({ source, ctx }: { source: Source; ctx: Ctx }) {
   return (
     <button
       type="button"
-      title={`${label} · open ${doc.filename}`}
-      onClick={async () => {
-        try {
-          window.open(await sourceUrl(doc), "_blank", "noopener");
-        } catch {
-          toast({ message: "Couldn’t open the source." });
-        }
-      }}
+      title={
+        doc.media_type === "application/pdf"
+          ? `${label} · open ${doc.filename}${source.page ? ` at page ${source.page}` : ""}`
+          : `${label} · show it beside the values`
+      }
+      onClick={() => ctx.showSource(source)}
       className="inline-flex max-w-[min(22rem,100%)] items-center gap-1 text-meta text-muted hover:text-accent"
     >
       <FileText size={12} aria-hidden className="shrink-0" />
