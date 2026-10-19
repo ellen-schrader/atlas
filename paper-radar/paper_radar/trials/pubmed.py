@@ -12,11 +12,13 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from paper_radar.contact import API_USER_AGENT, CONTACT_EMAIL
+
 from . import ctgov
 
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-_TOOL = {"tool": "paper-radar", "email": "atlas@ellen-schrader.de"}
-_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
+_TOOL = {"tool": "paper-radar", "email": CONTACT_EMAIL}
+_UA = API_USER_AGENT
 MAX_PAPERS = 100
 
 

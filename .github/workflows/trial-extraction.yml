@@ -1,7 +1,6 @@
 # Clinical trials: send queued extractions through the Message Batches API and
-# store finished ones (api/trial_extract_batch.py). Half the price of "Extract
-# now"; batches usually end within the hour, so every two hours keeps the wait
-# short. A no-op for labs without the feature, and when nothing is queued.
+# store finished ones (api/trial_extract_batch.py). A no-op for labs without
+# the feature, and when nothing is queued.
 name: trial-extraction
 
 on:

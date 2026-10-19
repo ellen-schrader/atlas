@@ -13,7 +13,7 @@ labs + enrichment-tags as follow-ups.
 
 ## 1. What the data supports today
 
-Measured on the live Ali-Lab corpus (425 papers, 395 embedded):
+Measured on the live pilot-lab corpus (425 papers, 395 embedded):
 
 | Signal | Coverage | Usable for |
 |---|---|---|

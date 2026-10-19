@@ -115,8 +115,12 @@ class _Spend:
 
 def test_budget(monkeypatch):
     monkeypatch.setenv("TRIAL_EXTRACTION_MONTHLY_USD", "1")
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.0)
     assert te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.30"}]), "lab") is None
     assert "budget ($1)" in te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.60"}]), "lab")
+    # What's out and not billed yet counts too: a batch, or an "Extract now".
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.30)
+    assert "budget ($1)" in te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.30"}]), "lab")
 
 
 # --- the batch job ----------------------------------------------------------------------------
@@ -195,7 +199,7 @@ def _client(batches):
 def _budget(monkeypatch, spent: dict[str, float], cap: float = 5.0):
     monkeypatch.setattr(te, "monthly_cap", lambda: cap)
     monkeypatch.setattr(te, "spent_this_month", lambda _s, team: spent.get(team, 0.0))
-    monkeypatch.setattr(tb, "_committed", lambda _s, _t: 0.0)
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.0)
 
 
 def _load_ok(_s, _team, trial):
@@ -214,7 +218,14 @@ def test_submit_sends_queued_trials_of_active_labs_under_budget(monkeypatch):
     [requests] = batches.created
     assert [r["custom_id"] for r in requests] == [tb.custom_id("lab", "t1")]
     assert "fallbacks" not in requests[0]["params"]  # batches take none
-    [sent] = [f for n, f in svc.updates if f.get("extraction_status") == "batched"]
+    # Claimed first (queued → batched, no batch yet), then given its batch.
+    claims = [
+        f
+        for n, f in svc.updates
+        if f == {"extraction_status": "batched", "extraction_batch_id": None}
+    ]
+    assert len(claims) == 1
+    [sent] = [f for n, f in svc.updates if f.get("extraction_batch_id") == "batch_1"]
     assert sent["extraction_batch_sources"] == ["t1-s1"]
     assert sent["extraction_attempts"] == 1
     assert 0 < sent["extraction_estimate_usd"] < 1
@@ -243,6 +254,24 @@ def test_estimates_stop_a_batch_overshooting_the_cap(monkeypatch):
     monkeypatch.setattr(tb, "estimate_usd", lambda _p: 0.1)
     batches = _Batches()
     assert tb.submit(svc, _client(batches)) == 1  # one fits, the second would overshoot
+
+
+def test_a_failed_batch_create_puts_claimed_trials_back(monkeypatch):
+    svc = _Svc([_row("t1", "queued")])
+    monkeypatch.setattr(tb, "active_teams", lambda: {"lab"})
+    _budget(monkeypatch, {})
+    monkeypatch.setattr(te, "load", _load_ok)
+
+    class Down(_Batches):
+        def create(self, requests):
+            raise RuntimeError("API down")
+
+    with pytest.raises(RuntimeError):
+        tb.submit(svc, _client(Down()))
+    assert svc.updates[-1] == (
+        "trial_facts",
+        {"extraction_status": "queued", "extraction_error": None},
+    )
 
 
 def test_just_queued_trials_wait_for_their_other_files(monkeypatch):
@@ -351,3 +380,12 @@ def test_collect_waits_for_a_running_batch_then_gives_up_when_stuck():
     old = datetime.now(UTC) - timedelta(hours=31)
     tb.collect(svc, _client(_Batches(status="in_progress", created=old)))
     assert svc.updates[-1][1]["extraction_status"] == "queued"
+
+
+def test_jats_refuses_entities_in_any_encoding():
+    doc = (
+        '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE a [<!ENTITY x "y">]>'
+        "<article><body><p>&x;</p></body></article>"
+    ).encode("utf-16")
+    with pytest.raises(jats.NotJats):
+        jats.to_text(doc)

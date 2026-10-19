@@ -16,7 +16,6 @@ has one) is the way round it.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import logging
@@ -129,35 +128,40 @@ def _collect_one(svc, client, batch_id: str, rows: dict[str, dict[str, Any]]) ->
     return stored
 
 
-def estimate_usd(params: dict[str, Any]) -> float:
-    """A cautious guess of a batch request's cost, before it runs: text at
-    ~3.5 characters a token, a PDF page at ~3,000 tokens, ~10k tokens out."""
-    tokens = 0.0
-    for block in params["messages"][0]["content"]:
-        src = block.get("source") or {}
-        if src.get("type") == "text":
-            tokens += len(src["data"]) / 3.5
-        elif src.get("type") == "base64":
-            pages = max(1, base64.b64decode(src["data"]).count(b"/Type /Page") - 1)
-            tokens += pages * 3000
-        elif block.get("type") == "text":
-            tokens += len(block["text"]) / 3.5
-    usd = tokens / 1e6 * te._PRICE_IN + 10_000 / 1e6 * te._PRICE_OUT
-    return round(usd * BATCH_DISCOUNT, 4)
-
-
-def _committed(svc, team_id: str) -> float:
-    """Estimated cost of the lab's requests sent but not collected yet."""
-    rows = (
+def _claim(svc, team_id: str, trial_id: str) -> bool:
+    """queued → batched (no batch yet), only if it's still queued."""
+    taken = (
         svc.table("trial_facts")
-        .select("extraction_estimate_usd")
+        .update({"extraction_status": "batched", "extraction_batch_id": None})
         .eq("team_id", team_id)
-        .eq("extraction_status", "batched")
+        .eq("trial_id", trial_id)
+        .eq("extraction_status", "queued")
         .execute()
         .data
-        or []
     )
-    return sum(float(r["extraction_estimate_usd"] or 0) for r in rows)
+    return bool(taken)
+
+
+def _release(svc, team_id: str, trial_id: str, error: str | None) -> None:
+    """Back to the queue (it wasn't sent after all)."""
+    svc.table("trial_facts").update({"extraction_status": "queued", "extraction_error": error}).eq(
+        "team_id", team_id
+    ).eq("trial_id", trial_id).eq("extraction_status", "batched").is_(
+        "extraction_batch_id", "null"
+    ).execute()
+
+
+def _release_stranded(svc) -> None:
+    """Claimed but never sent (a run that died between the two): requeue. Runs
+    never overlap (the workflow's concurrency group), so any such row is stale."""
+    svc.table("trial_facts").update({"extraction_status": "queued"}).eq(
+        "extraction_status", "batched"
+    ).is_("extraction_batch_id", "null").execute()
+
+
+def estimate_usd(params: dict[str, Any]) -> float:
+    """A cautious guess of a batch request's cost, before it runs."""
+    return round(te.estimate_usd(params) * BATCH_DISCOUNT, 4)
 
 
 def submit(svc, client) -> int:
@@ -188,10 +192,14 @@ def submit(svc, client) -> int:
             break
         team, trial = row["team_id"], row["trial_id"]
         if team not in left:
-            left[team] = te.monthly_cap() - te.spent_this_month(svc, team) - _committed(svc, team)
+            left[team] = te.monthly_cap() - te.spent_this_month(svc, team) - te.committed(svc, team)
         if left[team] <= 0:
             # Stays queued; goes out when the month turns.
             te.update_facts(svc, team, trial, {"extraction_error": te.budget_message()})
+            continue
+        # Claim it first (queued → batched): someone's own Claude may record an
+        # extraction meanwhile, and that must win rather than be overwritten.
+        if not _claim(svc, team, trial):
             continue
         try:
             sources, registry, blocks, listing = te.load(svc, team, trial)
@@ -216,9 +224,10 @@ def submit(svc, client) -> int:
             )
             continue
         if estimate > left[team]:
-            te.update_facts(svc, team, trial, {"extraction_error": te.budget_message()})
+            _release(svc, team, trial, te.budget_message())
             continue
         if size + weight > MAX_BATCH_BYTES:
+            _release(svc, team, trial, None)
             break  # the rest go in the next run
         left[team] -= estimate
         size += weight
@@ -226,7 +235,12 @@ def submit(svc, client) -> int:
         sent.append({**row, "sources": [src["id"] for src in sources], "estimate": estimate})
     if not requests:
         return 0
-    batch = client.messages.batches.create(requests=requests)
+    try:
+        batch = client.messages.batches.create(requests=requests)
+    except Exception:
+        for row in sent:
+            _release(svc, row["team_id"], row["trial_id"], None)
+        raise
     for row in sent:
         te.update_facts(
             svc,
@@ -248,6 +262,7 @@ def submit(svc, client) -> int:
 def run() -> tuple[int, int]:
     svc = service_client()
     client = te.client()
+    _release_stranded(svc)
     return collect(svc, client), submit(svc, client)
 
 
