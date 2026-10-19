@@ -561,21 +561,21 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
-  const [picked, setPicked] = useState<PickedPaper | null>(null);
+  const toast = useToast();
   const decide = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "confirmed" | "rejected" }) =>
       decideLink(id, userId, status),
     onSuccess: onChange,
   });
   const link = useMutation({
-    mutationFn: (paperId: string) => {
+    mutationFn: (p: PickedPaper) => {
       // A paper the lab once said "not this trial" to comes back by confirming.
-      const old = d.links.find((l) => l.paper_id === paperId);
-      return old ? decideLink(old.id, userId, "confirmed") : linkPaper(team.id, d.trial.id, paperId, userId);
+      const old = d.links.find((l) => l.paper_id === p.id);
+      return old ? decideLink(old.id, userId, "confirmed") : linkPaper(team.id, d.trial.id, p.id, userId);
     },
-    onSuccess: () => {
-      setPicked(null);
-      setPicking(false);
+    // The picker stays open, so linking several papers is one search each.
+    onSuccess: (_r, p) => {
+      toast({ message: `Linked “${p.title}”.` });
       onChange();
     },
   });
@@ -690,24 +690,23 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
 
       {picking ? (
         <div className="flex flex-col gap-2 rounded-control border border-border p-3">
-          <PaperPicker teamId={team.id} value={picked} onChange={setPicked} />
+          {/* One click on a result links it: no second "Link" step. */}
+          <PaperPicker
+            teamId={team.id}
+            value={null}
+            onChange={(p) => p && link.mutate(p)}
+            exclude={linked.map((l) => l.paper_id)}
+            busy={link.isPending}
+            autoFocus
+          />
           {link.error && (
             <p role="alert" className="text-sm text-danger">
               Couldn’t link that paper. Try again.
             </p>
           )}
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              disabled={!picked || link.isPending}
-              onClick={() => picked && link.mutate(picked.id)}
-            >
-              Link paper
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setPicking(false)}>
-              Cancel
-            </Button>
-          </div>
+          <Button size="sm" variant="ghost" className="w-fit" onClick={() => setPicking(false)}>
+            Done
+          </Button>
         </div>
       ) : (
         <Button variant="ghost" size="sm" className="w-fit" onClick={() => setPicking(true)}>

@@ -8,6 +8,7 @@ import { EMPTY_COLLECTION, NewCollectionDialog } from "@/components/trials/Colle
 import {
   FilterMenu,
   type FilterOption,
+  MoreFilters,
   RequireTrials,
   TherapyList,
   TherapySwatch,
@@ -50,6 +51,8 @@ const MENUS: { key: FilterKey; label: string }[] = [
   { key: "phase", label: "Phase" },
   { key: "country", label: "Country" },
 ];
+/** Used less: under "More", so the filter row stays one line. */
+const MORE: FilterKey[] = ["phase", "country"];
 
 /** Where each trial has sites (registry), by trial id. */
 type Countries = SiteCountries | undefined;
@@ -256,7 +259,7 @@ function AllTrials() {
       {trials && trials.length > 0 && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="relative min-w-56 flex-1 sm:max-w-sm">
+            <label className="relative min-w-56 flex-1 sm:max-w-xs">
               <span className="sr-only">Search trials</span>
               <Search
                 size={15}
@@ -270,7 +273,7 @@ function AllTrials() {
                 className="pl-9"
               />
             </label>
-            {MENUS.map((m) => (
+            {MENUS.filter((m) => !MORE.includes(m.key)).map((m) => (
               <FilterMenu
                 key={m.key}
                 label={m.label}
@@ -279,41 +282,16 @@ function AllTrials() {
                 onToggle={(v) => toggle(m.key, v)}
               />
             ))}
-          </div>
-
-          <div className="flex min-h-10 flex-wrap items-center gap-2 text-sm">
-            <span className="text-muted" aria-live="polite">
-              {shown.length} {shown.length === 1 ? "trial" : "trials"}
-              {shown.length !== all.length && ` (of ${all.length})`}
-            </span>
-            {active.map(({ key, v }) => (
-              <button
-                key={`${key}:${v}`}
-                type="button"
-                onClick={() => toggle(key, v)}
-                aria-label={`Remove filter ${labelOf(key, v)}`}
-                className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-weak px-2.5 py-0.5 text-meta text-fg hover:border-accent"
-              >
-                {labelOf(key, v)} <X size={12} aria-hidden />
-              </button>
-            ))}
-            {(active.length > 0 || needle) && (
-              <button
-                type="button"
-                onClick={clearAll}
-                className="text-meta font-medium text-accent hover:underline"
-              >
-                Clear all
-              </button>
-            )}
-            {/* Sort and view sit with the count they act on, which leaves the
-                row above to search and filters. */}
-            <div className="ml-auto flex items-center gap-3">
-              {picked.length === 0 && (
-                <span className="hidden text-meta text-faint lg:inline">
-                  Tick trials to save them as a collection
-                </span>
-              )}
+            <MoreFilters
+              groups={MENUS.filter((m) => MORE.includes(m.key)).map((m) => ({
+                key: m.key,
+                label: m.label,
+                options: optionsFor(m.key),
+                selected: selected(m.key),
+              }))}
+              onToggle={(key, v) => toggle(key as FilterKey, v)}
+            />
+            <div className="ml-auto flex items-center gap-2">
               <label className="flex items-center gap-2 text-sm text-muted">
                 Sort
                 <select
@@ -347,6 +325,38 @@ function AllTrials() {
                 })}
               </div>
             </div>
+          </div>
+
+          <div className="flex min-h-7 flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted" aria-live="polite">
+              {shown.length} {shown.length === 1 ? "trial" : "trials"}
+              {shown.length !== all.length && ` (of ${all.length})`}
+            </span>
+            {active.map(({ key, v }) => (
+              <button
+                key={`${key}:${v}`}
+                type="button"
+                onClick={() => toggle(key, v)}
+                aria-label={`Remove filter ${labelOf(key, v)}`}
+                className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-weak px-2.5 py-0.5 text-meta text-fg hover:border-accent"
+              >
+                {labelOf(key, v)} <X size={12} aria-hidden />
+              </button>
+            ))}
+            {(active.length > 0 || needle) && (
+              <button
+                type="button"
+                onClick={clearAll}
+                className="text-meta font-medium text-accent hover:underline"
+              >
+                Clear all
+              </button>
+            )}
+            {picked.length === 0 && (
+              <span className="ml-auto hidden text-meta text-faint sm:inline">
+                Tick trials to save them as a collection
+              </span>
+            )}
           </div>
 
           {shown.length === 0 ? (

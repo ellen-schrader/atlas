@@ -317,7 +317,8 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
         </Section>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
+      {/* minmax(0,…): a long title can't widen its column and squeeze the other. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <Section title="Lab notes">
           <Notes c={c} onChange={refresh} />
         </Section>
@@ -823,7 +824,6 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
-  const [picked, setPicked] = useState<PickedPaper | null>(null);
   const reporting = useQuery({
     queryKey: ["collection-reporting", c.id, c.trial_ids],
     enabled: c.trial_ids.length > 0,
@@ -840,10 +840,10 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   });
   const toast = useToast();
   const add = useMutation({
-    mutationFn: (paperId: string) => addCollectionPaper(c.id, paperId, userId),
-    onSuccess: () => {
-      setPicked(null);
-      setPicking(false);
+    mutationFn: (p: PickedPaper) => addCollectionPaper(c.id, p.id, userId),
+    // The picker stays open: adding several reviews is one search each.
+    onSuccess: (_r, p) => {
+      toast({ message: `Added “${p.title}”.` });
       onChange();
     },
     onError: () => toast({ message: "Couldn’t add that paper. Try again." }),
@@ -930,19 +930,18 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
         )}
         {picking ? (
           <div className="mt-2 flex flex-col gap-2">
-            <PaperPicker teamId={team.id} value={picked} onChange={setPicked} />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                disabled={!picked || add.isPending}
-                onClick={() => picked && add.mutate(picked.id)}
-              >
-                Add paper
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPicking(false)}>
-                Cancel
-              </Button>
-            </div>
+            {/* One click on a result adds it: no second "Add" step. */}
+            <PaperPicker
+              teamId={team.id}
+              value={null}
+              onChange={(p) => p && add.mutate(p)}
+              exclude={[...c.papers.map((p) => p.paper_id), ...reports.map((p) => p.id)]}
+              busy={add.isPending}
+              autoFocus
+            />
+            <Button size="sm" variant="ghost" className="w-fit" onClick={() => setPicking(false)}>
+              Done
+            </Button>
           </div>
         ) : (
           <Button variant="ghost" size="sm" className="mt-1 w-fit" onClick={() => setPicking(true)}>

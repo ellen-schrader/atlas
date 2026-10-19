@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -17,7 +17,9 @@ interface PaperResult extends PickedPaper {
   meta: string; // "A. Author, B. Author · Venue · 2025" — helps identify author matches
 }
 
-/** Search-and-pick one paper from the lab's collection, to link to a figure.
+/** Search-and-pick one paper from the lab's collection (a figure's paper, a
+ *  trial's or a collection's). With `value` it shows the pick as a chip; with
+ *  `value={null}` and an `onChange` that saves, a click adds straight away.
  *  Reuses the team-scoped `search_papers` RPC (same as the Papers page), which
  *  matches title, abstract, AND author names — so typing an author, or a word
  *  like "fibro", surfaces their papers. RLS scopes results to the lab. */
@@ -25,15 +27,23 @@ export function PaperPicker({
   teamId,
   value,
   onChange,
+  exclude,
+  busy = false,
+  autoFocus = false,
 }: {
   teamId: string;
   value: PickedPaper | null;
   onChange: (paper: PickedPaper | null) => void;
+  /** Papers already there (in the collection, linked to the trial): left out. */
+  exclude?: readonly string[];
+  /** The pick is being saved: results can't be clicked meanwhile. */
+  busy?: boolean;
+  autoFocus?: boolean;
 }) {
   const [raw, setRaw] = useState("");
   const q = useDebouncedValue(raw.trim(), 250);
 
-  const { data: results } = useQuery({
+  const { data: found, isFetching } = useQuery({
     queryKey: ["paper-picker", teamId, q],
     enabled: value === null && q.length > 0,
     queryFn: async (): Promise<PaperResult[]> => {
@@ -50,6 +60,7 @@ export function PaperPicker({
       });
     },
   });
+  const results = found?.filter((r) => !exclude?.includes(r.id));
 
   if (value) {
     return (
@@ -73,29 +84,41 @@ export function PaperPicker({
   }
 
   return (
-    <div className="relative">
+    // min-w-0: long titles wrap inside the picker instead of widening its column.
+    <div className="relative min-w-0">
       <Input
+        autoFocus={autoFocus}
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
-        placeholder="Search your lab's papers…"
+        placeholder="Search your lab's papers by title, author or words…"
+        aria-label="Search your lab's papers"
       />
-      {q.length > 0 && (results?.length ?? 0) > 0 && (
-        <div className="mt-1.5 max-h-72 overflow-y-auto rounded-control border border-border bg-surface">
-          {results!.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => onChange({ id: r.id, title: r.title })}
-              className="block w-full border-b border-border px-3 py-2 text-left last:border-b-0 hover:bg-accent-weak"
-            >
-              <div className="truncate text-sm font-semibold text-fg">{r.title}</div>
-              {r.meta && <div className="truncate text-xs text-muted">{r.meta}</div>}
-            </button>
-          ))}
-        </div>
+      {raw.trim() && (isFetching || raw.trim() !== q) && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
+          <Loader2 size={12} className="animate-spin" aria-hidden /> Searching…
+        </p>
       )}
-      {q.length > 0 && results && results.length === 0 && (
-        <p className="mt-1.5 text-xs text-muted">No matching papers in your lab.</p>
+      {q.length > 0 && !isFetching && (results?.length ?? 0) > 0 && (
+        <ul className="mt-1.5 max-h-72 overflow-y-auto rounded-control border border-border bg-surface">
+          {results!.map((r) => (
+            <li key={r.id} className="border-b border-border last:border-b-0">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onChange({ id: r.id, title: r.title })}
+                className="block w-full px-3 py-2 text-left hover:bg-accent-weak focus-visible:bg-accent-weak focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
+              >
+                <div className="line-clamp-2 text-sm font-semibold text-fg">{r.title}</div>
+                {r.meta && <div className="truncate text-xs text-muted">{r.meta}</div>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {q.length > 0 && !isFetching && results && results.length === 0 && (
+        <p className="mt-1.5 text-xs text-muted">
+          {found?.length ? "Those papers are already here." : "No matching papers in your lab."}
+        </p>
       )}
     </div>
   );
