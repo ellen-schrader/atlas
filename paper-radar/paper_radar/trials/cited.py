@@ -15,14 +15,15 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Literal
 
 from . import jats
 
-_PMCID = re.compile(r"^PMC\d{1,10}$")
+_PMCID = re.compile(r"PMC\d{1,10}")  # fullmatch: "$" would let a newline through
 _XLINK = "{http://www.w3.org/1999/xlink}href"
 # A figure's image file as the article names it: a plain file name, no path.
-_GRAPHIC = re.compile(r"^[\w.-]{1,200}$")
+_GRAPHIC = re.compile(r"\w[\w.-]{0,199}")  # fullmatch
 
 # "Table 1", "Extended Data Table 3", "Supplementary Table S2", "Fig. 2d",
 # "Figure 3", "Extended Data Fig. 4b": a prefix, the kind, a number and a panel.
@@ -159,14 +160,18 @@ def _figure(fig: ET.Element, pmcid: str | None) -> Element:
 
 def _image(fig: ET.Element, pmcid: str | None) -> str | None:
     """Where PMC serves the figure's image (it redirects to NCBI's image
-    host), or None. PMC wants the file's extension, which JATS may leave off;
-    its figures are JPEGs."""
-    graphic = next(fig.iter("graphic"), None)
+    host), or None. Its figures are JPEGs, named after the article's file:
+    the extension may be left off, or be the original's (.tif)."""
+    graphics = [g for g in fig.iter("graphic") if g.get("content-type") != "thumb"]
+    # The full image, when a figure gives alternatives.
+    graphic = next((g for g in graphics if g.get("content-type") == "image"), None)
+    graphic = graphic if graphic is not None else next(iter(graphics), None)
     name = graphic.get(_XLINK, "") if graphic is not None else ""
-    if not (pmcid and _GRAPHIC.match(name)) or name.startswith("."):
+    if not (pmcid and _GRAPHIC.fullmatch(name)):
         return None
-    if not re.search(r"\.(jpe?g|png|gif)$", name, re.IGNORECASE):
-        name += ".jpg"
+    stem, dot, ext = name.rpartition(".")
+    if not (dot and ext.lower() in ("jpg", "jpeg", "png", "gif")):
+        name = (stem if dot and ext.lower() in ("tif", "tiff", "eps", "pdf") else name) + ".jpg"
     return f"https://pmc.ncbi.nlm.nih.gov/articles/instance/{pmcid[3:]}/bin/{name}"
 
 
@@ -207,11 +212,11 @@ class Article:
                 if key and key not in self.floats:  # the first, not a later copy
                     self.floats[key] = el
 
-    @property
+    @cached_property
     def pmcid(self) -> str | None:
         """The article's PMC id ("PMC12283416"), if it gives a well-formed one."""
         for el in self.root.iter("article-id"):
-            if el.get("pub-id-type") == "pmcid" and _PMCID.match(_text(el)):
+            if el.get("pub-id-type") == "pmcid" and _PMCID.fullmatch(_text(el)):
                 return _text(el)
         return None
 

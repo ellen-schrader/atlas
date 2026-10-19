@@ -73,9 +73,15 @@ export function SourcePanel({
   // Each source starts at the top, or at its first marked row.
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!body.current) return;
-    body.current.scrollTop = 0;
-    body.current.querySelector("[data-marked]")?.scrollIntoView?.({ block: "center" });
+    const el = body.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    const toMark = () => el.querySelector("[data-marked]")?.scrollIntoView?.({ block: "center" });
+    toMark();
+    // A figure's image arrives later and pushes the marked row down: again
+    // when one loads (load doesn't bubble, but it can be caught on the way down).
+    el.addEventListener("load", toMark, true);
+    return () => el.removeEventListener("load", toMark, true);
   }, [cited.data, source]);
 
   const open = async () => {
@@ -212,7 +218,7 @@ function Part({ part, articleUrl }: { part: CitedPart; articleUrl: string | null
       {e.kind === "table" ? (
         <Table e={e} marked={part.rows} />
       ) : e.kind === "figure" ? (
-        <Figure key={e.image ?? e.id} e={e} href={anchor} />
+        <Figure key={e.image ?? e.id} e={e} />
       ) : (
         <Paragraphs paragraphs={e.paragraphs} />
       )}
@@ -271,28 +277,21 @@ function Table({ e, marked }: { e: CitedElement; marked: number[] }) {
 
 /** The figure's image from PMC, and its caption. An image that won't load
  *  (NCBI moved it, or it's offline) leaves just the caption. */
-function Figure({ e, href }: { e: CitedElement; href: string | null }) {
+function Figure({ e }: { e: CitedElement }) {
   const [broken, setBroken] = useState(false);
   return (
     <>
       {e.image && !broken && (
-        <a
-          href={href ?? e.image}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Open the figure on PMC"
-          className="block overflow-hidden rounded-control border border-border bg-white"
-        >
-          <img
-            src={e.image}
-            alt={e.caption ? `${e.label}: ${e.caption}` : e.label}
-            loading="lazy"
-            // NCBI needn't know which Atlas page it's shown on.
-            referrerPolicy="no-referrer"
-            onError={() => setBroken(true)}
-            className="h-auto w-full"
-          />
-        </a>
+        <img
+          src={e.image}
+          // The caption is right below: the alt needn't read it out again.
+          alt={e.label || "Figure"}
+          loading="lazy"
+          // NCBI needn't know which Atlas page it's shown on.
+          referrerPolicy="no-referrer"
+          onError={() => setBroken(true)}
+          className="h-auto w-full rounded-control border border-border bg-white"
+        />
       )}
       <p className="text-sm text-fg">{e.caption}</p>
     </>

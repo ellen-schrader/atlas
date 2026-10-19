@@ -154,8 +154,22 @@ def test_a_figures_image_on_pmc():
     # JATS may leave off the extension; a path is never followed.
     bare = with_id.replace(b'"Fig2_HTML.jpg"', b'"Fig2_HTML"')
     assert _Article(bare).cite_one("Fig. 2").element.image.endswith("/bin/Fig2_HTML.jpg")
-    sneaky = with_id.replace(b'"Fig2_HTML.jpg"', b'"../../x.jpg"')
-    assert _Article(sneaky).cite_one("Fig. 2").element.image is None
+    tif = with_id.replace(b'"Fig2_HTML.jpg"', b'"Fig2_HTML.tif"')
+    assert _Article(tif).cite_one("Fig. 2").element.image.endswith("/bin/Fig2_HTML.jpg")
+    for bad in (b'"../../x.jpg"', b'"Fig2.jpg&#10;"', b'".hidden.jpg"'):
+        odd = with_id.replace(b'"Fig2_HTML.jpg"', bad)
+        assert _Article(odd).cite_one("Fig. 2").element.image is None, bad
+
+
+def test_a_figures_full_image_not_its_thumbnail():
+    xml = XML.replace(
+        b"<article-meta>", b'<article-meta><article-id pub-id-type="pmcid">PMC123</article-id>'
+    ).replace(
+        b'<graphic xlink:href="Fig2_HTML.jpg"/>',
+        b'<alternatives><graphic content-type="thumb" xlink:href="Fig2_thumb.gif"/>'
+        b'<graphic content-type="image" xlink:href="Fig2_HTML.jpg"/></alternatives>',
+    )
+    assert _Article(xml).cite_one("Fig. 2").element.image.endswith("/bin/Fig2_HTML.jpg")
 
 
 def test_every_part_of_a_source_once(article):
