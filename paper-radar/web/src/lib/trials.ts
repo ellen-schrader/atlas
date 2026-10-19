@@ -101,6 +101,14 @@ export interface TrialFacts {
   classified_by: "claude" | "person" | null;
   classify_attempts: number;
   classify_claimed_at: string | null;
+  extraction: import("@/lib/extraction").Extraction | null;
+  extraction_status: "running" | "done" | "failed" | null;
+  extraction_error: string | null;
+  extraction_started_at: string | null;
+  extracted_at: string | null;
+  extraction_model: string | null;
+  extraction_cost_usd: number | null;
+  extraction_sources: string[] | null;
   updated_by: string | null;
   updated_at: string;
 }
@@ -134,6 +142,10 @@ export function classification(
   return "missing";
 }
 
+const FACT_COLUMNS =
+  "trial_id, acronym, settings, patient_groups, therapy_classes, classified_by, " +
+  "classify_attempts, classify_claimed_at, extraction_status, extracted_at, updated_by, updated_at";
+
 export const TRIAL_COLUMNS =
   "id, nct_id, acronym, title, phases, status, sponsor, conditions, enrollment, " +
   "start_date, completion_date, has_results";
@@ -148,7 +160,8 @@ export async function fetchLabTrials(teamId: string): Promise<LabTrial[]> {
       .from("trial_posts")
       .select(`source, created_at, trials(${TRIAL_COLUMNS})`)
       .eq("team_id", teamId),
-    supabase.from("trial_facts").select("*").eq("team_id", teamId),
+    // Not the extraction: the list doesn't show it, and it's the heavy column.
+    supabase.from("trial_facts").select(FACT_COLUMNS).eq("team_id", teamId),
     supabase
       .from("paper_trials")
       .select("trial_id, status")
@@ -157,7 +170,9 @@ export async function fetchLabTrials(teamId: string): Promise<LabTrial[]> {
   ]);
   for (const r of [posts, facts, links]) if (r.error) throw r.error;
 
-  const factsBy = new Map((facts.data as TrialFacts[]).map((f) => [f.trial_id, f]));
+  const factsBy = new Map(
+    (facts.data as unknown as TrialFacts[]).map((f) => [f.trial_id, { ...f, extraction: null }]),
+  );
   const linked = new Map<string, number>();
   const suggested = new Map<string, number>();
   for (const l of links.data as { trial_id: string; status: string }[]) {

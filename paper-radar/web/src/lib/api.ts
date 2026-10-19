@@ -475,3 +475,22 @@ export async function addTrial(
     body: JSON.stringify({ team_id: teamId, nct_id: nctId }),
   });
 }
+
+/** Fetch open-access full text of the trial's linked papers (Europe PMC). */
+export async function fetchOpenAccess(
+  teamId: string,
+  trialId: string,
+): Promise<{ fetched: string[]; closed: string[]; have: string[] }> {
+  return authedRequest(`/trials/${trialId}/open-access`, {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId }),
+  });
+}
+
+/** Start Claude's extraction of the trial's data from its sources. */
+export async function startExtraction(teamId: string, trialId: string): Promise<void> {
+  await authedRequest(`/trials/${trialId}/extract`, {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId }),
+  });
+}
