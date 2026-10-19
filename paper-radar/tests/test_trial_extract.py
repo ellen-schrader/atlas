@@ -52,6 +52,134 @@ def test_full_text_xml_checks_what_it_gets(monkeypatch):
     assert te.full_text_xml("PMC1").endswith(b"<article/>")
 
 
+def test_pmc_copy_tells_open_access_from_manuscripts(monkeypatch):
+    manuscript = {"resultList": {"result": [{"pmcid": "PMC9", "isOpenAccess": "N", "inEPMC": "Y"}]}}
+    monkeypatch.setattr(te, "_epmc_get", lambda *_a, **_k: json.dumps(manuscript).encode())
+    assert te.pmc_copy("10.1056/x") == ("PMC9", False)
+    assert te.open_access_pmcid("10.1056/x") is None
+    none = {"resultList": {"result": [{"isOpenAccess": "N", "inEPMC": "N"}]}}
+    monkeypatch.setattr(te, "_epmc_get", lambda *_a, **_k: json.dumps(none).encode())
+    assert te.pmc_copy("10.1056/x") == (None, False)
+
+
+def _opendata(files):
+    """A fake PMC dataset bucket: path → body (missing paths answer None)."""
+    asked = []
+
+    def get(path, limit):
+        asked.append(path)
+        return files.get(path)
+
+    return get, asked
+
+
+def _meta(pmcid, **kw):
+    return json.dumps({"pmcid": pmcid, "is_retracted": False, "license_code": "TDM", **kw}).encode()
+
+
+def test_manuscript_xml_takes_the_latest_version(monkeypatch):
+    get, asked = _opendata(
+        {
+            "PMC9.1/PMC9.1.json": _meta("PMC9"),
+            "PMC9.2/PMC9.2.json": _meta("PMC9"),
+            "PMC9.2/PMC9.2.xml": b"<!DOCTYPE article><article>v2</article>",
+        }
+    )
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9").endswith(b"<article>v2</article>")
+    assert asked[-1] == "PMC9.2/PMC9.2.xml"
+
+
+def test_manuscript_xml_never_takes_an_older_version_for_the_latest(monkeypatch):
+    def get(path, limit):
+        if path == "PMC9.1/PMC9.1.json":
+            return _meta("PMC9")
+        if path == "PMC9.2/PMC9.2.json":
+            raise te._Unavailable("timed out")  # version 2 may exist
+        return b"<article>v1</article>"
+
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9") is None
+
+
+def test_manuscript_xml_only_takes_what_may_be_reused(monkeypatch):
+    for meta in (
+        _meta("PMC9", is_retracted=True),
+        _meta("PMC9", license_code="NO-CC CODE"),
+        _meta("PMC8"),  # the bucket describing another article
+        b"not json",
+    ):
+        get, _ = _opendata({"PMC9.1/PMC9.1.json": meta, "PMC9.1/PMC9.1.xml": b"<article/>"})
+        monkeypatch.setattr(te, "_opendata_get", get)
+        assert te.manuscript_xml("PMC9") is None, meta
+    # Open access under any licence is fine.
+    get, _ = _opendata(
+        {
+            "PMC9.1/PMC9.1.json": _meta("PMC9", license_code="CC BY", is_pmc_openaccess=True),
+            "PMC9.1/PMC9.1.xml": b"<article/>",
+        }
+    )
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9") == b"<article/>"
+    monkeypatch.setattr(te, "_opendata_get", lambda *_a, **_k: pytest.fail("must not ask"))
+    assert te.manuscript_xml("PMC9/../x") is None
+
+
+class _OpenAccessSvc:
+    """paper_trials and trial_sources reads; records uploads and source rows."""
+
+    def __init__(self, links, sources=()):
+        self.rows = {"paper_trials": links, "trial_sources": list(sources)}
+        self.storage = _Storage({})
+        self.upserted: list[dict] = []
+
+    def table(self, name):
+        svc = self
+
+        class Q:
+            def __getattr__(self, _a):
+                return lambda *a, **k: self
+
+            def upsert(self, row, **_k):
+                svc.upserted.append(row)
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=svc.rows.get(name, []))
+
+        return Q()
+
+
+def test_fetch_open_access_takes_manuscripts_and_says_what_it_left_out(monkeypatch):
+    def link(pid, status, doi):
+        return {"paper_id": pid, "status": status, "papers": {"id": pid, "doi": doi, "title": pid}}
+
+    svc = _OpenAccessSvc(
+        [
+            link("oa", "auto", "10.1/oa"),
+            link("ms", "confirmed", "10.1/ms"),
+            link("closed", "auto", "10.1/closed"),
+            link("waiting", "suggested", "10.1/waiting"),
+            link("held", "auto", "10.1/held"),
+        ],
+        sources=[{"paper_id": "held"}],
+    )
+    monkeypatch.setattr(te, "service_client", lambda: svc)
+    copies = {"10.1/oa": ("PMC1", True), "10.1/ms": ("PMC2", False)}
+    monkeypatch.setattr(te, "pmc_copy", lambda doi: copies.get(doi, (None, False)))
+    monkeypatch.setattr(te, "full_text_xml", lambda pmcid: b"<article>oa</article>")
+    monkeypatch.setattr(te, "manuscript_xml", lambda pmcid: b"<article>ms</article>")
+
+    out = te.fetch_open_access("lab", "t1")
+
+    assert sorted(out["fetched"]) == ["ms", "oa"]
+    assert out["closed"] == ["closed"]
+    assert out["have"] == ["held"]
+    assert out["unconfirmed"] == ["waiting"]  # never fetched until someone confirms it
+    names = sorted(r["filename"] for r in svc.upserted)
+    assert names == ["PMC1 full text (Europe PMC)", "PMC2 author manuscript (PMC)"]
+
+
 def test_redirects_are_never_followed():
     assert (
         te._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.test/")
@@ -448,15 +576,25 @@ def test_get_data_leaves_trials_with_data_alone(monkeypatch):
 
     def open_access(_team, trial):
         looked_up.append(trial)
-        return {"fetched": ["Paper"] if trial == "open" else [], "closed": [], "have": []}
+        return {
+            "fetched": ["Paper"] if trial == "open" else [],
+            "closed": [],
+            "have": [],
+            "unconfirmed": ["Suggested"] if trial == "waiting" else [],
+        }
 
     monkeypatch.setattr(te, "fetch_open_access", open_access)
     queued = []
     monkeypatch.setattr(te, "queue", lambda _team, trial: queued.append(trial) or trial != "busy")
-    out = te.get_data("lab", ["has", "files", "open", "closed", "busy"])
-    assert out == {"queued": ["files", "open"], "need_pdf": ["closed"], "skipped": ["has", "busy"]}
+    out = te.get_data("lab", ["has", "files", "open", "closed", "busy", "waiting"])
+    assert out == {
+        "queued": ["files", "open"],
+        "need_pdf": ["closed"],
+        "unconfirmed": ["waiting"],  # a paper to confirm, not a PDF to find
+        "skipped": ["has", "busy"],
+    }
     assert "has" not in queued  # re-extracting would cost money and wipe the checks
-    assert sorted(looked_up) == ["closed", "open"]  # only trials with no files
+    assert sorted(looked_up) == ["closed", "open", "waiting"]  # only trials with no files
 
 
 def _lab_has(monkeypatch, trial_ids):
@@ -492,7 +630,7 @@ def test_get_data_endpoint_queues_in_one_request(monkeypatch):
         "/trials/get-data", json={"team_id": "lab", "trial_ids": ["t1", "t2", "t1"]}, headers=AUTH
     )
     assert r.status_code == 200
-    assert r.json() == {"queued": ["t1", "t2"], "need_pdf": [], "skipped": []}
+    assert r.json() == {"queued": ["t1", "t2"], "need_pdf": [], "unconfirmed": [], "skipped": []}
 
 
 def test_get_data_endpoint_says_when_the_lab_is_at_its_cap(monkeypatch):

@@ -434,7 +434,9 @@ def _do_add(team: dict, rec: ctgov.TrialRecord) -> bool:
     )
     if added:
         # Link the lab's papers and classify it, without holding up the reply.
-        threading.Thread(target=trial_links.link_lab, args=(team["id"],), daemon=True).start()
+        threading.Thread(
+            target=trial_links.link_lab, args=(team["id"], trial_id), daemon=True
+        ).start()
     return bool(added)
 
 

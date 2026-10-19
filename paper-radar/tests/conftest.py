@@ -27,4 +27,4 @@ def no_trial_links(monkeypatch):
     except ImportError:  # the api extra is not installed
         return
     monkeypatch.setattr(tl, "link_paper", lambda team_id, paper_id: None)
-    monkeypatch.setattr(tl, "link_lab", lambda team_id: None)
+    monkeypatch.setattr(tl, "link_lab", lambda team_id, trial_id=None: None)

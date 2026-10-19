@@ -34,6 +34,22 @@ def _fetch_papers(svc, re_tag_all: bool) -> list[dict]:
         start += _PAGE
 
 
+def tag_batch(svc, chunk: list[dict]) -> tuple[int, int]:
+    """Tag these papers ({id, title, abstract}) in one Claude call and store
+    the tags. Returns (tagged, failed). Also used after a BibTeX import."""
+    tags = enrichment.enrich_batch(chunk)
+    now = datetime.now(UTC).isoformat()
+    done = failed = 0
+    for row in chunk:
+        t = tags.get(row["id"])
+        if t is None:
+            failed += 1
+            continue
+        svc.table("papers").update({"tags": t, "enriched_at": now}).eq("id", row["id"]).execute()
+        done += 1
+    return done, failed
+
+
 def main(argv: list[str] | None = None) -> int:
     """Returns how many papers failed, so a caller (or the exit status) can tell."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -49,18 +65,9 @@ def main(argv: list[str] | None = None) -> int:
 
     done = failed = 0
     for start in range(0, len(todo), args.batch_size):
-        chunk = todo[start : start + args.batch_size]
-        tags = enrichment.enrich_batch(chunk)
-        now = datetime.now(UTC).isoformat()
-        for row in chunk:
-            t = tags.get(row["id"])
-            if t is None:
-                failed += 1
-                continue
-            svc.table("papers").update({"tags": t, "enriched_at": now}).eq(
-                "id", row["id"]
-            ).execute()
-            done += 1
+        tagged, missed = tag_batch(svc, todo[start : start + args.batch_size])
+        done += tagged
+        failed += missed
         print(f"  {done + failed}/{len(todo)}  tagged={done} failed={failed}")
         time.sleep(args.delay)
     print(f"Done. tagged={done} failed={failed}")

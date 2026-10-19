@@ -33,6 +33,7 @@ class PubMedPaper:
     journal: str | None
     year: str | None
     doi: str | None
+    pubtypes: tuple[str, ...] = ()  # "Journal Article", "Review", "Meta-Analysis", …
 
 
 def _get(path: str, params: dict[str, str]) -> dict:
@@ -71,6 +72,7 @@ def papers_naming(nct_id: str) -> tuple[int, list[PubMedPaper]]:
                 journal=r.get("source"),
                 year=(r.get("pubdate") or "")[:4] or None,
                 doi=doi.lower() if doi else None,
+                pubtypes=tuple(str(t) for t in r.get("pubtype") or []),
             )
         )
     return count, papers

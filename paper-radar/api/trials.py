@@ -168,7 +168,7 @@ def add_trial(
     )
     already = not inserted
     if not already:
-        background.add_task(trial_links.link_lab, req.team_id)
+        background.add_task(trial_links.link_lab, req.team_id, trial["id"])
     return AddedTrial(trial=trial, already_in_lab=already)
 
 
@@ -207,8 +207,9 @@ def _require_lab_trial(token: str, team_id: str, trial_id: str) -> str:
 
 class OpenAccessResult(BaseModel):
     fetched: list[str]
-    closed: list[str]
+    closed: list[str]  # no free full text: a PDF to upload
     have: list[str]
+    unconfirmed: list[str] = []  # suggested links, left out until confirmed
 
 
 @router.post("/{trial_id}/open-access", response_model=OpenAccessResult)
@@ -270,7 +271,8 @@ class GetData(BaseModel):
 
 class GotData(BaseModel):
     queued: list[str]
-    need_pdf: list[str]  # no files and no open-access full text
+    need_pdf: list[str]  # no files and no free full text
+    unconfirmed: list[str] = []  # only suggested papers: confirm one first
     skipped: list[str]  # had data, or already on the way
 
 

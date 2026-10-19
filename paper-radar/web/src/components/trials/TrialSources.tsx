@@ -100,11 +100,14 @@ export function TrialSources({
     mutationFn: () => fetchOpenAccess(team.id, trialId),
     onSuccess: (r) => {
       refresh();
+      const unconfirmed = r.unconfirmed ?? [];
       const parts = [
-        r.fetched.length && `Fetched ${r.fetched.length} open-access full ${r.fetched.length === 1 ? "text" : "texts"}.`,
+        r.fetched.length && `Fetched ${r.fetched.length} free full ${r.fetched.length === 1 ? "text" : "texts"}.`,
         r.closed.length &&
-          `${r.closed.length} linked ${r.closed.length === 1 ? "paper isn’t" : "papers aren’t"} open access: upload ${r.closed.length === 1 ? "its" : "their"} PDF.`,
-        !r.fetched.length && !r.closed.length && !r.have.length && "No linked papers to fetch. Link the trial’s papers first.",
+          `${r.closed.length} linked ${r.closed.length === 1 ? "paper has" : "papers have"} no free full text: upload ${r.closed.length === 1 ? "its" : "their"} PDF.`,
+        unconfirmed.length &&
+          `${unconfirmed.length} suggested ${unconfirmed.length === 1 ? "paper" : "papers"} left out: confirm ${unconfirmed.length === 1 ? "it" : "them"} under Papers first.`,
+        !r.fetched.length && !r.closed.length && !r.have.length && !unconfirmed.length && "No linked papers to fetch. Link the trial’s papers first.",
         !r.fetched.length && !r.closed.length && r.have.length > 0 && "Every linked paper already has its full text here.",
       ].filter(Boolean);
       toast({ message: parts.join(" ") });

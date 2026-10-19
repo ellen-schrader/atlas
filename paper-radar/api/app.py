@@ -808,9 +808,7 @@ def _apply_edit(
                 status_code=422, detail="That DOI isn’t in a form Atlas can store."
             ) from exc
         if code == "23503":  # foreign_key_violation — paper_editors: no profile
-            raise HTTPException(
-                status_code=401, detail="Your account no longer exists."
-            ) from exc
+            raise HTTPException(status_code=401, detail="Your account no longer exists.") from exc
         raise
 
 
@@ -1083,20 +1081,24 @@ def _engagement_counts(uc, team_id: str, paper_ids: list[str]) -> dict[str, tupl
     # from scanning the whole lab's engagement.
     for batch in _chunks(paper_ids, _IN_BATCH):
         for r in _fetch_all(
-            lambda b=batch: uc.table("reactions")
-            .select("paper_id")
-            .eq("team_id", team_id)
-            .in_("paper_id", b)
-            .order("id")
+            lambda b=batch: (
+                uc.table("reactions")
+                .select("paper_id")
+                .eq("team_id", team_id)
+                .in_("paper_id", b)
+                .order("id")
+            )
         ):
             if r["paper_id"] in counts:
                 counts[r["paper_id"]][0] += 1
         for c in _fetch_all(
-            lambda b=batch: uc.table("comments")
-            .select("paper_id")
-            .eq("team_id", team_id)
-            .in_("paper_id", b)
-            .order("id")
+            lambda b=batch: (
+                uc.table("comments")
+                .select("paper_id")
+                .eq("team_id", team_id)
+                .in_("paper_id", b)
+                .order("id")
+            )
         ):
             if c["paper_id"] in counts:
                 counts[c["paper_id"]][1] += 1
@@ -1248,8 +1250,7 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
     below = (stat[0].get("below", 0) if stat else 0) or 0
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
-        .execute().data or []
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT}).execute().data or []
     )
     member_ids = [x["paper_id"] for x in members]
     if not member_ids:
@@ -1257,23 +1258,41 @@ def map_overview(map_id: str, token: str = Depends(require_token)) -> MapOvervie
             points=[], clusters=[], stats=_compute_stats([]), total=0, embedded=0
         )
         return MapOverviewResponse(
-            **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-            visibility=m["visibility"], created_by=m["created_by"], new_this_week=0,
-            min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
+            **base.model_dump(),
+            map_id=map_id,
+            name=m["name"],
+            seed=m["seed"],
+            visibility=m["visibility"],
+            created_by=m["created_by"],
+            new_this_week=0,
+            min_similarity=min_sim,
+            below_threshold=below,
+            excluded_count=excluded_count,
         )
 
     post_rows = (
-        uc.table("paper_posts").select(_OVERVIEW_COLS)
-        .eq("team_id", m["team_id"]).in_("paper_id", member_ids)
-        .execute().data or []
+        uc.table("paper_posts")
+        .select(_OVERVIEW_COLS)
+        .eq("team_id", m["team_id"])
+        .in_("paper_id", member_ids)
+        .execute()
+        .data
+        or []
     )
     base = _build_overview(uc, m["team_id"], post_rows)
     cutoff = (datetime.now(UTC) - timedelta(days=7)).isoformat()
     new_this_week = sum(1 for r in post_rows if (r.get("posted_at") or "") >= cutoff)
     return MapOverviewResponse(
-        **base.model_dump(), map_id=map_id, name=m["name"], seed=m["seed"],
-        visibility=m["visibility"], created_by=m["created_by"], new_this_week=new_this_week,
-        min_similarity=min_sim, below_threshold=below, excluded_count=excluded_count,
+        **base.model_dump(),
+        map_id=map_id,
+        name=m["name"],
+        seed=m["seed"],
+        visibility=m["visibility"],
+        created_by=m["created_by"],
+        new_this_week=new_this_week,
+        min_similarity=min_sim,
+        below_threshold=below,
+        excluded_count=excluded_count,
     )
 
 
@@ -1317,8 +1336,7 @@ def map_papers(
     team_id = rows[0]["team_id"]
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
-        .execute().data or []
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT}).execute().data or []
     )
     if not members:
         return MapPapersResponse(total=0, papers=[], labs=[])
@@ -1329,24 +1347,38 @@ def map_papers(
     meta = {
         p["id"]: p
         for p in (
-            uc.table("papers").select("id, title, authors, venue, year, doi")
-            .in_("id", paper_ids).execute().data or []
+            uc.table("papers")
+            .select("id, title, authors, venue, year, doi")
+            .in_("id", paper_ids)
+            .execute()
+            .data
+            or []
         )
     }
     posts = {
         p["paper_id"]: p
         for p in (
-            uc.table("paper_posts").select("id, paper_id, posted_at")
-            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+            uc.table("paper_posts")
+            .select("id, paper_id, posted_at")
+            .eq("team_id", team_id)
+            .in_("paper_id", paper_ids)
+            .execute()
+            .data
+            or []
         )
     }
     eng = _engagement_counts(uc, team_id, paper_ids)
     read = {
         r["paper_id"]: r["status"]
         for r in (
-            uc.table("paper_status").select("paper_id, status")
-            .eq("team_id", team_id).eq("user_id", uid).in_("paper_id", paper_ids)
-            .execute().data or []
+            uc.table("paper_status")
+            .select("paper_id, status")
+            .eq("team_id", team_id)
+            .eq("user_id", uid)
+            .in_("paper_id", paper_ids)
+            .execute()
+            .data
+            or []
         )
     }
 
@@ -1366,19 +1398,27 @@ def map_papers(
             (
                 importance,
                 MapPaper(
-                    post_id=post.get("id", ""), paper_id=pid, title=p.get("title"),
-                    authors=p.get("authors") or [], venue=p.get("venue"), year=p.get("year"),
-                    doi=p.get("doi"), similarity=sim, reactions=r_, comments=c_,
-                    read_status=read.get(pid), posted_at=post.get("posted_at"),
+                    post_id=post.get("id", ""),
+                    paper_id=pid,
+                    title=p.get("title"),
+                    authors=p.get("authors") or [],
+                    venue=p.get("venue"),
+                    year=p.get("year"),
+                    doi=p.get("doi"),
+                    similarity=sim,
+                    reactions=r_,
+                    comments=c_,
+                    read_status=read.get(pid),
+                    posted_at=post.get("posted_at"),
                     pinned=bool(pinned_by_pid.get(pid, False)),
                 ),
             )
         )
 
     if sort == "recent":
-        scored.sort(key=lambda t: (t[1].posted_at or ""), reverse=True)
+        scored.sort(key=lambda t: t[1].posted_at or "", reverse=True)
     elif sort == "discussed":
-        scored.sort(key=lambda t: (t[1].reactions + t[1].comments), reverse=True)
+        scored.sort(key=lambda t: t[1].reactions + t[1].comments, reverse=True)
     else:  # importance (default)
         scored.sort(key=lambda t: t[0], reverse=True)
     papers = [t[1] for t in scored]
@@ -1410,8 +1450,14 @@ def get_map_summary(map_id: str, token: str = Depends(require_token)) -> MapSumm
     if not get_user_id(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     rows = (
-        user_client(token).table("maps").select("ai_summary").eq("id", map_id).limit(1)
-        .execute().data or []
+        user_client(token)
+        .table("maps")
+        .select("ai_summary")
+        .eq("id", map_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No such map, or it isn't visible to you.")
@@ -1435,7 +1481,12 @@ def make_map_summary(
     uc = user_client(token)
 
     rows = (
-        uc.table("maps").select("team_id, seed, ai_summary").eq("id", map_id).limit(1).execute().data
+        uc.table("maps")
+        .select("team_id, seed, ai_summary")
+        .eq("id", map_id)
+        .limit(1)
+        .execute()
+        .data
         or []
     )
     if not rows:
@@ -1450,22 +1501,26 @@ def make_map_summary(
     _summary_limiter.check(user_id)  # bound the paid LLM call
 
     members = (
-        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT})
-        .execute().data or []
+        uc.rpc("map_members", {"p_map": map_id, "p_limit": _MAP_MEMBER_LIMIT}).execute().data or []
     )
     sim = {m["paper_id"]: m["similarity"] for m in members}
     paper_ids = list(sim)
     papers = (
-        uc.table("papers").select("id, title, abstract, year")
-        .in_("id", paper_ids).execute().data or []
+        uc.table("papers").select("id, title, abstract, year").in_("id", paper_ids).execute().data
+        or []
         if paper_ids
         else []
     )
     posts = {
         p["paper_id"]: p.get("posted_at")
         for p in (
-            uc.table("paper_posts").select("paper_id, posted_at")
-            .eq("team_id", team_id).in_("paper_id", paper_ids).execute().data or []
+            uc.table("paper_posts")
+            .select("paper_id, posted_at")
+            .eq("team_id", team_id)
+            .in_("paper_id", paper_ids)
+            .execute()
+            .data
+            or []
         )
     }
     # most recent, then most relevant — this is a "what's *new*" brief.
@@ -1483,7 +1538,9 @@ def make_map_summary(
     if len(top) < _SUMMARY_MIN_PAPERS:
         result = {
             "text": f"Only {len(top)} paper(s) in this map so far — too little to summarize yet.",
-            "cited_ids": [], "n_papers": len(top), "ai": False,
+            "cited_ids": [],
+            "n_papers": len(top),
+            "ai": False,
         }
     else:
         result = map_summary_mod.generate_summary(seed, top)
@@ -1630,9 +1687,11 @@ def delete_account(req: DeleteAccountRequest, token: str = Depends(require_token
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     try:
-        res = service_client().rpc(
-            "delete_account", {"p_user": user_id, "p_confirm_email": req.confirm_email}
-        ).execute()
+        res = (
+            service_client()
+            .rpc("delete_account", {"p_user": user_id, "p_confirm_email": req.confirm_email})
+            .execute()
+        )
     except APIError as exc:
         # Both refusals are the user's to fix, and their messages are written for them.
         if exc.code in ("22023", "P0001"):
@@ -1819,8 +1878,8 @@ def _source_reasons(
         {
             p["id"]: _l2norm(np.asarray(_parse_vec(p["embedding"]), dtype=np.float32))
             for p in (
-                uc.table("papers").select("id, embedding").in_("id", by_engagement)
-                .execute().data or []
+                uc.table("papers").select("id, embedding").in_("id", by_engagement).execute().data
+                or []
             )
             if p.get("embedding")
         }
@@ -1853,8 +1912,8 @@ def _new_reasons(
     names = (
         {
             r["id"]: r.get("display_name")
-            for r in uc.table("profiles").select("id, display_name").in_("id", ids)
-            .execute().data or []
+            for r in uc.table("profiles").select("id, display_name").in_("id", ids).execute().data
+            or []
         }
         if ids
         else {}
@@ -2246,12 +2305,42 @@ def bibtex_import(
     # would otherwise fire 400 separate embedding requests.
     if to_embed and get_api_settings().voyage_api_key:
         background.add_task(_embed_batch, to_embed)
+    if to_embed:
+        # Tagged now, as a single post is, rather than at the next daily run.
+        background.add_task(_enrich_imported, to_embed)
     if imported:
         # One pass over the whole lab, not one per imported paper.
         background.add_task(merge_suggestions.suggest_for_post, req.team_id, None)
         background.add_task(trial_links.link_lab, req.team_id)
 
     return ImportResponse(imported=imported, skipped=skipped, failed=failed + len(parsed.rejected))
+
+
+def _enrich_imported(papers: list[tuple[str, str | None, str | None]]) -> None:
+    """Tag the imported papers that aren't tagged yet, a few per Claude call.
+    No-ops without an Anthropic key; failures are logged, and the daily
+    backfill tags what's left."""
+    from .backfill_enrichment import tag_batch
+
+    svc = service_client()
+    ids = [paper_id for paper_id, _t, _a in papers]
+    rows: list[dict] = []
+    for start in range(0, len(ids), 100):
+        rows += (
+            svc.table("papers")
+            .select("id, title, abstract")
+            .in_("id", ids[start : start + 100])
+            .is_("enriched_at", "null")
+            .execute()
+            .data
+            or []
+        )
+    rows = [r for r in rows if r.get("title") or r.get("abstract")]
+    for start in range(0, len(rows), enrichment.BATCH_SIZE):
+        try:
+            tag_batch(svc, rows[start : start + enrichment.BATCH_SIZE])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bibtex import: tagging a batch failed: %s", exc)
 
 
 def _embed_batch(papers: list[tuple[str, str | None, str | None]]) -> None:

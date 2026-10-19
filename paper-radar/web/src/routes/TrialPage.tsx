@@ -547,6 +547,7 @@ function Classification({ d, onSaved }: { d: TrialDetail; onSaved: () => void })
 const PROVENANCE: Record<TrialLink["source"], string> = {
   nct_in_abstract: "NCT ID in abstract",
   acronym_in_title: "trial name in title",
+  pubmed: "listed with the trial on PubMed",
   manual: "linked by a lab member",
 };
 

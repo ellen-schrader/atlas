@@ -68,41 +68,64 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _epmc_get(path: str, *, limit: int) -> bytes | None:
-    """GET a Europe PMC REST path. None on 404 or any failure (logged)."""
-    url = f"{_EPMC}/{path}"
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+class _Unavailable(Exception):
+    """A fetch failed for a reason other than "not there" (network, 5xx)."""
+
+
+def _fetch(base: str, path: str, *, limit: int) -> bytes | None:
+    """GET `path` on a fixed https host, never following a redirect. None on
+    404; _Unavailable on any other failure, or a body over `limit` bytes."""
+    name = f"{base.split('/')[2]} {path.split('?')[0]}"
+    req = urllib.request.Request(f"{base}/{path}", headers={"User-Agent": _UA})
     try:
         with _opener.open(req, timeout=20) as resp:  # noqa: S310 — fixed https host
             body = resp.read(limit + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise _Unavailable(f"{name}: HTTP {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        log.info("Europe PMC %s: %s", path.split("?")[0], exc)
-        return None
+        raise _Unavailable(f"{name}: {exc}") from exc
     if len(body) > limit:
-        log.warning("Europe PMC %s: over %d bytes, skipped", path.split("?")[0], limit)
-        return None
+        raise _Unavailable(f"{name}: over {limit} bytes")
     return body
 
 
-def open_access_pmcid(doi: str) -> str | None:
-    """The PMCID of the open-access full text for this DOI, if Europe PMC has one."""
-    if not _DOI.match(doi):
+def _epmc_get(path: str, *, limit: int) -> bytes | None:
+    """GET a Europe PMC REST path. None on 404 or any failure (logged)."""
+    try:
+        return _fetch(_EPMC, path, limit=limit)
+    except _Unavailable as exc:
+        log.info("%s", exc)
         return None
+
+
+def pmc_copy(doi: str) -> tuple[str | None, bool]:
+    """The PMCID of this DOI's copy in PMC, and whether it is open access
+    (Europe PMC serves its full text). (None, False) when there is no copy."""
+    if not _DOI.match(doi):
+        return None, False
     q = urllib.parse.urlencode(
         {"query": f'DOI:"{doi}"', "format": "json", "resultType": "lite", "pageSize": "1"}
     )
     body = _epmc_get(f"search?{q}", limit=1_000_000)
     if not body:
-        return None
+        return None, False
     try:
         results = json.loads(body)["resultList"]["result"]
     except (ValueError, KeyError, TypeError):
-        return None
+        return None, False
     for r in results:
         pmcid = r.get("pmcid") or ""
-        if r.get("isOpenAccess") == "Y" and r.get("inEPMC") == "Y" and _PMCID.match(pmcid):
-            return pmcid
-    return None
+        if r.get("inEPMC") == "Y" and _PMCID.match(pmcid):
+            return pmcid, r.get("isOpenAccess") == "Y"
+    return None, False
+
+
+def open_access_pmcid(doi: str) -> str | None:
+    """The PMCID of the open-access full text for this DOI, if Europe PMC has one."""
+    pmcid, open_access = pmc_copy(doi)
+    return pmcid if open_access else None
 
 
 def full_text_xml(pmcid: str) -> bytes | None:
@@ -115,21 +138,77 @@ def full_text_xml(pmcid: str) -> bytes | None:
     return body
 
 
+# --- PMC's text-mining dataset (author manuscripts) ----------------------------------
+#
+# A paper PMC holds as an author manuscript (NIH or funder public access) isn't
+# open access, so Europe PMC won't serve its full text. NCBI publishes those
+# for text mining, with the same JATS XML, in a public bucket: one folder per
+# version ("PMC9126186.1/"), a .json describing it and the .xml.
+
+_PMC_OPENDATA = "https://pmc-oa-opendata.s3.amazonaws.com"
+_MAX_VERSIONS = 5
+
+
+def _opendata_get(path: str, *, limit: int) -> bytes | None:
+    """GET a path in the bucket. None on 404; _Unavailable on other failures."""
+    return _fetch(_PMC_OPENDATA, path, limit=limit)
+
+
+def manuscript_xml(pmcid: str) -> bytes | None:
+    """The JATS full text of a PMC author manuscript (its latest version), if
+    NCBI publishes it for text mining and it isn't retracted. None if the
+    dataset can't be reached: an older version is never taken for the latest.
+    (Its metadata, as of 2026: license_code "TDM" for manuscripts.)"""
+    if not _PMCID.match(pmcid):
+        return None
+    try:
+        return _manuscript_xml(pmcid)
+    except _Unavailable as exc:
+        log.info("%s", exc)
+        return None
+
+
+def _manuscript_xml(pmcid: str) -> bytes | None:
+    latest = None
+    for version in range(1, _MAX_VERSIONS + 1):
+        body = _opendata_get(f"{pmcid}.{version}/{pmcid}.{version}.json", limit=100_000)
+        if body is None:  # 404: no such version, so the one before is the latest
+            break
+        try:
+            meta = json.loads(body)
+        except ValueError:
+            break
+        latest = (version, meta)
+    if latest is None:
+        return None
+    version, meta = latest
+    reusable = meta.get("is_pmc_openaccess") or meta.get("license_code") == "TDM"
+    if meta.get("pmcid") != pmcid or meta.get("is_retracted") or not reusable:
+        return None
+    body = _opendata_get(f"{pmcid}.{version}/{pmcid}.{version}.xml", limit=_MAX_XML)
+    if not body or not body.lstrip()[:200].lstrip(b"\xef\xbb\xbf").startswith(b"<"):
+        return None
+    return body
+
+
 def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
-    """Store the open-access full text of each paper the lab links to this
-    trial, unless the lab already has a source for that paper (an uploaded PDF
-    counts). Returns titles: {"fetched": [...], "closed": [...], "have": [...]}."""
+    """Store the free full text of each paper the lab links to this trial
+    (open access, else a PMC author manuscript), unless the lab already has a
+    source for that paper (an uploaded PDF counts). Returns titles:
+    {"fetched", "closed" (no free full text), "have", "unconfirmed" (suggested
+    links, left out until someone confirms them)}."""
     svc = service_client()
-    links = (
+    rows = (
         svc.table("paper_trials")
-        .select("paper_id, papers(id, doi, title)")
+        .select("paper_id, status, papers(id, doi, title)")
         .eq("team_id", team_id)
         .eq("trial_id", trial_id)
-        .in_("status", ["auto", "confirmed"])
+        .in_("status", ["auto", "confirmed", "suggested"])
         .execute()
         .data
         or []
     )
+    links = [r for r in rows if r.get("status") != "suggested"]
     have = {
         r["paper_id"]
         for r in svc.table("trial_sources")
@@ -141,7 +220,12 @@ def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
         or []
         if r.get("paper_id")
     }
-    out: dict[str, list[str]] = {"fetched": [], "closed": [], "have": []}
+    out: dict[str, list[str]] = {"fetched": [], "closed": [], "have": [], "unconfirmed": []}
+    out["unconfirmed"] = [
+        (r.get("papers") or {}).get("title") or "Untitled paper"
+        for r in rows
+        if r.get("status") == "suggested" and r.get("paper_id") not in have
+    ]
     todo = []
     for link in links:
         paper = link.get("papers") or {}
@@ -151,14 +235,18 @@ def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
             todo.append(paper)
     todo = todo[:MAX_OPEN_ACCESS]
 
-    def lookup(paper: dict[str, Any]) -> tuple[dict[str, Any], str | None, bytes | None]:
-        pmcid = open_access_pmcid((paper.get("doi") or "").lower())
-        return paper, pmcid, full_text_xml(pmcid) if pmcid else None
+    def lookup(paper: dict[str, Any]) -> tuple[dict[str, Any], str | None, bytes | None, bool]:
+        pmcid, open_access = pmc_copy((paper.get("doi") or "").lower())
+        if not pmcid:
+            return paper, None, None, False
+        if open_access:
+            return paper, pmcid, full_text_xml(pmcid), False
+        return paper, pmcid, manuscript_xml(pmcid), True
 
-    # In parallel: each paper is two requests that can each take seconds.
+    # In parallel: each paper is a few requests that can each take seconds.
     with ThreadPoolExecutor(max_workers=4) as pool:
         found = list(pool.map(lookup, todo))
-    for paper, pmcid, xml in found:
+    for paper, pmcid, xml, manuscript in found:
         title = paper.get("title") or "Untitled paper"
         if not (pmcid and xml):
             out["closed"].append(title)
@@ -175,7 +263,11 @@ def fetch_open_access(team_id: str, trial_id: str) -> dict[str, list[str]]:
                 "kind": "paper",
                 "origin": "europepmc",
                 "storage_path": path,
-                "filename": f"{pmcid} full text (Europe PMC)",
+                "filename": (
+                    f"{pmcid} author manuscript (PMC)"
+                    if manuscript
+                    else f"{pmcid} full text (Europe PMC)"
+                ),
                 "media_type": "application/xml",
                 "bytes": len(xml),
             },
@@ -685,7 +777,8 @@ def get_data(team_id: str, trial_ids: list[str]) -> dict[str, list[str]]:
     each without data yet, fetch the open-access full text if it has no files,
     then queue it for the next batch. Trials with data, or already on the way,
     are left alone: re-extracting would cost money and wipe the lab's checks.
-    Returns trial ids: {"queued": [...], "need_pdf": [...], "skipped": [...]}."""
+    Returns trial ids: {"queued", "need_pdf", "unconfirmed" (only suggested
+    papers: confirm one), "skipped"}."""
     svc = service_client()
     done = {
         r["trial_id"]
@@ -698,7 +791,12 @@ def get_data(team_id: str, trial_ids: list[str]) -> dict[str, list[str]]:
         or []
         if r.get("extracted_at")
     }
-    out: dict[str, list[str]] = {"queued": [], "need_pdf": [], "skipped": sorted(done)}
+    out: dict[str, list[str]] = {
+        "queued": [],
+        "need_pdf": [],
+        "unconfirmed": [],
+        "skipped": sorted(done),
+    }
     todo = [t for t in trial_ids if t not in done]
     if not todo:
         return out
@@ -717,7 +815,8 @@ def get_data(team_id: str, trial_ids: list[str]) -> dict[str, list[str]]:
         if trial_id not in with_files:
             found = fetch_open_access(team_id, trial_id)
             if not (found["fetched"] or found["have"]):
-                return "need_pdf"
+                # A suggested paper to confirm, rather than a PDF to find.
+                return "unconfirmed" if found["unconfirmed"] else "need_pdf"
         # False: queued, in a batch or running meanwhile, which is what we wanted.
         return "queued" if queue(team_id, trial_id) else "skipped"
 
