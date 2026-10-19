@@ -28,7 +28,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md font-medium transition",
+        // Colours only: animating opacity too left a ghost of a button that moved
+        // while it faded (e.g. the BibTeX dialog's Clear as Import's label changed).
+        "inline-flex items-center justify-center gap-2 rounded-md font-medium",
+        "transition-[color,background-color,border-color,box-shadow,filter]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         "disabled:pointer-events-none disabled:opacity-50",
         variants[variant],

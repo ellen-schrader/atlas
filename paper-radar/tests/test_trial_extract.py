@@ -52,6 +52,122 @@ def test_full_text_xml_checks_what_it_gets(monkeypatch):
     assert te.full_text_xml("PMC1").endswith(b"<article/>")
 
 
+def test_pmc_copy_tells_open_access_from_manuscripts(monkeypatch):
+    manuscript = {"resultList": {"result": [{"pmcid": "PMC9", "isOpenAccess": "N", "inEPMC": "Y"}]}}
+    monkeypatch.setattr(te, "_epmc_get", lambda *_a, **_k: json.dumps(manuscript).encode())
+    assert te.pmc_copy("10.1056/x") == ("PMC9", False)
+    assert te.open_access_pmcid("10.1056/x") is None
+    none = {"resultList": {"result": [{"isOpenAccess": "N", "inEPMC": "N"}]}}
+    monkeypatch.setattr(te, "_epmc_get", lambda *_a, **_k: json.dumps(none).encode())
+    assert te.pmc_copy("10.1056/x") == (None, False)
+
+
+def _opendata(files):
+    """A fake PMC dataset bucket: path → body (missing paths answer None)."""
+    asked = []
+
+    def get(path, limit):
+        asked.append(path)
+        return files.get(path)
+
+    return get, asked
+
+
+def _meta(pmcid, **kw):
+    return json.dumps({"pmcid": pmcid, "is_retracted": False, "license_code": "TDM", **kw}).encode()
+
+
+def test_manuscript_xml_takes_the_latest_version(monkeypatch):
+    get, asked = _opendata(
+        {
+            "PMC9.1/PMC9.1.json": _meta("PMC9"),
+            "PMC9.2/PMC9.2.json": _meta("PMC9"),
+            "PMC9.2/PMC9.2.xml": b"<!DOCTYPE article><article>v2</article>",
+        }
+    )
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9").endswith(b"<article>v2</article>")
+    assert asked[-1] == "PMC9.2/PMC9.2.xml"
+
+
+def test_manuscript_xml_only_takes_what_may_be_reused(monkeypatch):
+    for meta in (
+        _meta("PMC9", is_retracted=True),
+        _meta("PMC9", license_code="NO-CC CODE"),
+        _meta("PMC8"),  # the bucket describing another article
+        b"not json",
+    ):
+        get, _ = _opendata({"PMC9.1/PMC9.1.json": meta, "PMC9.1/PMC9.1.xml": b"<article/>"})
+        monkeypatch.setattr(te, "_opendata_get", get)
+        assert te.manuscript_xml("PMC9") is None, meta
+    # Open access under any licence is fine.
+    get, _ = _opendata(
+        {
+            "PMC9.1/PMC9.1.json": _meta("PMC9", license_code="CC BY", is_pmc_openaccess=True),
+            "PMC9.1/PMC9.1.xml": b"<article/>",
+        }
+    )
+    monkeypatch.setattr(te, "_opendata_get", get)
+    assert te.manuscript_xml("PMC9") == b"<article/>"
+    monkeypatch.setattr(te, "_opendata_get", lambda *_a, **_k: pytest.fail("must not ask"))
+    assert te.manuscript_xml("PMC9/../x") is None
+
+
+class _OpenAccessSvc:
+    """paper_trials and trial_sources reads; records uploads and source rows."""
+
+    def __init__(self, links, sources=()):
+        self.rows = {"paper_trials": links, "trial_sources": list(sources)}
+        self.storage = _Storage({})
+        self.upserted: list[dict] = []
+
+    def table(self, name):
+        svc = self
+
+        class Q:
+            def __getattr__(self, _a):
+                return lambda *a, **k: self
+
+            def upsert(self, row, **_k):
+                svc.upserted.append(row)
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=svc.rows.get(name, []))
+
+        return Q()
+
+
+def test_fetch_open_access_takes_manuscripts_and_says_what_it_left_out(monkeypatch):
+    def link(pid, status, doi):
+        return {"paper_id": pid, "status": status, "papers": {"id": pid, "doi": doi, "title": pid}}
+
+    svc = _OpenAccessSvc(
+        [
+            link("oa", "auto", "10.1/oa"),
+            link("ms", "confirmed", "10.1/ms"),
+            link("closed", "auto", "10.1/closed"),
+            link("waiting", "suggested", "10.1/waiting"),
+            link("held", "auto", "10.1/held"),
+        ],
+        sources=[{"paper_id": "held"}],
+    )
+    monkeypatch.setattr(te, "service_client", lambda: svc)
+    copies = {"10.1/oa": ("PMC1", True), "10.1/ms": ("PMC2", False)}
+    monkeypatch.setattr(te, "pmc_copy", lambda doi: copies.get(doi, (None, False)))
+    monkeypatch.setattr(te, "full_text_xml", lambda pmcid: b"<article>oa</article>")
+    monkeypatch.setattr(te, "manuscript_xml", lambda pmcid: b"<article>ms</article>")
+
+    out = te.fetch_open_access("lab", "t1")
+
+    assert sorted(out["fetched"]) == ["ms", "oa"]
+    assert out["closed"] == ["closed"]
+    assert out["have"] == ["held"]
+    assert out["unconfirmed"] == ["waiting"]  # never fetched until someone confirms it
+    names = sorted(r["filename"] for r in svc.upserted)
+    assert names == ["PMC1 full text (Europe PMC)", "PMC2 author manuscript (PMC)"]
+
+
 def test_redirects_are_never_followed():
     assert (
         te._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.test/")

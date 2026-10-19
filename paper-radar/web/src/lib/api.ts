@@ -480,7 +480,7 @@ export async function addTrial(
 export async function fetchOpenAccess(
   teamId: string,
   trialId: string,
-): Promise<{ fetched: string[]; closed: string[]; have: string[] }> {
+): Promise<{ fetched: string[]; closed: string[]; have: string[]; unconfirmed?: string[] }> {
   return authedRequest(`/trials/${trialId}/open-access`, {
     method: "POST",
     body: JSON.stringify({ team_id: teamId }),

@@ -630,7 +630,7 @@ function ReadyBar({
           {outcome.queued.length > 0 && <>Queued: {links(outcome.queued)}. </>}
           {outcome.needPdf.length > 0 && (
             <>
-              No open-access full text for {links(outcome.needPdf)}: upload the paper’s PDF on its page.{" "}
+              No free full text for {links(outcome.needPdf)}: upload the paper’s PDF on its page.{" "}
             </>
           )}
           {outcome.stopped && <span className="text-danger">Stopped: {outcome.stopped}</span>}

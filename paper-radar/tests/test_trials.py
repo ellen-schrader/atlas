@@ -234,7 +234,7 @@ def test_link_papers(monkeypatch):
         },
     )
     # The lab already rejected p3's suggestion, and took t-gone off its list.
-    monkeypatch.setattr(trial_links, "_decided", lambda _s, _t, _ids: {("p3", "t-kn")})
+    monkeypatch.setattr(trial_links, "_decided", lambda _s, _t, _ids: {("p3", "t-kn"): "rejected"})
     monkeypatch.setattr(trial_links, "_removed", lambda _s, _t: {"t-gone"})
     fetched = []
 
@@ -272,7 +272,8 @@ def test_link_papers(monkeypatch):
         ("p2", "t-neo"): ("nct_in_abstract", "auto"),
         ("p2", "t-kn"): ("acronym_in_title", "suggested"),
     }
-    assert n == 3
+    assert n.count == 3
+    assert n.trials == {"t-kn", "t-neo"}  # the suggestion isn't a reason to fetch
 
 
 def test_ensure_trial_stores_non_breast_trials_once(monkeypatch):
@@ -323,13 +324,15 @@ def test_run_carries_on_past_a_failing_lab(monkeypatch):
     monkeypatch.setattr(trial_links, "_lab_papers", lambda _s, team: team)
     done = []
 
-    def link(team, _papers, lookup):
+    def link(team, _papers, lookup, use_pubmed):
+        assert use_pubmed  # the daily run checks PubMed too
         if team == "b":
             raise RuntimeError("PostgREST 503")
         done.append(team)
-        return 1
+        return trial_links.Linked(1, set())
 
     monkeypatch.setattr(trial_links, "link_papers", link)
+    monkeypatch.setattr(trial_links, "fetch_full_texts", lambda *_a: None)
     with pytest.raises(SystemExit, match="1 lab"):
         trial_links.run()
     assert done == ["a", "c"]
@@ -346,9 +349,129 @@ def test_link_paper_links_for_labs_with_the_feature(monkeypatch):
     monkeypatch.setattr(trial_links, "active_teams", lambda: {"lab"})
     monkeypatch.setattr(trial_links, "service_client", lambda: _FakeSvc({"papers": [{"id": "p1"}]}))
     got = []
-    monkeypatch.setattr(trial_links, "link_papers", lambda team, papers: got.append((team, papers)))
+
+    def link(team, papers):
+        got.append((team, papers))
+        return trial_links.Linked(1, {"t1"})
+
+    monkeypatch.setattr(trial_links, "link_papers", link)
+    fetched = []
+    monkeypatch.setattr(
+        trial_links, "fetch_full_texts", lambda team, ts: fetched.append((team, ts))
+    )
     _real_link_paper("lab", "p1")
     assert got == [("lab", [{"id": "p1"}])]
+    assert fetched == [("lab", {"t1"})]  # its full text, without a click
+
+
+class _UpdatingSvc(_FakeSvc):
+    """_FakeSvc that also records updates with their filters."""
+
+    def __init__(self, reads=None):
+        super().__init__(reads)
+        self.updates: list[tuple[str, dict, list]] = []
+
+    def table(self, name):
+        q = super().table(name)
+        svc = self
+
+        class U:
+            def __init__(self, fields):
+                self.fields, self.filters = fields, []
+
+            def eq(self, col, val):
+                self.filters.append((col, val))
+                return self
+
+            def execute(self):
+                svc.updates.append((name, self.fields, self.filters))
+                return SimpleNamespace(data=[])
+
+        q.update = lambda fields: U(fields)
+        return q
+
+
+def test_link_papers_by_pubmed(monkeypatch):
+    svc = _UpdatingSvc()
+    monkeypatch.setattr(trial_links, "service_client", lambda: svc)
+    monkeypatch.setattr(
+        trial_links,
+        "_lab_trials",
+        lambda _s, _t: {
+            "NCT02032823": {"id": "t-oly", "nct_id": "NCT02032823", "acronym": "OlympiA"},
+            "NCT00000009": {"id": "t-gone", "nct_id": "NCT00000009", "acronym": None},
+        },
+    )
+    # p2 already has a suggestion (name in title); p3 a link someone rejected.
+    monkeypatch.setattr(
+        trial_links,
+        "_decided",
+        lambda _s, _t, _ids: {("p2", "t-oly"): "suggested", ("p3", "t-oly"): "rejected"},
+    )
+    monkeypatch.setattr(trial_links, "_removed", lambda _s, _t: {"t-gone"})
+    asked = []
+
+    def naming(nct):
+        asked.append(nct)
+        return 3, [
+            SimpleNamespace(doi="10.1/os"),
+            SimpleNamespace(doi="10.1/sugg"),
+            SimpleNamespace(doi="10.1/rej"),
+        ]
+
+    monkeypatch.setattr(trial_links.pubmed, "papers_naming", naming)
+    monkeypatch.setattr(trial_links, "_PUBMED_PAUSE", 0)
+    papers = [
+        {"id": "p1", "title": "Overall survival", "abstract": "No NCT here.", "doi": "10.1/OS"},
+        {"id": "p2", "title": "OlympiA final", "abstract": None, "doi": "10.1/sugg"},
+        {"id": "p3", "title": "Rejected", "abstract": None, "doi": "10.1/rej"},
+        {"id": "p4", "title": "Unrelated", "abstract": None, "doi": "10.1/other"},
+    ]
+    linked = trial_links.link_papers("lab", papers, use_pubmed=True)
+
+    assert asked == ["NCT02032823"]  # not the trial the lab took off its list
+    (links,) = [rows for name, rows in svc.upserts if name == "paper_trials"]
+    assert [(r["paper_id"], r["source"], r["status"]) for r in links] == [
+        ("p1", "pubmed", "auto")  # DOI matched whatever its case
+    ]
+    # The suggestion PubMed backs up becomes automatic, only while still a suggestion.
+    [(table, fields, filters)] = svc.updates
+    assert table == "paper_trials" and fields == {"source": "pubmed", "status": "auto"}
+    assert ("paper_id", "p2") in filters and ("status", "suggested") in filters
+    assert linked == trial_links.Linked(2, {"t-oly"})
+    # Without use_pubmed (one posted paper), PubMed isn't asked.
+    monkeypatch.setattr(trial_links.pubmed, "papers_naming", lambda _n: pytest.fail("no PubMed"))
+    trial_links.link_papers("lab", papers)
+
+
+def test_pubmed_dois_stops_asking_once_pubmed_fails(monkeypatch):
+    calls = []
+
+    def down(nct):
+        calls.append(nct)
+        raise trial_links.pubmed.PubMedError("down")
+
+    monkeypatch.setattr(trial_links.pubmed, "papers_naming", down)
+    lookup = trial_links.Lookup()
+    assert trial_links.pubmed_dois("NCT00000001", lookup) == set()
+    assert trial_links.pubmed_dois("NCT00000002", lookup) == set()
+    assert calls == ["NCT00000001"]
+    assert lookup.pubmed == {}  # not remembered: the next run asks again
+
+
+def test_fetch_full_texts_carries_on_past_a_failing_trial(monkeypatch):
+    from api import trial_extract
+
+    done = []
+
+    def fetch(team, trial):
+        if trial == "t1":
+            raise RuntimeError("Europe PMC down")
+        done.append((team, trial))
+
+    monkeypatch.setattr(trial_extract, "fetch_open_access", fetch)
+    trial_links.fetch_full_texts("lab", {"t2", "t1", "t3"})
+    assert done == [("lab", "t2"), ("lab", "t3")]
 
 
 # --- the API ---------------------------------------------------------------------

@@ -205,7 +205,7 @@ export async function fetchLabTrials(teamId: string): Promise<LabTrial[]> {
 export interface TrialLink {
   id: string;
   paper_id: string;
-  source: "nct_in_abstract" | "acronym_in_title" | "manual";
+  source: "nct_in_abstract" | "acronym_in_title" | "pubmed" | "manual";
   status: "auto" | "suggested" | "confirmed" | "rejected";
   role: string | null;
   reviewed_at: string | null;

@@ -202,7 +202,12 @@ export function BibtexImportPanel({
           <div className="mt-4 flex flex-wrap gap-2">
             {/* `importable`, not `new`: papers without a DOI import too (matched on
                 URL), so promising `new` would under-count what actually lands. */}
-            <Button onClick={commit} disabled={busy || preflight.importable === 0}>
+            {/* A steady width, so Clear doesn't jump as the label changes. */}
+            <Button
+              className="min-w-44"
+              onClick={commit}
+              disabled={busy || preflight.importable === 0}
+            >
               {busy
                 ? "Importing…"
                 : preflight.importable === 0
