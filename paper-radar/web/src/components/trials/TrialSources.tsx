@@ -10,6 +10,7 @@ import { ApiError, fetchExtractionBudget, fetchOpenAccess, startExtraction } fro
 import {
   type TrialSource,
   extractionRunning,
+  extractionState,
   fetchSources,
   removeSource,
   sourceUrl,
@@ -28,15 +29,24 @@ const MODEL_NAMES: Record<string, string> = {
 /** One line on where the trial's data stands, for the collapsed panel's header. */
 export function extractionSummary(facts: TrialFacts | null, documents: number): string {
   const docs = `${documents} ${documents === 1 ? "document" : "documents"}`;
-  const status = facts?.extraction_status;
-  if (status === "queued") return `${docs} · queued for the next batch`;
-  if (status === "batched") return `${docs} · with Claude in a batch`;
-  if (extractionRunning(status ?? null, facts?.extraction_started_at ?? null))
-    return `${docs} · Claude is reading them`;
-  if (status === "failed") return `${docs} · the last extraction failed`;
-  if (facts?.extracted_at)
-    return `${docs} · extracted by ${MODEL_NAMES[facts.extraction_model ?? ""] ?? facts.extraction_model} ${formatRelative(facts.extracted_at)}`;
-  return documents ? `${docs} · not extracted yet` : "No documents yet";
+  switch (extractionState(facts)) {
+    case "queued":
+      return `${docs} · queued for the next batch`;
+    case "batched":
+      return `${docs} · with Claude in a batch`;
+    case "running":
+      return `${docs} · Claude is reading them`;
+    case "stalled":
+      return `${docs} · the last extraction stopped: start it again`;
+    case "failed":
+      return `${docs} · the last extraction failed`;
+    case "done": {
+      const model = MODEL_NAMES[facts?.extraction_model ?? ""] ?? facts?.extraction_model ?? "Claude";
+      return `${docs} · extracted by ${model} ${formatRelative(facts?.extracted_at ?? null)}`;
+    }
+    case "none":
+      return documents ? `${docs} · not extracted yet` : "No documents yet";
+  }
 }
 
 /** The files behind a trial's data, and the button that has Claude read them. */

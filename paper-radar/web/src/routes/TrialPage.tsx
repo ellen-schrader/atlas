@@ -10,7 +10,7 @@ import { ExtractionView } from "@/components/trials/ExtractionView";
 import { PubMedHint } from "@/components/trials/PubMedHint";
 import { TrialSources, extractionSummary } from "@/components/trials/TrialSources";
 import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/components/trials/parts";
-import { extractionRunning, fetchSources } from "@/lib/extraction";
+import { extractionRunning, extractionState, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
@@ -167,20 +167,21 @@ function TrialBody({ d }: { d: TrialDetail }) {
             Remove from lab
           </Button>
         </div>
-        <p className="max-w-[80ch] text-sm text-muted">{t.title}</p>
+        {/* The header's full width: the registry title is one long line of facts. */}
+        <p className="text-sm text-muted">{t.title}</p>
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-meta text-muted">
-          <span>{facts.join(" · ")} ·</span>
+          {/* Who it is (the registry record) and where it stands first, then its design. */}
           <a
             href={ctgovUrl(t.nct_id)}
             target="_blank"
             rel="noreferrer"
+            title="Open on ClinicalTrials.gov"
             className="inline-flex items-center gap-1 text-accent hover:underline"
           >
             {t.nct_id} <ExternalLink size={12} aria-hidden />
           </a>
           <span>
-            · {statusLabel(t.status)}
-            {t.sponsor && ` · ${t.sponsor}`}
+            · {[statusLabel(t.status), ...facts, t.sponsor].filter(Boolean).join(" · ")}
           </span>
         </div>
         <Classification d={d} onSaved={refresh} />
@@ -208,8 +209,11 @@ function TrialBody({ d }: { d: TrialDetail }) {
       <Collapsible
         title="Sources & extraction"
         summary={extractionSummary(d.facts, sources.data?.length ?? 0)}
-        // Open while there's something to do here: no data yet, or it failed.
-        defaultOpen={!d.facts?.extraction || d.facts.extraction_status === "failed"}
+        // Open while there's something to do here: no data yet, or a run that
+        // failed or stopped.
+        defaultOpen={
+          !d.facts?.extraction || ["failed", "stalled"].includes(extractionState(d.facts))
+        }
       >
         <TrialSources
           trialId={t.id}

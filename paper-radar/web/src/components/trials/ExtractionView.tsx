@@ -111,7 +111,11 @@ export function ExtractionView({
   };
   const groups = reviewGroups(x);
   const done = reviews.data ? groups.filter((g) => reviews.data.has(g)).length : null;
-  const [current, setCurrent] = useState<string | null>(null);
+  const [chosen, setCurrent] = useState<string | null>(null);
+  // A group a fresh extraction no longer has (fewer endpoints) ends the review.
+  const current = chosen && groups.includes(chosen) ? chosen : null;
+  // A new extraction is a new set of values: start its review from scratch.
+  useEffect(() => setCurrent(null), [extractedAt]);
   const reviewing = current !== null;
   const ctx: Ctx = {
     trialId,
@@ -724,8 +728,8 @@ function Schedule({
   expN: number | null;
   ctrlN: number | null;
 }) {
-  // Surgery is a fixed sliver; other blocks scale with their weeks.
-  // Surgery is a fixed block, wide enough to say what it is.
+  // Surgery is a fixed block, wide enough to say what it is; other blocks
+  // scale with their weeks.
   const flex = (p: Phase) => (p.kind === "surgery" ? "0 0 58px" : `${p.weeks ?? 8} 1 0`);
   const row = (arm: "exp" | "ctrl") => {
     const add = (p: Phase) => (arm === "exp" ? p.experimental_add : p.control_add);

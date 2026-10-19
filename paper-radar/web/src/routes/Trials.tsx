@@ -16,8 +16,14 @@ import {
 } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { type Collection, fetchCollections, sameSettingAndGroup, sharedTags } from "@/lib/collections";
-import { extractionRunning } from "@/lib/extraction";
+import {
+  type Collection,
+  collectionsByTrial,
+  fetchCollections,
+  sameSettingAndGroup,
+  sharedTags,
+} from "@/lib/collections";
+import { extractionState, inFlight } from "@/lib/extraction";
 import {
   type LabTrial,
   PATIENT_GROUPS,
@@ -63,12 +69,15 @@ const list = (t: LabTrial, key: "settings" | "patient_groups", labels: Record<st
 
 /** Whether Claude has the trial's data yet: what Compare needs. */
 function DataState({ t }: { t: LabTrial }) {
-  const f = t.facts;
-  if (f?.extracted_at) return <span className="text-fg">Extracted</span>;
-  const s = f?.extraction_status;
-  if (s === "queued" || s === "batched" || extractionRunning(s ?? null, f?.extraction_started_at ?? null))
-    return <span className="text-muted">On the way</span>;
-  return <span className="text-faint">{s === "failed" ? "Failed" : "Not yet"}</span>;
+  const state = extractionState(t.facts);
+  // Data already there counts, even while a fresh extraction is on its way.
+  if (t.facts?.extracted_at) return <span className="text-fg">Extracted</span>;
+  if (inFlight(state)) return <span className="text-muted">On the way</span>;
+  return (
+    <span className="text-faint">
+      {state === "failed" ? "Failed" : state === "stalled" ? "Stopped" : "Not yet"}
+    </span>
+  );
 }
 
 /** The lab's collections each trial is in. */
@@ -109,9 +118,10 @@ function AllTrials() {
     queryKey: ["collections", team.id],
     queryFn: () => fetchCollections(team.id),
   });
-  const inCollections: InCollections = new Map();
-  for (const c of collections.data ?? [])
-    for (const id of c.trial_ids) inCollections.set(id, [...(inCollections.get(id) ?? []), c]);
+  const inCollections: InCollections = useMemo(
+    () => collectionsByTrial(collections.data ?? []),
+    [collections.data],
+  );
   const { data: trials, isLoading, error } = useQuery({
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),

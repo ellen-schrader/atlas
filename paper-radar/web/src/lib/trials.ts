@@ -146,7 +146,8 @@ export function classification(
 
 const FACT_COLUMNS =
   "trial_id, acronym, settings, patient_groups, therapy_classes, classified_by, " +
-  "classify_attempts, classify_claimed_at, extraction_status, extracted_at, updated_by, updated_at";
+  "classify_attempts, classify_claimed_at, extraction_status, extraction_started_at, extracted_at, " +
+  "updated_by, updated_at";
 
 export const TRIAL_COLUMNS =
   "id, nct_id, acronym, title, phases, status, sponsor, conditions, enrollment, " +

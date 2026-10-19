@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
-import type { Collection } from "@/lib/collections";
+import { type Collection, collectionsByTrial } from "@/lib/collections";
 import { describe, fetchEvents, foldEvents, fromRegistry } from "@/lib/events";
 import type { LabTrial } from "@/lib/trials";
 import type { TrialFrom } from "@/routes/TrialPage";
@@ -19,9 +19,7 @@ export function TrialsFeed({
   trials: LabTrial[];
 }) {
   const events = useQuery({ queryKey: ["trial-events", teamId], queryFn: () => fetchEvents(teamId) });
-  const inCollections = new Map<string, Collection[]>();
-  for (const c of collections)
-    for (const id of c.trial_ids) inCollections.set(id, [...(inCollections.get(id) ?? []), c]);
+  const inCollections = collectionsByTrial(collections);
   const byId = new Map(trials.map((t) => [t.id, t]));
   const items = foldEvents(events.data ?? [])
     .filter((i) => inCollections.has(i.trial_id) && byId.has(i.trial_id))

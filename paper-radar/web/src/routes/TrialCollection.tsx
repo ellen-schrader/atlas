@@ -33,7 +33,7 @@ import {
 } from "@/lib/collections";
 import { ApiError, fetchOpenAccess, startExtraction } from "@/lib/api";
 import { type CompareTrial, headline, verification } from "@/lib/compare";
-import { EST_BATCH_USD, extractionRunning, fetchSources } from "@/lib/extraction";
+import { EST_BATCH_USD, extractionState, fetchSources, inFlight } from "@/lib/extraction";
 import { supabase } from "@/lib/supabase";
 import {
   type LabTrial,
@@ -149,8 +149,11 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
     const e = extractions.data?.get(t.id);
     return e ? [{ id: t.id, name: t.name, extraction: e.extraction }] : [];
   });
-  const [view, setView] = useState<"overview" | "compare">("overview");
+  const [picked, setView] = useState<"overview" | "compare">("overview");
   const canCompare = comparable.length >= 2;
+  // Compare falls back to Overview when it stops being possible (a trial
+  // removed), so the selected tab and what's on screen always agree.
+  const view = canCompare ? picked : "overview";
 
   const tags = [
     ...c.settings.map((s) => SETTINGS[s]),
@@ -364,6 +367,8 @@ function TrialRows({
       toast({
         message: `${t.name} taken out of this collection.`,
         actionLabel: "Undo",
+        // Back in, credited to whoever undid it: the database lets people add
+        // only as themselves, and nothing shows who added a trial or when.
         onAction: async () => {
           await addCollectionTrials(c.id, [t.id], userId);
           onChange();
@@ -457,13 +462,20 @@ function TrialRows({
 
 /** Where a trial without data stands, in a few words. */
 function dataState(t: LabTrial): string {
-  const f = t.facts;
-  if (f?.extraction_status === "queued") return "Queued for data";
-  if (f?.extraction_status === "batched") return "With Claude, in a batch";
-  if (extractionRunning(f?.extraction_status ?? null, f?.extraction_started_at ?? null))
-    return "Claude is reading it";
-  if (f?.extraction_status === "failed") return "Extraction failed: open to retry";
-  return "No data yet";
+  switch (extractionState(t.facts)) {
+    case "queued":
+      return "Queued for data";
+    case "batched":
+      return "With Claude, in a batch";
+    case "running":
+      return "Claude is reading it";
+    case "stalled":
+      return "Extraction stopped: open to restart";
+    case "failed":
+      return "Extraction failed: open to retry";
+    default:
+      return "No data yet";
+  }
 }
 
 type Outcome = { queued: LabTrial[]; needPdf: LabTrial[]; stopped: string | null };
@@ -483,15 +495,15 @@ function ReadyBar({
   extracted?: Map<string, TrialExtraction>;
   loading: boolean;
 }) {
-  const { team } = useAppContext();
+  const { team, userId } = useAppContext();
   const qc = useQueryClient();
+  // The cost estimate is for owners, like every amount (members aren't asked
+  // to weigh the lab's spend).
+  const { data: role } = useMyRole(team.id, userId);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const from: TrialFrom = { from: { to: `/trials/collections/${c.id}`, label: c.title } };
   const missing = trials.filter((t) => !extracted?.has(t.id));
-  const waiting = missing.filter((t) => {
-    const s = t.facts?.extraction_status;
-    return s === "queued" || s === "batched" || extractionRunning(s ?? null, t.facts?.extraction_started_at ?? null);
-  });
+  const waiting = missing.filter((t) => inFlight(extractionState(t.facts)));
   const todo = missing.filter((t) => !waiting.includes(t));
 
   const run = useMutation({
@@ -556,7 +568,7 @@ function ReadyBar({
           </div>
           <p className="text-sm text-muted">
             {todo.length > 0
-              ? `Atlas can fetch the open-access papers for the other ${todo.length === 1 ? "one" : todo.length} and have Claude read them: about $${(todo.length * EST_BATCH_USD).toFixed(2)}, ready within a few hours.`
+              ? `Atlas can fetch the open-access papers for the other ${todo.length === 1 ? "one" : todo.length} and have Claude read them${role === "owner" ? `: about $${(todo.length * EST_BATCH_USD).toFixed(2)},` : ","} ready within a few hours.`
               : waiting.length > 0
                 ? `${waiting.length === 1 ? "The other one is" : `The other ${waiting.length} are`} on the way: usually ready within a few hours.`
                 : "Every trial has data."}
