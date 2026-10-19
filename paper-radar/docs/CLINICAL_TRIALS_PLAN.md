@@ -1,7 +1,7 @@
 # Clinical trials: plan
 
 Status: proposal, 18 Oct 2026. Branch `clinical-trials`.
-Scope for the MVP (decided 18 Oct): **breast cancer only, and only the Ali Lab can see it.** Broadening to other cancers and other labs comes later.
+Scope for the MVP (decided 18 Oct): **breast cancer only, and only the pilot lab can see it.** Broadening to other cancers and other labs comes later.
 
 Source: the three mock-ups in `clinical-trials-brief/` (gitignored): `Questions2` (Collections home), `Trials2` (All trials), `MVP2` (one collection: overview, single trial, compare). All values in them are illustrative.
 
@@ -28,18 +28,18 @@ A new **Clinical trials** section in the sidebar (badge "New") with two entries:
    - *Compare* (2–4 trials, with the disclaimer "Descriptive comparison across trials, not randomised"): aligned treatment schedules; results as pCR dumbbells and an HR forest (log axis, dashed when not directly comparable, e.g. a stricter pCR definition); a "differs" list (pCR definition, pathology review, EFS event definition, follow-up, post-surgery therapy, enrolment years, region) with "N items not yet extracted"; an enrolment table flagging cells that differ by ≥15 pp from the other trials.
    - Every page has the footer: *For research and evidence review. Registry data can lag protocols. Not a recommendation for individual patients.*
 
-## 1a. Access: Ali Lab only
+## 1a. Access: Pilot lab only
 
 Atlas has no feature flags today; "Beta" is only a label in `nav.ts`. So this adds a small per-lab switch:
 
 - Migration: `team_features` (whole lab) and `user_features` (one person) tables, written only by the service role, plus `public.has_feature(team_id, feature)`. The flag name is `clinical_trials`.
-- **Shipped dark.** PRs merge to `main` with the flag off for every lab, including the Ali Lab, so no user sees anything. Locally the seed turns it on for the seeded lab. When you're happy, one small data migration (`insert into public.team_features (team_id, feature) select id, 'clinical_trials' from public.teams where slug = '<ali-lab slug>'`) turns it on for the Ali Lab through the normal merge-to-main deploy. Nothing gets run against prod by hand.
+- **Shipped dark.** PRs merge to `main` with the flag off for every lab, including the pilot lab, so no user sees anything. Locally the seed turns it on for the seeded lab. When you're happy, one small data migration (`insert into public.team_features (team_id, feature) select id, 'clinical_trials' from public.teams where slug = '<pilot lab slug>'`) turns it on for the pilot lab through the normal merge-to-main deploy. Nothing gets run against prod by hand.
 - **Database:** every RLS policy on the new trial tables requires both `is_team_member(team_id)` and `team_has_feature(team_id, 'clinical_trials')`. So another lab gets nothing even by calling Supabase directly.
 - **API:** the `api/trials.py` router checks the flag for the active lab and returns 404, not 403, so it doesn't advertise the feature.
 - **Frontend:** the lab's `features` come back with the team, the Clinical trials nav group only renders when the flag is set, and the `/trials/*` routes redirect home otherwise.
 - **Jobs:** paper↔trial link detection, the daily refresh and extraction only run for flagged labs, so other labs' papers aren't scanned and cost nothing.
 - **MCP:** trial tools (PR 7) are only listed for flagged labs.
-- pgTAP tests cover a member of a non-flagged lab seeing zero rows, and the Ali Lab seeing its own.
+- pgTAP tests cover a member of a non-flagged lab seeing zero rows, and the pilot lab seeing its own.
 
 Widening it later means adding the flag to more labs; removing the gate entirely means dropping the checks.
 
@@ -100,7 +100,7 @@ Migration timestamps: the latest on `main` is `20261019130000`, already dated to
 
 Each PR gets `/code-review high` before it's called ready.
 
-1. **Trials foundation**: the per-lab feature flag and the Ali Lab switch (section 1a), migrations (`trials`, `trial_posts`, `paper_trials`, RLS and pgTAP tests), the CT.gov client, add-by-NCT, NCT detection at ingest plus backfill, and the API. No UI beyond what's needed to test it.
+1. **Trials foundation**: the per-lab feature flag and the pilot lab switch (section 1a), migrations (`trials`, `trial_posts`, `paper_trials`, RLS and pgTAP tests), the CT.gov client, add-by-NCT, NCT detection at ingest plus backfill, and the API. No UI beyond what's needed to test it.
 2. **All trials page**: nav, list and grid, filters with counts, classification, registry-derived PICO, linked papers with provenance and a confirm/reject review, Add trial. The mini schema shows registry arms only until extraction exists.
 3. **Collections**: CRUD, collections home (tiles without plots yet), collection overview (trials, papers grouped, notes, follow/edit), Add trial, compare tray → Save as collection.
 4. **Extraction and the single-trial view**: full-text fetch/upload, Claude extraction into `trial_facts` with sources, verification and edit with change log, treatment schema, outcome panels, enrolled grid. This is the MVP2 page working end to end.
@@ -112,12 +112,11 @@ PRs 1–4 deliver the core of the mock-ups. I'd seed the local stack with the fo
 
 ## 6a. Cheaper, automatic extraction (PR 7, decided 19 Oct)
 
-- **Measured:** one Opus 5.5 request per trial, $0.46 (IMpassion031, ~63k tokens of full-text XML).
 - **Trimmed input:** open-access JATS is converted to plain text before it's sent: title, abstract, body sections, every table (rows as `|` cells, with footnotes) and figure caption, including back-matter tables (Extended Data). References, author lists and declarations go. 120 KB → 39 KB. The stored file stays the original.
-- **No cache write:** one request reads the documents once, so the 1.25× write never paid off.
+- **No cache write:** one request reads the documents once, so a cache write never pays off.
 - **Batches:** "Queue extraction" (the default) sends through the Message Batches API at half price. `api/trial_extract_batch.py` runs every two hours (`.github/workflows/trial-extraction.yml`), stores finished results and retries a failed one once. "Extract now" stays, at full price.
 - **Automatic:** a trial queues itself when it gets its first source. The daily job fetches open-access full text for trials with linked papers and no sources, so open-access trials extract with no clicks.
-- **Budget:** every paid call is recorded in `trial_extraction_spend`. Each lab has a monthly cap (`TRIAL_EXTRACTION_MONTHLY_USD`, default $5 while Atlas is self-funded, on both the API and the batch job: about 40 open-access trials). Past it, queued trials wait for the 1st, "Extract now" is refused, and both point people to extracting through their own Claude with the Atlas connector (PR 8). The trial page shows the month's spend.
+- **Budget:** every paid call is recorded in `trial_extraction_spend`, and each lab has a monthly cap (configurable, on both the API and the batch job). Past it, queued trials wait for the next month, "Extract now" is refused, and both point people to extracting through their own Claude with the Atlas connector (PR 8). The trial page shows the month's spend.
 - **Next (PR 8):** MCP tools so a lab member's own Claude can record an extraction (no API cost), listed only to labs with the feature on.
 
 ## 7. Cost
@@ -135,4 +134,4 @@ PRs 1–4 deliver the core of the mock-ups. I'd seed the local stack with the fo
 4. ~~Who can edit a collection~~ Decided: every lab member. No `collection_editors` table; "editors" in the header is derived from who has edited.
 5. ~~Migration date~~ Decided: everything on `main` is applied, so new migrations just sort after the latest one.
 6. ~~First milestone~~ Decided: PRs 1–4 first, then compare. All merged dark (see 1a).
-7. **Ali Lab slug.** Only needed for the final switch-on migration, once you're happy with the feature.
+7. **Pilot lab slug.** Only needed for the final switch-on migration, once you're happy with the feature.

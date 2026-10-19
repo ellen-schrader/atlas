@@ -115,8 +115,12 @@ class _Spend:
 
 def test_budget(monkeypatch):
     monkeypatch.setenv("TRIAL_EXTRACTION_MONTHLY_USD", "1")
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.0)
     assert te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.30"}]), "lab") is None
     assert "budget ($1)" in te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.60"}]), "lab")
+    # What's out and not billed yet counts too: a batch, or an "Extract now".
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.30)
+    assert "budget ($1)" in te.over_budget(_Spend([{"usd": "0.46"}, {"usd": "0.30"}]), "lab")
 
 
 # --- the batch job ----------------------------------------------------------------------------
@@ -195,7 +199,7 @@ def _client(batches):
 def _budget(monkeypatch, spent: dict[str, float], cap: float = 5.0):
     monkeypatch.setattr(te, "monthly_cap", lambda: cap)
     monkeypatch.setattr(te, "spent_this_month", lambda _s, team: spent.get(team, 0.0))
-    monkeypatch.setattr(tb, "_committed", lambda _s, _t: 0.0)
+    monkeypatch.setattr(te, "committed", lambda _s, _t: 0.0)
 
 
 def _load_ok(_s, _team, trial):
@@ -376,3 +380,12 @@ def test_collect_waits_for_a_running_batch_then_gives_up_when_stuck():
     old = datetime.now(UTC) - timedelta(hours=31)
     tb.collect(svc, _client(_Batches(status="in_progress", created=old)))
     assert svc.updates[-1][1]["extraction_status"] == "queued"
+
+
+def test_jats_refuses_entities_in_any_encoding():
+    doc = (
+        '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE a [<!ENTITY x "y">]>'
+        "<article><body><p>&x;</p></body></article>"
+    ).encode("utf-16")
+    with pytest.raises(jats.NotJats):
+        jats.to_text(doc)

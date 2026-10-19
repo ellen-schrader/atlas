@@ -4,7 +4,7 @@ For the local stack. In prod a switch goes in a migration, so it reaches the
 database through the normal merge-to-main deploy.
 
     python -m api.features on  clinical_trials --user ada@lab.test
-    python -m api.features on  clinical_trials --team ali-lab
+    python -m api.features on  clinical_trials --team my-lab
     python -m api.features off clinical_trials --user ada@lab.test
     python -m api.features list
 """

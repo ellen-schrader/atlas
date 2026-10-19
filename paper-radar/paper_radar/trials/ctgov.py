@@ -16,11 +16,13 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from paper_radar.contact import API_USER_AGENT
+
 log = logging.getLogger(__name__)
 
 BASE = "https://clinicaltrials.gov/api/v2/studies"
 _TIMEOUT = 15.0
-_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
+_UA = API_USER_AGENT
 _MAX_BYTES = 5_000_000  # one study with results is a few hundred kB
 
 NCT_RE = re.compile(r"\bNCT\s?(\d{8})\b", re.IGNORECASE)

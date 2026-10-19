@@ -10,9 +10,7 @@ tokens; we only verify them. The SDK publishes the protected-resource metadata a
 answers unauthenticated requests with the 401 that starts Claude's sign-in. Each tool
 call then runs as the token's user (`lab.act_as`), so RLS — and the database's
 connector gate (20261017150000_connector_lockdown.sql) — decide what it can see.
-The trial tools are the exception: the gate keeps connector tokens off the trial
-tables, so they check membership, Claude access and the trials switch
-themselves and then use the service role, pinned to the lab (see trials.py).
+The trial tools check access themselves (see trials.py).
 """
 
 from __future__ import annotations

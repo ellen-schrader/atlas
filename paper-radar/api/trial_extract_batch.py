@@ -16,7 +16,6 @@ has one) is the way round it.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import logging
@@ -161,34 +160,8 @@ def _release_stranded(svc) -> None:
 
 
 def estimate_usd(params: dict[str, Any]) -> float:
-    """A cautious guess of a batch request's cost, before it runs: text at
-    ~3.5 characters a token, a PDF page at ~3,000 tokens, ~10k tokens out."""
-    tokens = 0.0
-    for block in params["messages"][0]["content"]:
-        src = block.get("source") or {}
-        if src.get("type") == "text":
-            tokens += len(src["data"]) / 3.5
-        elif src.get("type") == "base64":
-            pages = max(1, base64.b64decode(src["data"]).count(b"/Type /Page") - 1)
-            tokens += pages * 3000
-        elif block.get("type") == "text":
-            tokens += len(block["text"]) / 3.5
-    usd = tokens / 1e6 * te._PRICE_IN + 10_000 / 1e6 * te._PRICE_OUT
-    return round(usd * BATCH_DISCOUNT, 4)
-
-
-def _committed(svc, team_id: str) -> float:
-    """Estimated cost of the lab's requests sent but not collected yet."""
-    rows = (
-        svc.table("trial_facts")
-        .select("extraction_estimate_usd")
-        .eq("team_id", team_id)
-        .eq("extraction_status", "batched")
-        .execute()
-        .data
-        or []
-    )
-    return sum(float(r["extraction_estimate_usd"] or 0) for r in rows)
+    """A cautious guess of a batch request's cost, before it runs."""
+    return round(te.estimate_usd(params) * BATCH_DISCOUNT, 4)
 
 
 def submit(svc, client) -> int:
@@ -219,7 +192,7 @@ def submit(svc, client) -> int:
             break
         team, trial = row["team_id"], row["trial_id"]
         if team not in left:
-            left[team] = te.monthly_cap() - te.spent_this_month(svc, team) - _committed(svc, team)
+            left[team] = te.monthly_cap() - te.spent_this_month(svc, team) - te.committed(svc, team)
         if left[team] <= 0:
             # Stays queued; goes out when the month turns.
             te.update_facts(svc, team, trial, {"extraction_error": te.budget_message()})

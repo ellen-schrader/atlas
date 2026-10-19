@@ -21,7 +21,7 @@ embedding is a separate step (`python -m api.backfill_embeddings`).
 
 Usage (from paper-radar/):
     SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
-      uv run python -m api.import_teams_pdfs <pdf_dir> --team-slug ali-lab [--dry-run]
+      uv run python -m api.import_teams_pdfs <pdf_dir> --team-slug my-lab [--dry-run]
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def _upsert_paper(svc: Client, meta, url: str, url_norm: str) -> str:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("pdf_dir", help="Directory of Teams-exported PDFs")
-    parser.add_argument("--team-slug", required=True, help="Target lab slug, e.g. ali-lab")
+    parser.add_argument("--team-slug", required=True, help="Target lab slug, e.g. my-lab")
     parser.add_argument("--year", type=int, default=2026, help="Base year for filename dates")
     parser.add_argument("--delay", type=float, default=0.3, help="Seconds between lookups")
     parser.add_argument("--dry-run", action="store_true", help="Resolve + report, write nothing")
@@ -165,8 +165,10 @@ def main(argv: list[str] | None = None) -> None:
             ).execute()
             posted += 1
         if n % 25 == 0:
-            print(f"  {n}/{len(items)}  posted={posted} dup={already} "
-                  f"skip_host={skipped_host} skip_unresolved={skipped_unresolved} fail={failed}")
+            print(
+                f"  {n}/{len(items)}  posted={posted} dup={already} "
+                f"skip_host={skipped_host} skip_unresolved={skipped_unresolved} fail={failed}"
+            )
         time.sleep(args.delay)
 
     verb = "would post" if args.dry_run else "posted"

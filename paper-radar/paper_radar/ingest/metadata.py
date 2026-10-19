@@ -45,6 +45,7 @@ from html.parser import HTMLParser
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
+from paper_radar.contact import API_USER_AGENT, CONTACT_EMAIL
 from paper_radar.ingest import url_guard
 from paper_radar.ingest.urls import norm_doi
 
@@ -99,13 +100,13 @@ _OUP_RE = re.compile(
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
 
 _TIMEOUT = 10.0
-_API_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
+_API_UA = API_USER_AGENT
 # A browser-like UA gets past the crudest bot filters when scraping landing pages.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-_NCBI_PARAMS = "&tool=paper-radar&email=atlas@ellen-schrader.de"
+_NCBI_PARAMS = f"&tool=paper-radar&email={CONTACT_EMAIL}"
 _MAX_HTML_BYTES = 1_000_000
 
 

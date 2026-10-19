@@ -36,7 +36,7 @@ the fluorophore teal, and a new typeface, **Schibsted Grotesk**, which replaces 
 | Claude | The hosted connector is live (#139, #141): "Add Atlas as a connector in Claude." |
 | Voice | "Your lab" / "the lab owner", never "the PI". Short copy, at most one sentence of body text per section. |
 | Proof | Named maker: "Ellen Schrader, a PhD student". No usage numbers. Beta tag. GitHub link with the GitHub mark. |
-| Lab name | Never shown ("Ali Lab" stays out). Papers are real and approved; the lab is anonymous. |
+| Lab name | Never shown. Papers are real and approved; the lab is anonymous. |
 | Theme | Follows the system setting, with the toggle kept. |
 | Motion | Only where it explains something; plays once on scroll; off under `prefers-reduced-motion`. |
 | Film | Not mentioned yet; a later step. |

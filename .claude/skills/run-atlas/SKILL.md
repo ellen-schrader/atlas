@@ -83,7 +83,7 @@ SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiw
 curl -s -X POST http://127.0.0.1:54321/auth/v1/admin/users \
   -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"email":"ellen@tme-lab.org","password":"atlas-local-dev","email_confirm":true,
+  -d '{"email":"dev@lab.test","password":"atlas-local-dev","email_confirm":true,
        "user_metadata":{"display_name":"Ellen"}}'
 ```
 
@@ -97,7 +97,7 @@ docker cp /tmp/seed.sql supabase_db_paper-radar:/tmp/seed.sql
 docker exec -i supabase_db_paper-radar psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/seed.sql
 ```
 
-Login: **`ellen@tme-lab.org` / `atlas-local-dev`**
+Login: **`dev@lab.test` / `atlas-local-dev`**
 
 ### 4. The two servers
 
@@ -134,7 +134,7 @@ p.on('pageerror', e => console.log('PAGEERROR:', e.message));
 p.on('response', r => { if (r.url().includes('8010') && !r.ok()) console.log('API', r.status(), r.url()); });
 
 await p.goto('http://localhost:5173/', { waitUntil: 'networkidle' });
-await p.fill('#email', 'ellen@tme-lab.org');
+await p.fill('#email', 'dev@lab.test');
 await p.fill('#password', 'atlas-local-dev');
 await p.getByRole('button', { name: 'Log in', exact: true }).last().click();
 await p.waitForTimeout(4000);                       // auth + profile + first fetches
@@ -161,7 +161,7 @@ the **paper detail modal** — click a card first.
 ```bash
 TOKEN=$(curl -s -X POST "http://127.0.0.1:54321/auth/v1/token?grant_type=password" \
   -H "apikey: sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH" -H "Content-Type: application/json" \
-  -d '{"email":"ellen@tme-lab.org","password":"atlas-local-dev"}' \
+  -d '{"email":"dev@lab.test","password":"atlas-local-dev"}' \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 
 curl -s -w '\nHTTP %{http_code}\n' \

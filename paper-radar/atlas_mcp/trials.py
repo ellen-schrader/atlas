@@ -4,13 +4,10 @@ subscription, add trials and record extractions (docs/CLINICAL_TRIALS_PLAN.md).
 Hosted connector only, and listed only to people for whom the feature is on
 (`entitled`, used by atlas_mcp/http.py), so labs without it never see them.
 
-How they reach the data: the database's connector lockdown lets connector
-tokens read papers and nothing else (20261017150000), and that stays so. These
-tools run in Atlas's own server instead: each resolves the lab as the caller
-(membership and the lab's Claude-access switch, through `lab.resolve_team`),
-checks the clinical trials switch, and only then reads or writes with the
-service role, every query pinned to that lab. Unlike the paper tools, then,
-RLS isn't what scopes them: these checks are, and the tests hold them to it.
+Access: each tool resolves the lab as the caller (membership and the lab's
+Claude-access switch, through `lab.resolve_team`) and checks the clinical
+trials switch before it reads or writes anything, and every query is scoped
+to that lab. The tests hold them to it.
 
 Writes preview first and only write on a second call with confirm=true. The
 hosted server is stateless (no session to send a request back on), so it can't
@@ -49,11 +46,18 @@ MAX_SOURCE_CHARS = 300_000
 _registry_limiter = PerUserRateLimiter(
     20, 60.0, lambda: lab.LabError("Too many trial lookups in a minute. Give it a moment.")
 )
+# record_trial_extraction writes to the lab's trial page: a real extraction is
+# tens of KB, so anything far bigger is refused rather than stored.
+MAX_EXTRACTION_CHARS = 200_000
+_record_limiter = PerUserRateLimiter(
+    10, 60.0, lambda: lab.LabError("Too many extractions recorded in a minute. Give it a moment.")
+)
 
 # --- who may use them ----------------------------------------------------------------
 
 _entitled_cache: dict[str, tuple[float, bool]] = {}
 _ENTITLED_FOR = 60.0  # seconds; a switch turned on shows within a minute
+_ENTITLED_MAX = 5_000  # people; past it, old answers are dropped
 
 
 def entitled(user_id: str | None) -> bool:
@@ -87,6 +91,12 @@ def entitled(user_id: str | None) -> bool:
                 .in_("team_id", teams)
             )
             ok = bool(on.execute().data)
+    if len(_entitled_cache) >= _ENTITLED_MAX:
+        now = time.monotonic()
+        for k in [k for k, (t, _) in _entitled_cache.items() if now - t >= _ENTITLED_FOR]:
+            del _entitled_cache[k]
+        if len(_entitled_cache) >= _ENTITLED_MAX:
+            _entitled_cache.clear()
     _entitled_cache[user_id] = (time.monotonic(), ok)
     return ok
 
@@ -339,14 +349,15 @@ def get_trial_sources(trial: str, team_id: str | None = None) -> str:
     out, budget = [], MAX_SOURCE_CHARS
     svc = service_client()
     for i, s in enumerate(sources, start=1):
-        head = f"Doc {i}: {s['filename']} ({s['kind']})"
+        # The filename is whatever the uploader called it: framed as data too.
+        head = f"Doc {i} ({s['kind']}):\n" + _untrusted("filename", " ".join(s["filename"].split()))
         if s["media_type"] != "application/xml":
-            out.append(f"{head}: a PDF held in Atlas. Ask the user to attach it to read it.")
+            out.append(f"{head}\nA PDF held in Atlas. Ask the user to attach it to read it.")
             continue
         try:
             text = te.source_text(svc.storage.from_(te.BUCKET).download(s["storage_path"]))
         except Exception:  # noqa: BLE001 — one missing file mustn't sink the rest
-            out.append(f"{head}: couldn't be read from storage.")
+            out.append(f"{head}\nCouldn't be read from storage.")
             continue
         if len(text) > budget:
             text = (
@@ -354,7 +365,7 @@ def get_trial_sources(trial: str, team_id: str | None = None) -> str:
                 + "\n[cut off here: too long to send in full; ask the user to attach it]"
             )
         budget = max(0, budget - len(text))
-        out.append(f"{head}:\n" + _untrusted("document", text))
+        out.append(f"{head}\n" + _untrusted("document", text))
     ids = json.dumps([s["id"] for s in sources])
     return (
         f"Sources for {t['name']} ({t['nct_id']}):\n\n"
@@ -456,8 +467,8 @@ async def add_trial(trial: str, team_id: str | None = None, confirm: bool = Fals
     link = _md_link(name, f"{lab.web_url()}/trials/{rec.nct_id}")
     if not confirm:
         return (
-            f"About to add {name} ({rec.nct_id}) to {team['name']}:\n"
-            + _untrusted("trial", rec.title)
+            f"About to add {rec.nct_id} to {team['name']}:\n"
+            + _untrusted("trial", f"{name}: {rec.title}")
             + "\n\nNothing added yet. Re-run with confirm=true to add it."
         )
     added = await _offload(_do_add, team, rec)
@@ -605,8 +616,11 @@ async def record_trial_extraction(
     """
     try:
         team = lab.resolve_team(team_id)  # on the loop: attributes the call for the audit log
+        _record_limiter.check(lab.current_user_id() or "")
     except lab.LabError as exc:
         return f"Error: {exc}"
+    if len(extraction.model_dump_json()) > MAX_EXTRACTION_CHARS:
+        return "Error: that extraction is far bigger than a trial's data should be."
     ready, message = await _offload(
         _prepare_record, team, trial, extraction, replace, list(atlas_documents or [])
     )

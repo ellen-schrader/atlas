@@ -34,6 +34,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from paper_radar.config import get_settings
+from paper_radar.contact import API_USER_AGENT
 from paper_radar.trials import jats
 from paper_radar.trials.extraction import CONTEXT_LABELS, DIMENSIONS, Extraction
 
@@ -52,7 +53,7 @@ STALE_RUN = timedelta(minutes=30)  # a "running" older than this crashed
 # --- Europe PMC ----------------------------------------------------------------
 
 _EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-_UA = "paper-radar/0.1 (mailto:atlas@ellen-schrader.de)"
+_UA = API_USER_AGENT
 _PMCID = re.compile(r"^PMC\d{1,10}$")
 _DOI = re.compile(r"^10\.\d{4,9}/\S{1,200}$")
 _MAX_XML = 15_000_000
@@ -490,11 +491,43 @@ def budget_message() -> str:
     )
 
 
-def over_budget(svc, team_id: str) -> str | None:
-    """Why the lab can't extract right now, or None."""
-    if spent_this_month(svc, team_id) >= monthly_cap():
+def over_budget(svc, team_id: str, extra: float = 0.0) -> str | None:
+    """Why the lab can't extract right now, or None: what it has spent, plus
+    what's out and not billed yet, plus `extra`, against its cap."""
+    if spent_this_month(svc, team_id) + committed(svc, team_id) + extra >= monthly_cap():
         return budget_message()
     return None
+
+
+def estimate_usd(params: dict[str, Any]) -> float:
+    """A cautious guess of a request's full-price cost, before it runs: text at
+    ~3.5 characters a token, a PDF page at ~3,000 tokens, ~10k tokens out."""
+    tokens = 0.0
+    for block in params["messages"][0]["content"]:
+        src = block.get("source") or {}
+        if src.get("type") == "text":
+            tokens += len(src["data"]) / 3.5
+        elif src.get("type") == "base64":
+            pages = max(1, base64.b64decode(src["data"]).count(b"/Type /Page") - 1)
+            tokens += pages * 3000
+        elif block.get("type") == "text":
+            tokens += len(block["text"]) / 3.5
+    return round(tokens / 1e6 * _PRICE_IN + 10_000 / 1e6 * _PRICE_OUT, 4)
+
+
+def committed(svc, team_id: str) -> float:
+    """Estimated cost of the lab's requests that are out (in a batch, or an
+    "Extract now" running) and not billed yet."""
+    rows = (
+        svc.table("trial_facts")
+        .select("extraction_estimate_usd")
+        .eq("team_id", team_id)
+        .in_("extraction_status", ["batched", "running"])
+        .execute()
+        .data
+        or []
+    )
+    return sum(float(r["extraction_estimate_usd"] or 0) for r in rows)
 
 
 def record_spend(svc, team_id: str, trial_id: str, usd: float, model: str | None, mode: str):
@@ -577,10 +610,13 @@ def run(team_id: str, trial_id: str) -> None:
     'failed'."""
     svc = service_client()
     try:
+        sources, registry, blocks, listing = load(svc, team_id, trial_id)
+        # Hold this run's estimate first, so two at once each see the other.
+        estimate = estimate_usd(request(registry, blocks, listing))
+        update_facts(svc, team_id, trial_id, {"extraction_estimate_usd": estimate})
         reason = over_budget(svc, team_id)
         if reason:
             raise ExtractionError(reason)
-        sources, registry, blocks, listing = load(svc, team_id, trial_id)
         result, cost, model = extract(
             registry,
             blocks,

@@ -8,13 +8,14 @@ every figure caption. The stored file stays the original; only what is sent to
 Claude is trimmed, and anything that can't be parsed is sent as it was.
 
 Parsed with the standard library, refusing any document that declares entities
-(the "billion laughs" family), though Europe PMC's files never do.
+(the "billion laughs" family), whatever its encoding.
 """
 
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 
 # Sections with no trial data in them, matched on their titles.
 _DROP_SECTIONS = re.compile(
@@ -91,10 +92,25 @@ def _without(el: ET.Element, tags: tuple[str, ...]) -> ET.Element:
     return copy
 
 
+def _refuse_entities(xml: bytes) -> None:
+    """Raise NotJats if the document declares any entity. Asked of the parser,
+    not the raw bytes, so another encoding (UTF-16) can't hide one; it stops at
+    the declaration, before anything is expanded."""
+
+    def declared(*_: object) -> None:
+        raise NotJats("declares entities")
+
+    parser = expat.ParserCreate()
+    parser.EntityDeclHandler = declared
+    try:
+        parser.Parse(xml, True)
+    except expat.ExpatError as exc:
+        raise NotJats(str(exc)) from exc
+
+
 def to_text(xml: bytes) -> str:
     """The article as extraction text. Raises NotJats if it can't be read."""
-    if b"<!ENTITY" in xml:
-        raise NotJats("declares entities")
+    _refuse_entities(xml)
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:
