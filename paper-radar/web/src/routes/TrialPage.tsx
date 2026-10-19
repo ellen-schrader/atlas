@@ -13,6 +13,7 @@ import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/compo
 import { extractionRunning, extractionState, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
+import { useJustAdded } from "@/hooks/useJustAdded";
 import { useTrialCountries } from "@/hooks/useTrialCountries";
 import { Input } from "@/components/ui/input";
 import {
@@ -561,7 +562,8 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
-  const toast = useToast();
+  const { justAdded, markAdded, rowRef } = useJustAdded();
+  const [addedTitle, setAddedTitle] = useState("");
   const decide = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "confirmed" | "rejected" }) =>
       decideLink(id, userId, status),
@@ -573,9 +575,11 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
       const old = d.links.find((l) => l.paper_id === p.id);
       return old ? decideLink(old.id, userId, "confirmed") : linkPaper(team.id, d.trial.id, p.id, userId);
     },
-    // The picker stays open, so linking several papers is one search each.
+    // The search closes, and the paper shows in the list marked "Linked".
     onSuccess: (_r, p) => {
-      toast({ message: `Linked “${p.title}”.` });
+      setPicking(false);
+      setAddedTitle(p.title);
+      markAdded(p.id);
       onChange();
     },
   });
@@ -585,8 +589,20 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
   const rejected = d.links.filter((l) => l.status === "rejected");
 
   const row = (l: TrialLink, actions: ReactNode) => (
-    <li key={l.id} className="flex flex-wrap items-start gap-3 py-3">
+    <li
+      key={l.id}
+      ref={l.paper_id === justAdded ? rowRef(l.paper_id) : undefined}
+      className={cn(
+        "flex flex-wrap items-start gap-3 py-3 transition-colors duration-700",
+        l.paper_id === justAdded && "-mx-2 rounded-control bg-accent-weak px-2",
+      )}
+    >
       <div className="min-w-0 flex-1">
+        {l.paper_id === justAdded && (
+          <span className="mb-0.5 inline-flex items-center gap-1 text-meta font-semibold text-accent">
+            <Check size={12} aria-hidden /> Linked
+          </span>
+        )}
         <button
           type="button"
           onClick={() => openPaper(l.paper_id)}
@@ -606,6 +622,9 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
 
   return (
     <div className="flex flex-col gap-2">
+      <p className="sr-only" aria-live="polite">
+        {justAdded ? `Linked ${addedTitle} to this trial.` : ""}
+      </p>
       {d.links.length === 0 && (
         <p className="text-sm text-muted">
           No lab papers linked yet. Papers that name {d.trial.nct_id} in their abstract are linked
@@ -705,7 +724,7 @@ function Papers({ d, onChange }: { d: TrialDetail; onChange: () => void }) {
             </p>
           )}
           <Button size="sm" variant="ghost" className="w-fit" onClick={() => setPicking(false)}>
-            Done
+            Cancel
           </Button>
         </div>
       ) : (

@@ -1,7 +1,7 @@
 import { type ReactNode, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Bell, BellOff, ChevronDown, Loader2, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Bell, BellOff, Check, ChevronDown, Loader2, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
 
 import { PaperPicker, type PickedPaper } from "@/components/PaperPicker";
 import { usePaperModal } from "@/components/PaperModal";
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Textarea } from "@/components/ui/textarea";
 import { useDismissable } from "@/hooks/useDismissable";
+import { useJustAdded } from "@/hooks/useJustAdded";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useTrialCountries } from "@/hooks/useTrialCountries";
 import {
@@ -824,6 +825,8 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   const { team, userId } = useAppContext();
   const { openPaper } = usePaperModal();
   const [picking, setPicking] = useState(false);
+  const { justAdded, markAdded, rowRef } = useJustAdded();
+  const [addedTitle, setAddedTitle] = useState("");
   const reporting = useQuery({
     queryKey: ["collection-reporting", c.id, c.trial_ids],
     enabled: c.trial_ids.length > 0,
@@ -841,9 +844,12 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   const toast = useToast();
   const add = useMutation({
     mutationFn: (p: PickedPaper) => addCollectionPaper(c.id, p.id, userId),
-    // The picker stays open: adding several reviews is one search each.
+    // The search closes, and the new paper shows where it landed (the end of
+    // the list, next to the button that added it), marked "Added".
     onSuccess: (_r, p) => {
-      toast({ message: `Added “${p.title}”.` });
+      setPicking(false);
+      setAddedTitle(p.title);
+      markAdded(p.id);
       onChange();
     },
     onError: () => toast({ message: "Couldn’t add that paper. Try again." }),
@@ -869,7 +875,8 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
     },
   });
 
-  const about = c.papers;
+  // Oldest first, so a new paper always lands at the end, by the Add button.
+  const about = [...c.papers].sort((a, b) => a.added_at.localeCompare(b.added_at));
   // One row per paper, even if it reports two of the collection's trials.
   const byPaper = new Map<string, NonNullable<ReportingPaper["papers"]>>();
   for (const r of reporting.data ?? []) if (r.papers) byPaper.set(r.papers.id, r.papers);
@@ -878,9 +885,22 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
   const row = (
     p: NonNullable<ReportingPaper["papers"]>,
     action?: ReactNode,
+    isNew = false,
   ) => (
-    <li key={p.id} className="flex items-start gap-2 py-2">
+    <li
+      key={p.id}
+      ref={isNew ? rowRef(p.id) : undefined}
+      className={cn(
+        "flex items-start gap-2 py-2 transition-colors duration-700",
+        isNew && "-mx-2 rounded-control bg-accent-weak px-2",
+      )}
+    >
       <div className="min-w-0 flex-1">
+        {isNew && (
+          <span className="mb-0.5 inline-flex items-center gap-1 text-meta font-semibold text-accent">
+            <Check size={12} aria-hidden /> Added
+          </span>
+        )}
         <button
           type="button"
           onClick={() => openPaper(p.id)}
@@ -900,6 +920,9 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
         <h3 className="text-eyebrow font-semibold uppercase tracking-eyebrow text-faint">
           About the question
         </h3>
+        <p className="sr-only" aria-live="polite">
+          {justAdded ? `Added ${addedTitle} to the collection.` : ""}
+        </p>
         {about.length === 0 ? (
           <p className="mt-1 text-sm text-muted">Meta-analyses and reviews that cover these trials.</p>
         ) : (
@@ -916,7 +939,7 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
                 </Button>
               );
               return p.papers && (!held.data || held.data.has(p.paper_id)) ? (
-                row(p.papers, action)
+                row(p.papers, action, p.paper_id === justAdded)
               ) : (
                 <li key={p.paper_id} className="flex items-center gap-2 py-2">
                   <span className="flex-1 text-sm text-faint">
@@ -940,7 +963,7 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
               autoFocus
             />
             <Button size="sm" variant="ghost" className="w-fit" onClick={() => setPicking(false)}>
-              Done
+              Cancel
             </Button>
           </div>
         ) : (
