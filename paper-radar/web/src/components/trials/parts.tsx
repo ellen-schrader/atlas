@@ -172,24 +172,18 @@ export interface FilterGroup {
   label: string;
   options: FilterOption[];
   selected: string[];
-  /** A long list (countries): a search box, and only the most used options
-   *  until someone types. */
+  /** A long list (countries): a typeahead. Only a search box until someone
+   *  types; then the matches. */
   searchable?: boolean;
 }
 
-/** Options shown before anyone types in a searchable group. */
-const TOP_OPTIONS = 5;
-
-/** A searchable group's options: what's ticked, then the most used ones, or
- *  every match for what's typed. */
+/** A searchable group (a typeahead facet): what's ticked stays listed so it
+ *  can be unticked; everything else waits for a search. */
 function SearchableGroup({ g, onToggle }: { g: FilterGroup; onToggle: (value: string) => void }) {
   const [q, setQ] = useState("");
   const needle = q.trim().toLowerCase();
   const ticked = g.options.filter((o) => g.selected.includes(o.value));
-  const shown = needle
-    ? g.options.filter((o) => o.label.toLowerCase().includes(needle))
-    : [...ticked, ...g.options.filter((o) => !g.selected.includes(o.value)).slice(0, TOP_OPTIONS)];
-  const hidden = g.options.length - shown.length;
+  const shown = needle ? g.options.filter((o) => o.label.toLowerCase().includes(needle)) : ticked;
   return (
     <>
       <div className="px-1 pb-1">
@@ -207,8 +201,10 @@ function SearchableGroup({ g, onToggle }: { g: FilterGroup; onToggle: (value: st
       {needle && shown.length === 0 && (
         <p className="px-2 py-1.5 text-meta text-muted">No {g.label.toLowerCase()} matches “{q.trim()}”.</p>
       )}
-      {!needle && hidden > 0 && (
-        <p className="px-2 py-1.5 text-meta text-faint">+{hidden} more: type to find them</p>
+      {!needle && g.options.length > ticked.length && (
+        <p className="px-2 py-1.5 text-meta text-faint">
+          Type to search {g.options.length} {g.label === "Country" ? "countries" : "options"}
+        </p>
       )}
     </>
   );
