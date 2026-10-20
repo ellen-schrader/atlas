@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractionState, firstPage, pmcUrl, treatmentName } from "./extraction";
+import { extractionState, firstPage, mediansText, pmcUrl, treatmentName } from "./extraction";
 
 describe("treatmentName", () => {
   it("drops doses and schedules", () => {
@@ -73,5 +73,17 @@ describe("firstPage", () => {
     expect(firstPage(null)).toBeNull();
     expect(firstPage("cover")).toBeNull();
     expect(firstPage("0")).toBeNull();
+  });
+});
+
+describe("mediansText", () => {
+  it("puts the experimental arm first", () => {
+    expect(mediansText({ exp_median: "5.9", ctrl_median: "7.0" })).toBe("Median 5.9 vs 7.0 mo");
+    expect(mediansText({ exp_median: "NR", ctrl_median: "19.3" })).toBe("Median NR vs 19.3 mo");
+  });
+  it("marks a missing arm and is null without either", () => {
+    expect(mediansText({ exp_median: "25.1", ctrl_median: null })).toBe("Median 25.1 vs n/r mo");
+    expect(mediansText({})).toBeNull();
+    expect(mediansText({ exp_median: " ", ctrl_median: null })).toBeNull();
   });
 });

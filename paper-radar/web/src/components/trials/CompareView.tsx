@@ -26,6 +26,7 @@ import {
   DIMENSION_CATEGORIES,
   DIMENSION_LABELS,
   type Phase,
+  mediansText,
 } from "@/lib/extraction";
 import { type SiteCountries, countriesSummary } from "@/lib/trials";
 import { cn } from "@/lib/utils";
@@ -480,7 +481,8 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
                 const i = indexOf(t.id);
                 if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "—");
                 const ci = e.hr_ci_low != null && e.hr_ci_high != null;
-                const tip = `${t.name}: ${hrLabel(hrPick)} HR ${e.hr}${ci ? ` (${e.hr_ci_low}–${e.hr_ci_high})` : ""} · ${e.role.replace("_", "-")}`;
+                const medians = mediansText(e);
+                const tip = `${t.name}: ${hrLabel(hrPick)} HR ${e.hr}${ci ? ` (${e.hr_ci_low}–${e.hr_ci_high})` : ""}${medians ? ` · ${medians}` : ""} · ${e.role.replace("_", "-")}`;
                 return row(
                   t,
                   <div className="absolute inset-0" title={tip}>

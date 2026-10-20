@@ -30,8 +30,21 @@ export interface Endpoint {
   hr_ci_high: number | null;
   events: number | null;
   median_followup_months: number | null;
+  /** Each arm's median in months ("25.1"), or "NR"; older extractions lack them. */
+  exp_median?: string | null;
+  ctrl_median?: string | null;
   p_value: string | null;
   source: Source | null;
+}
+
+/** "Median 5.9 vs 7.0 mo", "Median NR vs 19.3 mo": experimental first. Null
+ *  when neither arm's median was reported. */
+export function mediansText(e: Pick<Endpoint, "exp_median" | "ctrl_median">): string | null {
+  const exp = e.exp_median?.trim() || null;
+  const ctrl = e.ctrl_median?.trim() || null;
+  if (!exp && !ctrl) return null;
+  const show = (v: string | null) => v ?? "n/r";
+  return `Median ${show(exp)} vs ${show(ctrl)} mo`;
 }
 
 export type PhaseKind =
