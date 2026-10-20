@@ -18,6 +18,7 @@ import {
   countEdits,
   editFact,
   fetchReviews,
+  mediansText,
   openSourceFile,
   setVerified,
   treatmentName,
@@ -672,6 +673,7 @@ function EndpointPanel({ e, path, ctx }: { e: Endpoint; path: string; ctx: Ctx }
         )}
         {e.p_value && <span className="text-muted"> · {pText(e.p_value)}</span>}
       </p>
+      {mediansText(e) && <p className="font-mono text-sm text-fg">{mediansText(e)}</p>}
       <p className="text-meta text-muted">
         {[
           e.definition,

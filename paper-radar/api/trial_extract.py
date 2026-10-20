@@ -297,7 +297,8 @@ estimate from figures or infer from other trials.
 so in caveats.
 - Use the main analysis (the primary publication's, or the latest update of the same \
 endpoint if a document reports one); mention others in caveats.
-- Percentages are 0-100. Hazard ratios are experimental vs control.
+- Percentages are 0-100. Hazard ratios are experimental vs control. For time-to-event \
+endpoints, also give each arm's median (months, or NR if not reached) when reported.
 - Every group of values names its source: the document number as listed, and where in \
 it (table, figure, section) with the page when there is one. In a full-text document, \
 also give the id shown on that table, figure or section as the anchor, and quote a few \

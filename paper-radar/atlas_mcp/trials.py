@@ -617,7 +617,8 @@ async def record_trial_extraction(
       from figures or infer from other trials. You may convert counts to
       percentages (say so in caveats).
     - Use the main analysis; mention others in caveats. Percentages 0-100; hazard
-      ratios experimental vs control.
+      ratios experimental vs control; for time-to-event endpoints also each arm's
+      median (months, or "NR" if not reached) when reported.
     - Every group names its source: "doc" is the number get_trial_sources gave
       (number attached files after those), "where" the table, figure or section.
       In a full-text source, "anchor" is the id shown on it ("Tab1" from

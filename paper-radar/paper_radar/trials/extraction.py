@@ -131,6 +131,15 @@ class Endpoint(BaseModel):
     hr_ci_high: float | None
     events: int | None
     median_followup_months: float | None
+    # Time-to-event endpoints often report medians, sometimes without an HR.
+    exp_median: str | None = Field(
+        default=None,
+        description='Experimental arm\'s median in months, "25.1", or "NR" if not reached',
+    )
+    ctrl_median: str | None = Field(
+        default=None,
+        description='Control arm\'s median in months, "19.3", or "NR" if not reached',
+    )
     p_value: str | None
     source: Source | None
 
