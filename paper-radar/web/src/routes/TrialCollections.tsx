@@ -363,7 +363,7 @@ function MiniPlot({
     <div className="mt-1 flex flex-col gap-1" aria-label={label}>
       <div className="text-meta text-faint">{label}</div>
       {pcr.map(({ t, c, x, d }) => (
-        <div key={t.id} className="grid grid-cols-[96px_1fr_56px] items-center gap-2" title={`${t.name}: ${c}% → ${x}%`}>
+        <div key={t.id} className="grid grid-cols-[96px_1fr_4.5rem] items-center gap-2" title={`${t.name}: ${c}% → ${x}%`}>
           <span className="truncate text-meta text-muted">{t.name}</span>
           <div className="relative h-3">
             <div
@@ -376,14 +376,16 @@ function MiniPlot({
             />
             <span className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full" style={{ left: `${pP(x)}%`, background: colour }} />
           </div>
-          <span className="text-right font-mono text-meta text-fg">
+          {/* One line: "+13.6 pp" must not wrap, and the column is the same on
+              every row so the bars share one axis. */}
+          <span className="whitespace-nowrap text-right font-mono text-meta text-fg">
             {d >= 0 ? "+" : ""}
             {d} pp
           </span>
         </div>
       ))}
       {hr.map(({ t, hr: v, lo, hi }) => (
-        <div key={t.id} className="grid grid-cols-[96px_1fr_56px] items-center gap-2" title={`${t.name}: HR ${v}${lo != null && hi != null ? ` (${lo}–${hi})` : ""}`}>
+        <div key={t.id} className="grid grid-cols-[96px_1fr_4.5rem] items-center gap-2" title={`${t.name}: HR ${v}${lo != null && hi != null ? ` (${lo}–${hi})` : ""}`}>
           <span className="truncate text-meta text-muted">{t.name}</span>
           <div className="relative h-3">
             <div className="absolute inset-y-0 w-px bg-border-strong" style={{ left: `${hP(1)}%` }} />
@@ -395,7 +397,7 @@ function MiniPlot({
             )}
             <span className="absolute top-0 h-3 w-3 -translate-x-1/2 rounded-full" style={{ left: `${hP(v)}%`, background: colour }} />
           </div>
-          <span className="text-right font-mono text-meta text-fg">{v}</span>
+          <span className="whitespace-nowrap text-right font-mono text-meta text-fg">{v}</span>
         </div>
       ))}
     </div>
