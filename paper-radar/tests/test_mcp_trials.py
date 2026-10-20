@@ -118,3 +118,52 @@ def test_find_by_nct_or_name(monkeypatch):
     assert trials._find("lab", "KN522")["id"] == "t1"
     with pytest.raises(lab.LabError, match="isn't on this lab's list"):
         trials._find("lab", "NeoTRIP")
+
+
+# --- what record_trial_extraction accepts -------------------------------------------------
+
+import copy  # noqa: E402
+
+from paper_radar.trials.extraction import DIMENSIONS, Extraction  # noqa: E402
+from tests.test_trial_extract import VALID  # noqa: E402
+
+
+def _with_dimension(key, labels):
+    data = copy.deepcopy(VALID)
+    data["enrolment"]["dimensions"] = [
+        {
+            "key": key,
+            "categories": [
+                {
+                    "label": label,
+                    "eligibility": "allowed",
+                    "condition": None,
+                    "overall_pct": 50.0,
+                    "exp_pct": 50.0,
+                    "ctrl_pct": 50.0,
+                }
+                for label in labels
+            ],
+            "not_reported_pct": None,
+            "assay": None,
+            "source": None,
+        }
+    ]
+    return Extraction.model_validate(data)
+
+
+def test_record_refuses_categories_atlas_cant_show():
+    assert trials._bad_categories(_with_dimension("nodal_status", ["N0", "N1", "N2–3"])) == []
+    bad = trials._bad_categories(_with_dimension("menopausal_status", ["Premenopausal", "Post"]))
+    assert bad == ["menopausal_status 'Premenopausal'"]
+    # Close isn't enough: a hyphen for the en dash, or a paper's own band.
+    assert trials._bad_categories(_with_dimension("nodal_status", ["N2-3"])) != []
+    assert trials._bad_categories(_with_dimension("age", ["<65"])) != []
+
+
+def test_the_tool_lists_every_category_it_accepts():
+    doc = trials.record_trial_extraction.__doc__
+    for key, (_name, labels) in DIMENSIONS.items():
+        assert key in doc
+        for label in labels:
+            assert label in doc, (key, label)
