@@ -1,5 +1,12 @@
 import { supabase } from "@/lib/supabase";
 import type {
+  SavedSearch,
+  SearchFields,
+  SourceKey,
+  SourceResult,
+  Suggestion,
+} from "@/lib/savedSearches";
+import type {
   MapDoc,
   MapOverviewData,
   MapPapersData,
@@ -169,7 +176,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     let detail = `Request failed (error ${res.status}).`;
     try {
-      detail = (await res.json()).detail ?? detail;
+      const body = (await res.json()).detail;
+      // FastAPI's own validation errors are a list of {msg, ...}.
+      detail = Array.isArray(body) ? (body[0]?.msg ?? detail) : (body ?? detail);
     } catch {
       // non-JSON error body
     }
@@ -598,4 +607,71 @@ export interface PubMedHint {
 /** PubMed papers naming this trial, and which the lab doesn't have. */
 export async function fetchPubMedHint(teamId: string, trialId: string): Promise<PubMedHint> {
   return authedRequest(`/trials/${trialId}/pubmed?${new URLSearchParams({ team_id: teamId })}`);
+}
+
+// --- Saved searches (issue #164) -------------------------------------------------
+
+export async function listSearches(teamId: string): Promise<SavedSearch[]> {
+  return authedRequest(`/saved-searches?${new URLSearchParams({ team_id: teamId })}`);
+}
+
+export async function createSearch(teamId: string, fields: SearchFields): Promise<SavedSearch> {
+  return authedRequest("/saved-searches", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, ...fields }),
+  });
+}
+
+export async function updateSearch(
+  teamId: string,
+  id: string,
+  fields: Partial<SearchFields> & { active?: boolean },
+): Promise<SavedSearch> {
+  return authedRequest(`/saved-searches/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ team_id: teamId, ...fields }),
+  });
+}
+
+export async function deleteSearch(teamId: string, id: string): Promise<void> {
+  return authedRequest(
+    `/saved-searches/${encodeURIComponent(id)}?${new URLSearchParams({ team_id: teamId })}`,
+    { method: "DELETE" },
+  );
+}
+
+/** What the query finds over the past week, per source, without saving it. */
+export async function previewSearch(
+  teamId: string,
+  query: string,
+  sources: SourceKey[],
+): Promise<SourceResult[]> {
+  return authedRequest("/saved-searches/preview", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, query, sources }),
+  });
+}
+
+export async function listSuggestions(teamId: string): Promise<Suggestion[]> {
+  return authedRequest(`/saved-searches/suggestions?${new URLSearchParams({ team_id: teamId })}`);
+}
+
+/** The API takes at most this many ids per call. */
+export const MAX_PER_CALL = 50;
+
+/** Import or dismiss suggestions; returns how many were still waiting. */
+export async function decideSuggestions(
+  teamId: string,
+  ids: string[],
+  decision: "import" | "dismiss",
+): Promise<number> {
+  let count = 0;
+  for (let i = 0; i < ids.length; i += MAX_PER_CALL) {
+    const out = await authedRequest<{ count: number }>(`/saved-searches/suggestions/${decision}`, {
+      method: "POST",
+      body: JSON.stringify({ team_id: teamId, ids: ids.slice(i, i + MAX_PER_CALL) }),
+    });
+    count += out.count;
+  }
+  return count;
 }
