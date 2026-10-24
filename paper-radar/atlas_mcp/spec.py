@@ -36,10 +36,15 @@ CHART_TYPES = ("line", "scatter", "bar", "histogram", "heatmap", "box")
 # shared row axis), named PALETTES (semantic, referenced by name), a LAYOUT
 # (GridSpec), and PANELS that bind to them.
 PANEL_KINDS = (
-    "line", "scatter", "bar", "histogram", "heatmap", "box",  # the v1 forms
-    "stacked_bar",       # composition per row (grouped | stacked | percent)
+    "line",
+    "scatter",
+    "bar",
+    "histogram",
+    "heatmap",
+    "box",  # the v1 forms
+    "stacked_bar",  # composition per row (grouped | stacked | percent)
     "annotation_track",  # the categorical colour strip beside a heatmap
-    "dendrogram",        # the clustering tree that explains a row order
+    "dendrogram",  # the clustering tree that explains a row order
 )
 ROW_KINDS = ("heatmap", "stacked_bar", "bar", "annotation_track", "dendrogram")
 # Kinds that exist ONLY as a row-axis panel — they have no single-panel v1 form, so
@@ -55,8 +60,8 @@ FIGURE_LEGENDS = ("figure", "panel", "none")
 FIGURE_LEGEND_LOCS = ("right", "below")
 
 MAX_PANELS = 6
-MAX_GRID = 4          # rows/cols of the panel grid
-MAX_CATEGORIES = 40   # rows in a shared domain
+MAX_GRID = 4  # rows/cols of the panel grid
+MAX_CATEGORIES = 40  # rows in a shared domain
 MAX_PALETTES = 6
 MAX_LABEL_CHARS = 24
 SCALES = ("linear", "log")
@@ -147,8 +152,9 @@ class SpecError(ValueError):
 LOG_AXIS_KINDS = ("line", "scatter")  # everything else sits on a zero baseline
 
 
-def check_chart_rules(kind: str, axes: dict, palette: list[str], series: list[dict],
-                      where: str = "spec") -> None:
+def check_chart_rules(
+    kind: str, axes: dict, palette: list[str], series: list[dict], where: str = "spec"
+) -> None:
     """The cross-field rules a chart of this kind must satisfy. Raises SpecError."""
     if kind not in LOG_AXIS_KINDS and "log" in (axes["x_scale"], axes["y_scale"]):
         # Bars/bins/boxes sit on a zero baseline (and bar groups on ordinal positions
@@ -448,8 +454,21 @@ def _layout(raw: object, n_panels: int, domains: dict, strict: bool) -> dict:  #
 
 
 _PANEL_KEYS = (
-    "kind", "position", "rows", "palette", "columns", "mode", "orientation", "scale",
-    "colorbar", "labels", "axes", "series", "legend", "data_hints", "title",
+    "kind",
+    "position",
+    "rows",
+    "palette",
+    "columns",
+    "mode",
+    "orientation",
+    "scale",
+    "colorbar",
+    "labels",
+    "axes",
+    "series",
+    "legend",
+    "data_hints",
+    "title",
 )
 
 
@@ -487,7 +506,7 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
                 f"{where}: a dendrogram explains a CLUSTERED row order — domain "
                 f"'{rows}' is ordered '{domains[rows]['order']}', so the tree's branches "
                 "would cross and bracket rows that aren't adjacent. Set "
-                f"domains.{rows}.order = \"clustered\", or drop the dendrogram panel."
+                f'domains.{rows}.order = "clustered", or drop the dendrogram panel.'
             )
     elif kind in _DOMAIN_ONLY_KINDS:
         # These kinds ARE a shared row axis — there is nothing to draw without one,
@@ -547,7 +566,10 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
         # A count plot on a ROW axis is horizontal — v1's bar renderer could only
         # draw vertical bars, which is why a composite needed this.
         panel["orientation"] = _enum(
-            d, where, "orientation", ORIENTATIONS,
+            d,
+            where,
+            "orientation",
+            ORIENTATIONS,
             "horizontal" if panel.get("rows") else "vertical",
         )
 
@@ -591,13 +613,18 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
     hints_d = _section(d.get("data_hints"), f"{where}.data_hints")
     if strict:
         _reject_unknown(
-            hints_d, f"{where}.data_hints",
+            hints_d,
+            f"{where}.data_hints",
             ("n_series", "n_points", "trend", "noise", "composition", "distribution"),
         )
     hd = SECTION_DEFAULTS["data_hints"]
     hints = {
         "n_points": _integer(
-            hints_d, f"{where}.data_hints", "n_points", 3, MAX_POINTS,
+            hints_d,
+            f"{where}.data_hints",
+            "n_points",
+            3,
+            MAX_POINTS,
             _DEFAULT_POINTS.get(kind, 40),
         ),
         "trend": _enum(hints_d, f"{where}.data_hints", "trend", TRENDS, hd["trend"]),
@@ -624,8 +651,16 @@ def _panel(raw: object, i: int, domains: dict, palettes: dict, grid: tuple, stri
 
 
 _V2_TOP_KEYS = (
-    "spec_version", "chart", "domains", "palettes", "layout", "panels",
-    "typography", "legend", "notes", "cvd",
+    "spec_version",
+    "chart",
+    "domains",
+    "palettes",
+    "layout",
+    "panels",
+    "typography",
+    "legend",
+    "notes",
+    "cvd",
 )
 
 
@@ -725,11 +760,7 @@ def validate_spec(raw: object, *, strict: bool = True) -> dict:
     n_hint = _integer(hints_d, "data_hints", "n_series", 1, MAX_SERIES, hd["n_series"])
     series = _series(raw.get("series"), chart["type"], n_hint, strict)
     if strict:
-        if (
-            raw.get("palette") is None
-            and chart["type"] != "heatmap"
-            and len(palette) < len(series)
-        ):
+        if raw.get("palette") is None and chart["type"] != "heatmap" and len(palette) < len(series):
             raise SpecError(
                 f"{len(series)} series needs {len(series)} colours, but the CVD-safe default "
                 f"palette has only {len(DEFAULT_PALETTE)} — supply a palette with one colour "

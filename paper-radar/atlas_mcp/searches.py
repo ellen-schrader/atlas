@@ -125,7 +125,8 @@ def list_saved_searches(team_id: str | None = None) -> str:
         if r.get("last_error"):
             state.append(f"last run had trouble: {r['last_error']}")
         lines.append(f"- {r['name']}: {r['query']}\n  " + " · ".join(state))
-    total = sum(r["pending"] for r in rows)
+    # Distinct papers: one two searches found counts once here.
+    total = ss.pending_count(service_client(), lab.current_user_id(), team["id"])
     # The names and queries are the person's own, but framed as data all the same.
     return (
         f"Your {len(rows)} saved searches in {team['name']} "

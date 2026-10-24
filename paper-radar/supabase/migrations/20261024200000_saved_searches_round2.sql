@@ -14,7 +14,9 @@
 --      adding or dismissing it answers it everywhere.
 --   4. pending_suggestions(): the person's waiting suggestions, the newest
 --      few per search, so one noisy search cannot crowd the others out of the
---      page.
+--      page. pending_counts(): how many each search has waiting, counted here
+--      rather than over rows PostgREST would cap at 1,000.
+--   5. reorder_saved_searches(): the person's new order, in one statement.
 
 -- === searches =================================================================
 
@@ -87,3 +89,46 @@ $$;
 
 revoke all on function public.pending_suggestions(uuid, uuid, int) from public, anon, authenticated;
 grant execute on function public.pending_suggestions(uuid, uuid, int) to service_role;
+
+create function public.pending_counts(p_user uuid, p_team uuid)
+returns table (saved_search_id uuid, pending bigint)
+language sql
+stable
+set search_path = ''
+as $$
+    select l.saved_search_id, count(*)
+    from public.search_suggestion_searches l
+    join public.search_suggestions s on s.id = l.suggestion_id
+    where s.user_id = p_user and s.team_id = p_team and s.status = 'pending'
+    group by l.saved_search_id;
+$$;
+
+revoke all on function public.pending_counts(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.pending_counts(uuid, uuid) to service_role;
+
+-- Positions 0.. in the order of p_ids, which must be exactly the person's
+-- searches in the lab, each once. Returns false (and changes nothing) if not.
+-- One statement, so two quick reorders cannot interleave into a mixed order.
+create function public.reorder_saved_searches(p_user uuid, p_team uuid, p_ids uuid[])
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+begin
+    if cardinality(p_ids) <> (select count(distinct x) from unnest(p_ids) x)
+       or (select array_agg(id order by id) from public.saved_searches
+           where user_id = p_user and team_id = p_team)
+          is distinct from (select array_agg(x order by x) from unnest(p_ids) x) then
+        return false;
+    end if;
+    update public.saved_searches s
+    set position = o.n - 1, updated_at = now()
+    from unnest(p_ids) with ordinality as o(id, n)
+    where s.id = o.id and s.user_id = p_user and s.team_id = p_team;
+    return true;
+end;
+$$;
+
+revoke all on function public.reorder_saved_searches(uuid, uuid, uuid[])
+    from public, anon, authenticated;
+grant execute on function public.reorder_saved_searches(uuid, uuid, uuid[]) to service_role;

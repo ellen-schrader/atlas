@@ -181,6 +181,9 @@ def arxiv_query(node: q.Node, categories: Sequence[str]) -> str:
     rendered = q.to_arxiv(node)
     if not categories:
         return rendered
+    # Words take no wildcard on arXiv (see query._arxiv_term), but categories
+    # do: checked 2026-10-24, "flow matching" AND cat:q-bio* found the same 9
+    # papers as the ten q-bio subcategories OR'ed, cross-lists included.
     cats = " OR ".join(f"cat:{c}" if "." in c else f"cat:{c}*" for c in categories)
     return f"{rendered} AND ({cats})"
 
@@ -382,7 +385,19 @@ def page_suggestions(svc, user_id: str, team_id: str, per_search: int = PER_SEAR
     (and of those no remaining search found), so a noisy search does not
     crowd out the rest. Newest first, each with "search_ids" and "candidate"."""
     args = {"p_user": user_id, "p_team": team_id, "p_per_search": per_search}
-    picked = svc.rpc("pending_suggestions", args).execute().data or []
+    picked: list[dict] = []
+    page = 1000  # PostgREST's max rows per response
+    while True:
+        chunk = (
+            svc.rpc("pending_suggestions", args)
+            .range(len(picked), len(picked) + page - 1)
+            .execute()
+            .data
+            or []
+        )
+        picked += chunk
+        if len(chunk) < page:
+            break
     rows: list[dict] = []
     ids = [r["id"] for r in picked]
     for start in range(0, len(ids), 150):
@@ -654,41 +669,21 @@ def own_searches(svc, user_id: str, team_id: str) -> list[dict]:
     )
     if not rows:
         return []
-    links = (
-        svc.table("search_suggestion_searches")
-        .select("saved_search_id, suggestion:search_suggestions!inner(status)")
-        .in_("saved_search_id", [r["id"] for r in rows])
-        .eq("suggestion.status", "pending")
-        .limit(20000)
-        .execute()
-        .data
-        or []
-    )
-    counts: dict[str, int] = {}
-    for link in links:
-        counts[link["saved_search_id"]] = counts.get(link["saved_search_id"], 0) + 1
+    counted = svc.rpc("pending_counts", {"p_user": user_id, "p_team": team_id}).execute().data or []
+    counts = {c["saved_search_id"]: c["pending"] for c in counted}
     return [{**r, "pending": counts.get(r["id"], 0)} for r in rows]
 
 
 def reorder_searches(svc, user_id: str, team_id: str, ids: list[str]) -> None:
     """Put the person's searches in the order of ``ids`` (highest priority
     first). Refused unless ``ids`` are exactly their searches in this lab."""
-    have = {
-        r["id"]
-        for r in svc.table("saved_searches")
-        .select("id")
-        .eq("user_id", user_id)
-        .eq("team_id", team_id)
+    done = (
+        svc.rpc("reorder_saved_searches", {"p_user": user_id, "p_team": team_id, "p_ids": ids})
         .execute()
         .data
-        or []
-    }
-    if len(ids) != len(set(ids)) or set(ids) != have:
+    )
+    if not done:
         raise Refused("List each of your searches once, in the order you want them.")
-    for position, search_id in enumerate(ids):
-        svc.table("saved_searches").update({"position": position}).eq("id", search_id).eq(
-            "user_id", user_id
-        ).execute()
 
 
 def checked_new(
@@ -839,7 +834,7 @@ class SearchIdea(BaseModel):
 
 class SearchOrder(BaseModel):
     team_id: UUID
-    ids: list[str] = Field(min_length=1, max_length=MAX_SEARCHES)
+    ids: list[UUID] = Field(min_length=1, max_length=MAX_SEARCHES)
 
 
 class SavedSearch(BaseModel):
@@ -1018,7 +1013,16 @@ def ideas(team_id: UUID, token: str = Depends(require_token)) -> list[SearchIdea
     user_id = _require_feature(token, team)
     svc = service_client()
     lab = svc.table("teams").select("name").eq("id", team).limit(1).execute().data or []
-    queries = [r["query"] for r in own_searches(svc, user_id, team)]
+    rows = (
+        svc.table("saved_searches")
+        .select("query")
+        .eq("user_id", user_id)
+        .eq("team_id", team)
+        .execute()
+        .data
+        or []
+    )
+    queries = [r["query"] for r in rows]
     found = search_ideas(svc, user_id, team, lab[0]["name"] if lab else "the lab", queries)
     return [SearchIdea(**i) for i in found]
 
@@ -1029,7 +1033,7 @@ def order_searches(req: SearchOrder, token: str = Depends(require_token)) -> Non
     team = str(req.team_id)
     user_id = _require_feature(token, team)
     with _as_http():
-        reorder_searches(service_client(), user_id, team, req.ids)
+        reorder_searches(service_client(), user_id, team, [str(i) for i in req.ids])
 
 
 @router.delete("/{search_id}", status_code=204)

@@ -93,9 +93,13 @@ function SuggestionsPage() {
     queryFn: () => listSuggestions(team.id),
     refetchInterval: watching ? 5000 : false,
   });
-  // Recomputed when the searches change: one that covers an idea retires it.
+  // Recomputed when the queries change: a search that covers an idea retires it.
   const ideas = useQuery({
-    queryKey: ["search-ideas", team.id, searches.data?.length ?? 0],
+    queryKey: [
+      "search-ideas",
+      team.id,
+      (searches.data ?? []).map((x) => x.query).join("\n"),
+    ],
     queryFn: () => listSearchIdeas(team.id),
     enabled: searches.isSuccess,
     staleTime: 5 * 60_000,

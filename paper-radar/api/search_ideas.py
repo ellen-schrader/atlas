@@ -23,7 +23,7 @@ from itertools import combinations
 
 from paper_radar.search import query as q
 
-from .taste import follows_of
+from .taste import follows_of, post_tags
 
 MAX_IDEAS = 4
 _ROWS = 2000  # tagged posts read per question; plenty for counting
@@ -74,17 +74,22 @@ def _covered(tag: str, queries: list[str]) -> bool:
     return any(pattern.search(text.replace("-", " ")) for text in queries)
 
 
-def _tags(raw) -> list[str]:
+def _tags(post: dict) -> list[str]:
+    """A post's usable tags: the lab's, else the paper's own (taste.post_tags)."""
+    raw = post_tags(post)
     if not isinstance(raw, list):
         return []
     return [t for t in raw if isinstance(t, str) and _usable(t)]
+
+
+_POST_TAGS = "paper_id, tags, paper:papers(tags)"
 
 
 def _my_tag_sets(svc, user_id: str, team_id: str) -> list[set[str]]:
     """The lab's tags on each paper the person shared or saved, one set per paper."""
     posted = (
         svc.table("paper_posts")
-        .select("paper_id, tags")
+        .select(_POST_TAGS)
         .eq("team_id", team_id)
         .eq("posted_by", user_id)
         .limit(_ROWS)
@@ -92,7 +97,7 @@ def _my_tag_sets(svc, user_id: str, team_id: str) -> list[set[str]]:
         .data
         or []
     )
-    by_paper = {r["paper_id"]: set(_tags(r.get("tags"))) for r in posted}
+    by_paper = {r["paper_id"]: set(_tags(r)) for r in posted}
     saved = [
         r["paper_id"]
         for r in svc.table("paper_status")
@@ -109,7 +114,7 @@ def _my_tag_sets(svc, user_id: str, team_id: str) -> list[set[str]]:
     for start in range(0, len(saved), 150):
         rows = (
             svc.table("paper_posts")
-            .select("paper_id, tags")
+            .select(_POST_TAGS)
             .eq("team_id", team_id)
             .in_("paper_id", saved[start : start + 150])
             .execute()
@@ -117,14 +122,14 @@ def _my_tag_sets(svc, user_id: str, team_id: str) -> list[set[str]]:
             or []
         )
         for r in rows:
-            by_paper.setdefault(r["paper_id"], set()).update(_tags(r.get("tags")))
+            by_paper.setdefault(r["paper_id"], set()).update(_tags(r))
     return [tags for tags in by_paper.values() if tags]
 
 
 def _lab_tags(svc, team_id: str) -> Counter:
     rows = (
         svc.table("paper_posts")
-        .select("tags")
+        .select(_POST_TAGS)
         .eq("team_id", team_id)
         .order("posted_at", desc=True)
         .limit(_ROWS)
@@ -132,7 +137,7 @@ def _lab_tags(svc, team_id: str) -> Counter:
         .data
         or []
     )
-    return Counter(t for r in rows for t in set(_tags(r.get("tags"))))
+    return Counter(t for r in rows for t in set(_tags(r)))
 
 
 def search_ideas(
