@@ -3,7 +3,8 @@
 People paste the PubMed string their weekly email already uses, so the syntax is
 PubMed's: words, "quoted phrases", AND / OR / NOT, parentheses, a trailing ``*``
 for truncation, and field tags such as ``[tiab]`` or ``[au]``. Adjacent terms
-mean AND, as on PubMed.
+mean AND, and the operators apply strictly left to right with no precedence,
+as on PubMed: ``a OR b AND c`` is ``(a OR b) AND c``.
 
 PubMed gets the string exactly as typed. For the other sources it is parsed
 here once and then
@@ -22,7 +23,8 @@ read as words ("NOT review[pt]" must not drop preprints that say "review").
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 
 MAX_TERMS = 60  # a generous PubMed string has a few dozen
 
@@ -96,8 +98,9 @@ _TOKEN = re.compile(
     \s*(?:
         (?P<lparen>\() |
         (?P<rparen>\)) |
-        "(?P<phrase>[^"]*)"(?:\s*\[(?P<ptag>[^\]]*)\])? |
-        (?P<word>[^\s()"\[\]]+)(?:\[(?P<wtag>[^\]]*)\])? |
+        "(?P<phrase>[^"]*)" |
+        \[(?P<tag>[^\]]*)\] |
+        (?P<word>[^\s()"\[\]]+) |
         (?P<bad>\S)
     )
     """,
@@ -127,29 +130,31 @@ def _tokens(query: str) -> list[tuple[str, object]]:
             out.append(("(", None))
         elif m.group("rparen"):
             out.append((")", None))
+        elif m.group("tag") is not None:
+            # PubMed takes "word[tiab]" and "word [tiab]" alike: the tag
+            # belongs to the term just before it.
+            if not out or out[-1][0] != "term":
+                raise QueryError(f"[{m.group('tag')}] must follow a search term.")
+            term = out[-1][1]
+            assert isinstance(term, Term)
+            out[-1] = ("term", replace(term, field=_field(m.group("tag"))))
         elif m.group("phrase") is not None:
             words = m.group("phrase").lower().split()
             if words:
                 text = " ".join(words)
-                prefix = text.endswith("*")
                 out.append(
-                    (
-                        "term",
-                        Term(text.rstrip("*").strip(), _field(m.group("ptag")), True, prefix),
-                    )
+                    ("term", Term(text.rstrip("*").strip(), "any", True, text.endswith("*")))
                 )
         elif m.group("word"):
             word = m.group("word")
             if word in ("AND", "OR", "NOT"):
                 out.append((word, None))
                 continue
-            prefix = word.endswith("*")
             text = word.rstrip("*").lower()
             if text:
-                out.append(("term", Term(text, _field(m.group("wtag")), False, prefix)))
+                out.append(("term", Term(text, "any", False, word.endswith("*"))))
         else:
-            ch = m.group("bad")
-            raise QueryError(f"Unexpected '{ch}' in the query.")
+            raise QueryError(f"Unexpected '{m.group('bad')}' in the query.")
     return out
 
 
@@ -166,21 +171,14 @@ class _Parser:
         self.i += 1
         return tok
 
-    def parse_or(self) -> Node:
-        node = self.parse_and()
-        while self.peek() == "OR":
-            self.take()
-            node = Op("OR", node, self.parse_and())
-        return node
-
-    def parse_and(self) -> Node:
+    def parse_seq(self) -> Node:
+        """Terms joined by AND / OR / NOT (or nothing, meaning AND), applied
+        left to right with equal precedence, as PubMed does."""
         node = self.parse_primary()
-        while self.peek() in ("AND", "NOT", "term", "("):
-            kind = self.peek()
+        while self.peek() in ("AND", "OR", "NOT", "term", "("):
             op = "AND"
-            if kind in ("AND", "NOT"):
-                self.take()
-                op = kind
+            if self.peek() in ("AND", "OR", "NOT"):
+                op = str(self.take()[0])
             node = Op(op, node, self.parse_primary())
         return node
 
@@ -190,7 +188,7 @@ class _Parser:
             raise QueryError("The query ends where a search term was expected.")
         if kind == "(":
             self.take()
-            node = self.parse_or()
+            node = self.parse_seq()
             if self.peek() != ")":
                 raise QueryError("A '(' is never closed.")
             self.take()
@@ -210,7 +208,7 @@ def parse(query: str) -> Node:
     if sum(1 for kind, _ in tokens if kind == "term") > MAX_TERMS:
         raise QueryError(f"The query has more than {MAX_TERMS} search terms.")
     parser = _Parser(tokens)
-    node = parser.parse_or()
+    node = parser.parse_seq()
     if parser.peek() is not None:
         raise QueryError("A ')' has no matching '('.")
     return node
@@ -255,6 +253,7 @@ def to_arxiv(node: Node) -> str:
 # --- local matching (bioRxiv / medRxiv) ----------------------------------------------
 
 
+@lru_cache(maxsize=4096)
 def _pattern(t: Term) -> re.Pattern[str]:
     words = [re.escape(w) for w in t.text.split()]
     body = r"\W+".join(words)
@@ -274,17 +273,22 @@ class Doc:
 def matches(node: Node, doc: Doc) -> bool:
     """Whether a preprint satisfies the query, PubMed-style. Pass it
     :func:`without_filters`."""
+    tiab = f"{doc.title}\n{doc.abstract}"
+    fields = {
+        "title": doc.title,
+        "tiab": tiab,
+        "author": doc.authors,
+        "any": f"{tiab}\n{doc.authors}",
+    }
+    return _eval(node, fields)
+
+
+def _eval(node: Node, fields: dict[str, str]) -> bool:
     if isinstance(node, Term):
-        haystack = {
-            "title": doc.title,
-            "tiab": f"{doc.title}\n{doc.abstract}",
-            "author": doc.authors,
-            "any": f"{doc.title}\n{doc.abstract}\n{doc.authors}",
-        }[node.field]
-        return _pattern(node).search(haystack) is not None
-    left = matches(node.left, doc)
+        return _pattern(node).search(fields[node.field]) is not None
+    left = _eval(node.left, fields)
     if node.op == "AND":
-        return left and matches(node.right, doc)
+        return left and _eval(node.right, fields)
     if node.op == "OR":
-        return left or matches(node.right, doc)
-    return left and not matches(node.right, doc)
+        return left or _eval(node.right, fields)
+    return left and not _eval(node.right, fields)

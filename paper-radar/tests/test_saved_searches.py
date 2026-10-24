@@ -17,7 +17,8 @@ TODAY = date(2026, 10, 24)
 
 def test_first_run_looks_back_a_week_then_since_the_last_run():
     assert ss.window(None, TODAY) == (date(2026, 10, 17), TODAY)
-    assert ss.window("2026-10-17T05:40:00+00:00", TODAY) == (date(2026, 10, 16), TODAY)
+    # Three days of overlap: arXiv announces Thursday's submissions on Sunday.
+    assert ss.window("2026-10-17T05:40:00+00:00", TODAY) == (date(2026, 10, 14), TODAY)
     # A search paused for months does not pull in months of papers.
     assert ss.window("2026-01-01T00:00:00+00:00", TODAY) == (date(2026, 9, 26), TODAY)
 
@@ -137,3 +138,107 @@ def test_due_searches(monkeypatch):
         }
     )
     assert [s["id"] for s in run.due_searches(svc, now)] == ["new", "weekly", "trying"]
+
+
+class _Updates:
+    """Records saved_searches updates; everything else is empty."""
+
+    def __init__(self):
+        self.updates: list[dict] = []
+
+    def table(self, name):
+        outer = self
+
+        class Q(_Query):
+            def update(self, changes):
+                outer.updates.append(changes)
+                return self
+
+        return Q([])
+
+
+@pytest.mark.parametrize(
+    ("failed_before", "error", "failed_after", "advances"),
+    [
+        (0, False, 0, True),  # ran: wait a week
+        (0, True, 1, False),  # failed: due again tomorrow, over the same dates
+        (1, True, 2, False),
+        (2, True, 3, True),  # still failing: back to weekly, error kept
+        (2, False, 0, True),
+    ],
+)
+def test_failing_searches_retry_daily_then_weekly(
+    monkeypatch, failed_before, error, failed_after, advances
+):
+    def pubmed(*a, **k):
+        if error:
+            raise SourceError("PubMed could not run the query: bad tag")
+        return []
+
+    monkeypatch.setattr(sources, "search_pubmed", pubmed)
+    svc = _Updates()
+    search = {
+        "id": "s",
+        "user_id": "u",
+        "team_id": "t",
+        "query": "tls",
+        "sources": ["pubmed"],
+        "last_run_at": None,
+        "failed_runs": failed_before,
+    }
+    ss.run_saved_search(svc, search, TODAY, feed=None)
+    (changes,) = svc.updates
+    assert changes["failed_runs"] == failed_after
+    assert ("last_run_at" in changes) is advances
+    assert (changes["last_error"] is not None) is error
+
+
+CANDIDATE = {
+    "source": "pubmed",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/1/",
+    "title": "From PubMed",
+    "doi": "10.1/x",
+    "pmid": "1",
+    "authors": ["A B"],
+    "venue": "J",
+    "published_on": "2026-10-20",
+    "abstract": "Source abstract.",
+}
+
+
+def test_import_falls_back_to_the_source_record_when_the_lookup_fails(monkeypatch):
+    def boom(url):
+        raise TimeoutError("publisher timed out")
+
+    monkeypatch.setattr(ss, "fetch_metadata", boom)
+    meta = ss._import_meta(CANDIDATE)
+    assert (meta.title, meta.doi, meta.year) == ("From PubMed", "10.1/x", 2026)
+
+
+def test_import_keeps_the_source_doi_and_abstract_when_the_lookup_lacks_them(monkeypatch):
+    from paper_radar.ingest.metadata import PaperMetadata
+
+    monkeypatch.setattr(
+        ss, "fetch_metadata", lambda url: PaperMetadata(url=url, title="Full record", venue="Cell")
+    )
+    meta = ss._import_meta(CANDIDATE)
+    assert (meta.title, meta.venue) == ("Full record", "Cell")
+    assert meta.doi == "10.1/x" and meta.abstract == "Source abstract."
+
+
+def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
+    copied: list[date] = []
+    monkeypatch.setattr(run, "service_client", lambda: None)
+    monkeypatch.setattr(run, "_feature_owners", lambda svc: ({"lab"}, set()))
+    monkeypatch.setattr(run, "refresh_feed", lambda svc, today, dry_run: copied.append(today) or 0)
+    monkeypatch.setattr(ss, "retry_stuck_imports", lambda svc, now: 0)
+    monkeypatch.setattr(run, "due_searches", lambda svc, now: [])
+    assert run.run() == (0, 0, 0)
+    assert len(copied) == 1
+
+
+def test_nothing_runs_without_the_feature(monkeypatch):
+    monkeypatch.setattr(run, "service_client", lambda: None)
+    monkeypatch.setattr(run, "_feature_owners", lambda svc: (set(), set()))
+    monkeypatch.setattr(run, "refresh_feed", lambda *a, **k: pytest.fail("no copying"))
+    assert run.run() == (0, 0, 0)

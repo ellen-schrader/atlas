@@ -5,7 +5,8 @@ feature is on for anyone:
 
 1. Copy the bioRxiv/medRxiv preprints posted since the last copy into
    ``rxiv_feed`` (their API can only list by date), and drop ones past a month.
-2. Run each active search last run a week ago or more, for an owner who is
+2. Finish imports the API was stopped in the middle of.
+3. Run each active search last run a week ago or more, for an owner who is
    still in the lab and has the feature, and file the papers the lab does not
    have as suggestions for them (api/saved_searches.py).
 
@@ -123,11 +124,17 @@ def run(*, dry_run: bool = False) -> tuple[int, int, int]:
     """(searches run, new suggestions, searches with an error)."""
     svc = service_client()
     now = datetime.now(UTC)
+    if not any(_feature_owners(svc)):
+        return 0, 0, 0
+    # Every day, not only when a search is due: a search saved today, and the
+    # preview, match against this copy.
+    copied = refresh_feed(svc, now.date(), dry_run=dry_run)
+    print(f"bioRxiv/medRxiv: {copied} new preprints copied")
+    if not dry_run and (retried := ss.retry_stuck_imports(svc, now)):
+        print(f"  {retried} interrupted imports retried")
     searches = due_searches(svc, now)
     if not searches:
         return 0, 0, 0
-    copied = refresh_feed(svc, now.date(), dry_run=dry_run)
-    print(f"bioRxiv/medRxiv: {copied} new preprints copied")
     feed_since = min(ss.window(s["last_run_at"], now.date())[0] for s in searches)
     feed = ss.rxiv_feed(svc, feed_since) if any("biorxiv" in s["sources"] for s in searches) else []
     started = time.monotonic()

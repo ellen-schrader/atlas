@@ -7,12 +7,15 @@ duplicate pairs and link clinical trials -- the steps every importer repeated.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from paper_radar.ingest.metadata import PaperMetadata
 from paper_radar.ingest.urls import _normalize_key
 
 from .config import get_api_settings
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,10 +77,16 @@ def add_to_lab(
         if getattr(insert_exc, "code", None) == "23505":
             return Added(paper_id, False)
         raise
-    if needs_embedding and get_api_settings().voyage_api_key:
-        _embed_and_store(paper_id, meta.title, meta.abstract)
-    if needs_embedding:
-        _enrich_and_store(paper_id, meta.title, meta.abstract)
-    suggest_for_post(team_id, paper_id)
-    link_paper(team_id, paper_id)  # clinical trials; never raises
+    # The paper is in the lab now; what follows is best effort. A failure is
+    # logged, not raised, so a caller doesn't count a posted paper as lost
+    # (the embedding and tag backfills retry what is still missing).
+    try:
+        if needs_embedding and get_api_settings().voyage_api_key:
+            _embed_and_store(paper_id, meta.title, meta.abstract)
+        if needs_embedding:
+            _enrich_and_store(paper_id, meta.title, meta.abstract)
+        suggest_for_post(team_id, paper_id)
+        link_paper(team_id, paper_id)  # clinical trials; never raises
+    except Exception as exc:
+        log.warning("after posting paper %s to team %s: %s", paper_id, team_id, exc)
     return Added(paper_id, True)

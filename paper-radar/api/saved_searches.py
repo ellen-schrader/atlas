@@ -21,9 +21,10 @@ import threading
 import time
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from paper_radar.ingest.metadata import PaperMetadata, fetch_metadata
 from paper_radar.ingest.urls import norm_doi
@@ -31,9 +32,9 @@ from paper_radar.search import query as q
 from paper_radar.search import sources
 from paper_radar.search.sources import Hit, SourceError
 
-from .deps import require_token
+from .deps import require_feature, require_token
 from .ratelimit import PerUserRateLimiter
-from .supa import get_user_id, service_client, user_client
+from .supa import service_client
 
 log = logging.getLogger(__name__)
 
@@ -42,12 +43,16 @@ SOURCES = ("pubmed", "biorxiv", "arxiv")
 MAX_SEARCHES = 10  # per person per lab
 MAX_PER_CALL = 50  # suggestions imported or dismissed in one request
 WINDOW_DAYS = 7  # what a first run, and the preview, look back over
-OVERLAP_DAYS = 1  # later runs reach back past the last one, for late indexing
+OVERLAP_DAYS = 3  # later runs reach back past the last one: arXiv announces a
+# Thursday submission on Sunday evening, and PubMed indexes late too
+RETRY_RUNS = 3  # a failing search is tried daily this many times, then weekly
+IMPORT_STUCK_AFTER = timedelta(hours=1)  # an import still running after this was lost
 
 router = APIRouter(prefix="/saved-searches", tags=["saved-searches"])
 
-_NOT_FOUND = "Not Found"  # FastAPI's own wording for an unknown route
-_SEARCH_COLUMNS = "id, user_id, team_id, name, query, sources, active, last_run_at, last_error"
+_SEARCH_COLUMNS = (
+    "id, user_id, team_id, name, query, sources, active, last_run_at, last_error, failed_runs"
+)
 _CANDIDATE_COLUMNS = "key, source, doi, pmid, url, title, authors, venue, published_on, abstract"
 
 
@@ -263,9 +268,11 @@ def run_saved_search(svc, search: dict, today: date, feed: list[dict] | None) ->
     new = file_hits(svc, search, [h for hits in found.values() for h in hits])
     error = "; ".join(f"{s}: {e}" for s, e in errors.items())
     # A source that failed keeps the search due, so tomorrow's run covers its
-    # missed days too; what the others found is filed already (and not twice).
-    changes: dict = {"last_error": error or None}
-    if not error:
+    # missed days too (what the others found is filed already, and not twice).
+    # One that keeps failing -- a query PubMed rejects -- goes back to weekly.
+    failed_runs = (search.get("failed_runs") or 0) + 1 if error else 0
+    changes: dict = {"last_error": error or None, "failed_runs": failed_runs}
+    if failed_runs == 0 or failed_runs >= RETRY_RUNS:
         changes["last_run_at"] = datetime.now(UTC).isoformat()
     svc.table("saved_searches").update(changes).eq("id", search["id"]).execute()
     return new, error
@@ -317,8 +324,9 @@ def _hit_of(c: dict) -> Hit:
 
 
 def take_pending(svc, user_id: str, team_id: str, ids: list[str], status: str) -> list[dict]:
-    """Move the caller's own pending suggestions among ``ids`` to ``status`` and
-    return them with their papers. Others' ids, and answered ones, are ignored."""
+    """Move the caller's own pending suggestions among ``ids`` to ``status``
+    ('importing' or 'dismissed') and return them with their papers. Others'
+    ids, and answered ones, are ignored."""
     rows = (
         svc.table("search_suggestions")
         .update({"status": status, "decided_at": datetime.now(UTC).isoformat()})
@@ -330,6 +338,11 @@ def take_pending(svc, user_id: str, team_id: str, ids: list[str], status: str) -
         .data
         or []
     )
+    return with_candidates(svc, rows)
+
+
+def with_candidates(svc, rows: list[dict]) -> list[dict]:
+    """``rows`` with each one's candidate paper under "candidate"."""
     if not rows:
         return []
     cands = (
@@ -360,12 +373,29 @@ def _meta_of(c: dict) -> PaperMetadata:
     )
 
 
-def import_taken(team_id: str, user_id: str, taken: list[dict]) -> None:
-    """Background: add each taken suggestion's paper to the lab as the person.
+def _import_meta(c: dict) -> PaperMetadata:
+    """What to store: the full lookup posting a link does (venue, keywords,
+    preprint links), else the source's own record. The source's DOI and
+    abstract fill gaps in the lookup, so later DOI matching finds the paper."""
+    try:
+        meta = fetch_metadata(c["url"])
+    except Exception as exc:
+        log.info("lookup of %s failed, using the source's record: %s", c["url"], exc)
+        return _meta_of(c)
+    if not meta.title:
+        return _meta_of(c)
+    if not meta.doi:
+        meta.doi = norm_doi(c.get("doi"))
+    if not meta.abstract:
+        meta.abstract = c.get("abstract")
+    return meta
 
-    The full metadata lookup (what posting a link does) runs first, for venue,
-    keywords and preprint links; the source's record is the fallback. A paper
-    that cannot be added goes back to pending, so it can be tried again."""
+
+def import_taken(team_id: str, user_id: str, taken: list[dict]) -> None:
+    """Background: add each taken ('importing') suggestion's paper to the lab as
+    the person, then mark it imported. One that fails goes back to pending, to
+    be tried again; one this never reaches (the machine stopped) is retried by
+    the daily job (:func:`retry_stuck_imports`)."""
     from .lab_papers import add_to_lab  # lab_papers imports app, which imports this
 
     svc = service_client()
@@ -374,15 +404,12 @@ def import_taken(team_id: str, user_id: str, taken: list[dict]) -> None:
         if not c:
             continue
         try:
-            meta = fetch_metadata(c["url"])
-            if not meta.title:
-                meta = _meta_of(c)
             added = add_to_lab(
-                svc, team_id, meta, c["url"], source="saved_search", posted_by=user_id
+                svc, team_id, _import_meta(c), c["url"], source="saved_search", posted_by=user_id
             )
-            svc.table("search_suggestions").update({"paper_id": added.paper_id}).eq(
-                "id", row["id"]
-            ).execute()
+            svc.table("search_suggestions").update(
+                {"status": "imported", "paper_id": added.paper_id}
+            ).eq("id", row["id"]).execute()
         except Exception as exc:
             log.warning("importing suggestion %s for team %s failed: %s", row["id"], team_id, exc)
             svc.table("search_suggestions").update({"status": "pending", "decided_at": None}).eq(
@@ -390,19 +417,31 @@ def import_taken(team_id: str, user_id: str, taken: list[dict]) -> None:
             ).execute()
 
 
+def retry_stuck_imports(svc, now: datetime) -> int:
+    """Finish imports the API never got to (it stopped mid-import). Returns how many."""
+    rows = (
+        svc.table("search_suggestions")
+        .select("id, user_id, team_id, candidate_id")
+        .eq("status", "importing")
+        .lt("decided_at", (now - IMPORT_STUCK_AFTER).isoformat())
+        .limit(500)
+        .execute()
+        .data
+        or []
+    )
+    by_owner: dict[tuple[str, str], list[dict]] = {}
+    for row in with_candidates(svc, rows):
+        by_owner.setdefault((row["team_id"], row["user_id"]), []).append(row)
+    for (team_id, user_id), taken in by_owner.items():
+        import_taken(team_id, user_id, taken)
+    return len(rows)
+
+
 # --- API -----------------------------------------------------------------------------------
 
 
 def _require_feature(token: str, team_id: str) -> str:
-    """The caller's id, or 404 unless the feature is on for them in this lab.
-    Asked as the caller, so has_feature() checks membership too."""
-    user_id = get_user_id(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    ok = user_client(token).rpc("has_feature", {"t": team_id, "f": FEATURE}).execute().data
-    if ok is not True:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    return user_id
+    return require_feature(token, team_id, FEATURE)
 
 
 # Each preview or run-now reaches PubMed and arXiv; arXiv asks for 3 s between calls.
@@ -411,48 +450,39 @@ _run_limiter = PerUserRateLimiter(
 )
 
 
-def _validate_query(query: str) -> str:
+def _checked_query(query: str) -> str:
+    """The query, stripped, or a 422 saying what is wrong with it in words (a
+    pydantic validator would answer with a list the web app cannot show)."""
     query = query.strip()
     try:
         q.parse(query)
     except q.QueryError as exc:
-        raise ValueError(str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return query
 
 
-def _validate_sources(picked: list[str]) -> list[str]:
+def _checked_sources(picked: list[str]) -> list[str]:
     picked = [s for s in SOURCES if s in set(picked)]  # canonical order, no repeats
     if not picked:
-        raise ValueError("Pick at least one of: PubMed, bioRxiv/medRxiv, arXiv.")
+        raise HTTPException(
+            status_code=422, detail="Pick at least one of: PubMed, bioRxiv/medRxiv, arXiv."
+        )
     return picked
 
 
 class SearchIn(BaseModel):
-    team_id: str
+    team_id: UUID
     name: str = Field(min_length=1, max_length=120)
     query: str = Field(min_length=1, max_length=2000)
-    sources: list[str] = Field(default_factory=lambda: list(SOURCES))
-
-    _query = field_validator("query")(_validate_query)
-    _sources = field_validator("sources")(_validate_sources)
+    sources: list[str] = Field(default_factory=lambda: list(SOURCES), max_length=10)
 
 
 class SearchPatch(BaseModel):
-    team_id: str
+    team_id: UUID
     name: str | None = Field(default=None, min_length=1, max_length=120)
     query: str | None = Field(default=None, min_length=1, max_length=2000)
-    sources: list[str] | None = None
+    sources: list[str] | None = Field(default=None, max_length=10)
     active: bool | None = None
-
-    @field_validator("query")
-    @classmethod
-    def _query(cls, v: str | None) -> str | None:
-        return None if v is None else _validate_query(v)
-
-    @field_validator("sources")
-    @classmethod
-    def _sources(cls, v: list[str] | None) -> list[str] | None:
-        return None if v is None else _validate_sources(v)
 
 
 class SavedSearch(BaseModel):
@@ -467,12 +497,9 @@ class SavedSearch(BaseModel):
 
 
 class PreviewIn(BaseModel):
-    team_id: str
+    team_id: UUID
     query: str = Field(min_length=1, max_length=2000)
-    sources: list[str] = Field(default_factory=lambda: list(SOURCES))
-
-    _query = field_validator("query")(_validate_query)
-    _sources = field_validator("sources")(_validate_sources)
+    sources: list[str] = Field(default_factory=lambda: list(SOURCES), max_length=10)
 
 
 class PaperOut(BaseModel):
@@ -503,8 +530,8 @@ class Suggestion(BaseModel):
 
 
 class Decide(BaseModel):
-    team_id: str
-    ids: list[str] = Field(min_length=1, max_length=MAX_PER_CALL)
+    team_id: UUID
+    ids: list[UUID] = Field(min_length=1, max_length=MAX_PER_CALL)
 
 
 class Decided(BaseModel):
@@ -550,14 +577,15 @@ def _run_now(search: dict) -> None:
 
 
 @router.get("", response_model=list[SavedSearch])
-def my_searches(team_id: str, token: str = Depends(require_token)) -> list[SavedSearch]:
-    user_id = _require_feature(token, team_id)
+def my_searches(team_id: UUID, token: str = Depends(require_token)) -> list[SavedSearch]:
+    team = str(team_id)
+    user_id = _require_feature(token, team)
     svc = service_client()
     rows = (
         svc.table("saved_searches")
         .select(_SEARCH_COLUMNS)
         .eq("user_id", user_id)
-        .eq("team_id", team_id)
+        .eq("team_id", team)
         .order("created_at")
         .execute()
         .data
@@ -567,7 +595,7 @@ def my_searches(team_id: str, token: str = Depends(require_token)) -> list[Saved
         svc.table("search_suggestions")
         .select("saved_search_id")
         .eq("user_id", user_id)
-        .eq("team_id", team_id)
+        .eq("team_id", team)
         .eq("status", "pending")
         .limit(5000)
         .execute()
@@ -577,20 +605,28 @@ def my_searches(team_id: str, token: str = Depends(require_token)) -> list[Saved
     counts: dict[str, int] = {}
     for p in pending:
         counts[p["saved_search_id"]] = counts.get(p["saved_search_id"], 0) + 1
-    return [SavedSearch(**r, pending=counts.get(r["id"], 0)) for r in rows]
+    return [_search_out(r, counts.get(r["id"], 0)) for r in rows]
+
+
+def _search_out(row: dict, pending: int = 0) -> SavedSearch:
+    return SavedSearch(
+        **{k: row.get(k) for k in SavedSearch.model_fields if k != "pending"}, pending=pending
+    )
 
 
 @router.post("", response_model=SavedSearch, status_code=201)
 def create_search(
     req: SearchIn, background: BackgroundTasks, token: str = Depends(require_token)
 ) -> SavedSearch:
-    user_id = _require_feature(token, req.team_id)
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
+    query, picked = _checked_query(req.query), _checked_sources(req.sources)
     svc = service_client()
     have = (
         svc.table("saved_searches")
         .select("id", count="exact")
         .eq("user_id", user_id)
-        .eq("team_id", req.team_id)
+        .eq("team_id", team)
         .execute()
         .count
         or 0
@@ -605,73 +641,81 @@ def create_search(
         .insert(
             {
                 "user_id": user_id,
-                "team_id": req.team_id,
+                "team_id": team,
                 "name": req.name.strip(),
-                "query": req.query,
-                "sources": req.sources,
+                "query": query,
+                "sources": picked,
             }
         )
         .execute()
         .data[0]
     )
     background.add_task(_run_now, row)
-    return SavedSearch(**{k: row.get(k) for k in SavedSearch.model_fields if k != "pending"})
+    return _search_out(row)
 
 
 @router.patch("/{search_id}", response_model=SavedSearch)
 def update_search(
-    search_id: str,
+    search_id: UUID,
     req: SearchPatch,
     background: BackgroundTasks,
     token: str = Depends(require_token),
 ) -> SavedSearch:
-    user_id = _require_feature(token, req.team_id)
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
     svc = service_client()
-    current = _own_search(svc, search_id, user_id, req.team_id)
-    changes = req.model_dump(exclude_unset=True, exclude={"team_id"})
-    changes = {k: v for k, v in changes.items() if v is not None}
-    if "name" in changes:
-        changes["name"] = changes["name"].strip()
+    current = _own_search(svc, str(search_id), user_id, team)
+    changes: dict = {}
+    if req.name is not None:
+        changes["name"] = req.name.strip()
+    if req.query is not None:
+        changes["query"] = _checked_query(req.query)
+    if req.sources is not None:
+        changes["sources"] = _checked_sources(req.sources)
+    if req.active is not None:
+        changes["active"] = req.active
     # A changed query or source list starts again from a week back.
     rerun = any(changes.get(k, current[k]) != current[k] for k in ("query", "sources"))
     if rerun:
         _run_limiter.check(user_id)
-        changes["last_run_at"] = None
+        changes.update(last_run_at=None, last_error=None, failed_runs=0)
     changes["updated_at"] = datetime.now(UTC).isoformat()
     row = (
         svc.table("saved_searches")
         .update(changes)
-        .eq("id", search_id)
+        .eq("id", str(search_id))
         .eq("user_id", user_id)
         .execute()
         .data[0]
     )
     if rerun and row["active"]:
         background.add_task(_run_now, row)
-    return SavedSearch(**{k: row.get(k) for k in SavedSearch.model_fields if k != "pending"})
+    return _search_out(row)
 
 
 @router.delete("/{search_id}", status_code=204)
-def delete_search(search_id: str, team_id: str, token: str = Depends(require_token)) -> None:
-    user_id = _require_feature(token, team_id)
+def delete_search(search_id: UUID, team_id: UUID, token: str = Depends(require_token)) -> None:
+    user_id = _require_feature(token, str(team_id))
     svc = service_client()
-    _own_search(svc, search_id, user_id, team_id)
-    svc.table("saved_searches").delete().eq("id", search_id).eq("user_id", user_id).execute()
+    _own_search(svc, str(search_id), user_id, str(team_id))
+    svc.table("saved_searches").delete().eq("id", str(search_id)).eq("user_id", user_id).execute()
 
 
 @router.post("/preview", response_model=list[SourceResult])
 def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceResult]:
     """What the query finds over the past week, before it is saved."""
-    user_id = _require_feature(token, req.team_id)
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
+    query, picked = _checked_query(req.query), _checked_sources(req.sources)
     _run_limiter.check(user_id)
     svc = service_client()
     since, until = window(None, date.today())
-    feed = rxiv_feed(svc, since) if "biorxiv" in req.sources else None
-    found, errors = run_query(req.query, req.sources, since, until, feed=feed)
+    feed = rxiv_feed(svc, since) if "biorxiv" in picked else None
+    found, errors = run_query(query, picked, since, until, feed=feed)
     out = []
-    for source in req.sources:
+    for source in picked:
         hits = _dedupe(found.get(source, []))
-        in_lab = keys_in_lab(svc, req.team_id, hits[:10])
+        in_lab = keys_in_lab(svc, team, hits[:10])
         out.append(
             SourceResult(
                 source=source,
@@ -684,9 +728,9 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
 
 
 @router.get("/suggestions", response_model=list[Suggestion])
-def my_suggestions(team_id: str, token: str = Depends(require_token)) -> list[Suggestion]:
-    user_id = _require_feature(token, team_id)
-    rows = list_suggestions(service_client(), user_id, team_id)
+def my_suggestions(team_id: UUID, token: str = Depends(require_token)) -> list[Suggestion]:
+    user_id = _require_feature(token, str(team_id))
+    rows = list_suggestions(service_client(), user_id, str(team_id))
     return [
         Suggestion(
             id=r["id"],
@@ -704,15 +748,18 @@ def import_suggestions(
 ) -> Decided:
     """Add the papers to the lab. They appear within a minute or so: each is
     looked up in full first, as posting a link is."""
-    user_id = _require_feature(token, req.team_id)
-    taken = take_pending(service_client(), user_id, req.team_id, req.ids, "imported")
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
+    ids = [str(i) for i in req.ids]
+    taken = take_pending(service_client(), user_id, team, ids, "importing")
     if taken:
-        background.add_task(import_taken, req.team_id, user_id, taken)
+        background.add_task(import_taken, team, user_id, taken)
     return Decided(count=len(taken))
 
 
 @router.post("/suggestions/dismiss", response_model=Decided)
 def dismiss_suggestions(req: Decide, token: str = Depends(require_token)) -> Decided:
-    user_id = _require_feature(token, req.team_id)
-    taken = take_pending(service_client(), user_id, req.team_id, req.ids, "dismissed")
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
+    taken = take_pending(service_client(), user_id, team, [str(i) for i in req.ids], "dismissed")
     return Decided(count=len(taken))

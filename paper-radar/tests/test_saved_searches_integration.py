@@ -275,7 +275,7 @@ def test_bad_query_and_limits(world, monkeypatch):
     bad = client.post(
         "/saved-searches", json={"team_id": lab, "name": "x", "query": "(tls"}, headers=a_auth
     )
-    assert bad.status_code == 422 and "never closed" in bad.text
+    assert bad.status_code == 422 and bad.json() == {"detail": "A '(' is never closed."}
     none = client.post(
         "/saved-searches",
         json={"team_id": lab, "name": "x", "query": "tls", "sources": ["scopus"]},
@@ -328,3 +328,53 @@ def test_connectors_cannot_read_the_tables(world):
     for table in ("saved_searches", "search_suggestions", "search_candidates", "rxiv_feed"):
         with pytest.raises(Exception, match="permission denied"):
             as_user.table(table).select("*").limit(1).execute()
+
+
+def test_an_interrupted_import_is_finished_by_the_job(world, monkeypatch):
+    """The API machine stopped mid-import: the row is left 'importing'."""
+    from datetime import UTC, datetime, timedelta
+
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    _stub_pubmed(monkeypatch, [world.hit(1)])
+    client = TestClient(app)
+    body = {"team_id": lab, "name": "TLS", "query": "tls", "sources": ["pubmed"]}
+    assert client.post("/saved-searches", json=body, headers=a_auth).status_code == 201
+    (sugg,) = client.get(
+        "/saved-searches/suggestions", params={"team_id": lab}, headers=a_auth
+    ).json()
+    two_hours_ago = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    world.admin.table("search_suggestions").update(
+        {"status": "importing", "decided_at": two_hours_ago}
+    ).eq("id", sugg["id"]).execute()
+
+    assert ss.retry_stuck_imports(service_client(), datetime.now(UTC)) >= 1
+    row = world.admin.table("search_suggestions").select("status, paper_id").eq("id", sugg["id"])
+    (done,) = row.execute().data
+    assert done["status"] == "imported" and done["paper_id"]
+    post = world.admin.table("paper_posts").select("posted_by").eq("team_id", lab).execute().data
+    assert post == [{"posted_by": a}]
+
+
+def test_malformed_ids_are_422_not_500(world):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    client = TestClient(app)
+    bad = client.post(
+        "/saved-searches/suggestions/dismiss", json={"team_id": lab, "ids": ["x"]}, headers=a_auth
+    )
+    assert bad.status_code == 422
+    bad = client.patch("/saved-searches/nope", json={"team_id": lab, "name": "x"}, headers=a_auth)
+    assert bad.status_code == 422
+    bad = client.get("/saved-searches", params={"team_id": "lab"}, headers=a_auth)
+    assert bad.status_code == 422
+
+
+def test_query_errors_come_back_as_a_sentence(world):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    client = TestClient(app)
+    bad = client.post(
+        "/saved-searches/preview", json={"team_id": lab, "query": "(tls"}, headers=a_auth
+    )
+    assert bad.status_code == 422 and bad.json() == {"detail": "A '(' is never closed."}

@@ -34,6 +34,10 @@ create table public.saved_searches (
     last_run_at timestamptz,
     -- Why the last run failed on a source, for the settings page; null when it ran.
     last_error  text,
+    -- Failed runs in a row. A failed run leaves the search due, so the next
+    -- day covers the same dates; after a few, it waits a week like the rest
+    -- (a query PubMed rejects fails every day).
+    failed_runs smallint not null default 0,
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );
@@ -82,9 +86,11 @@ create table public.search_suggestions (
     candidate_id    uuid not null references public.search_candidates (id) on delete cascade,
     -- The search that found it first. A deleted search leaves its suggestions.
     saved_search_id uuid references public.saved_searches (id) on delete set null,
+    -- 'importing': taken for import, which runs in the background; the daily
+    -- job retries one left there (the API machine stopped mid-import).
     -- 'in_library': someone added the paper to the lab another way meanwhile.
     status          text not null default 'pending'
-                    check (status in ('pending', 'imported', 'dismissed', 'in_library')),
+                    check (status in ('pending', 'importing', 'imported', 'dismissed', 'in_library')),
     paper_id        uuid references public.papers (id) on delete set null,
     decided_at      timestamptz,
     created_at      timestamptz not null default now(),
@@ -94,6 +100,8 @@ create table public.search_suggestions (
 create index search_suggestions_pending_idx
     on public.search_suggestions (user_id, team_id) where status = 'pending';
 create index search_suggestions_candidate_idx on public.search_suggestions (candidate_id);
+create index search_suggestions_importing_idx
+    on public.search_suggestions (decided_at) where status = 'importing';
 
 alter table public.search_suggestions enable row level security;
 revoke all on public.search_suggestions from public, anon, authenticated;

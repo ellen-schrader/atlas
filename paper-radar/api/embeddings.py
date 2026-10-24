@@ -24,10 +24,10 @@ log = logging.getLogger(__name__)
 # large batch of abstracts can exceed it in a single request. Small batches +
 # 429 backoff keep us under the limit.
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
-BATCH_SIZE = 16           # texts per request
-_RETRIES = 6              # attempts per batch on 429/5xx
-_TIMEOUT = 60             # seconds per request
-_RATE_LIMIT_WAIT = 30     # fallback seconds to wait on a 429 with no Retry-After
+BATCH_SIZE = 16  # texts per request
+_RETRIES = 6  # attempts per batch on 429/5xx
+_TIMEOUT = 60  # seconds per request
+_RATE_LIMIT_WAIT = 30  # fallback seconds to wait on a 429 with no Retry-After
 _RETRYABLE = {429, 500, 502, 503, 529}
 
 
@@ -97,8 +97,11 @@ def _embed_batch(batch: list[str], input_type: str, settings: ApiSettings) -> li
                     # Honor Retry-After when present; the free tier's per-minute
                     # limit needs a real cooldown, not a 1-2s backoff.
                     retry_after = (exc.headers or {}).get("Retry-After")
-                    time.sleep(int(retry_after) if retry_after and retry_after.isdigit()
-                               else _RATE_LIMIT_WAIT)
+                    time.sleep(
+                        int(retry_after)
+                        if retry_after and retry_after.isdigit()
+                        else _RATE_LIMIT_WAIT
+                    )
                 else:
                     time.sleep(2**attempt)
                 continue

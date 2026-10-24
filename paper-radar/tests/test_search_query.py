@@ -30,6 +30,22 @@ def test_operators_parentheses_and_field_tags():
     assert _arxiv("cancer NOT mouse[ti]") == "(all:cancer ANDNOT ti:mouse)"
 
 
+def test_operators_apply_left_to_right_like_pubmed():
+    # PubMed has no precedence: the same string must mean the same everywhere.
+    assert _arxiv("immunotherapy OR checkpoint AND melanoma") == (
+        "((all:immunotherapy OR all:checkpoint) AND all:melanoma)"
+    )
+    assert not _hits("immunotherapy OR checkpoint AND melanoma", "Immunotherapy in lung cancer")
+
+
+def test_a_tag_may_follow_a_space():
+    assert _arxiv("tertiary lymphoid structure [tiab] AND smith [au]") == (
+        "(((all:tertiary AND all:lymphoid) AND (ti:structure OR abs:structure)) AND au:smith)"
+    )
+    with pytest.raises(QueryError, match="must follow"):
+        parse("[tiab] cancer")
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
