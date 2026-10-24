@@ -128,7 +128,10 @@ function SearchForm({
     tested !== null &&
     tested.query === f.query &&
     tested.sources === f.sources.join();
-  const ready = f.query.trim() && f.sources.length > 0;
+  // A new search may go unnamed (it is called by its query); an existing one
+  // keeps a name rather than being renamed by clearing the field.
+  const ready =
+    f.query.trim() && f.sources.length > 0 && (!search || f.name.trim());
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (ready && !save.isPending) save.mutate();
@@ -192,9 +195,13 @@ function SearchForm({
 
       <label className="flex flex-col gap-1 text-sm font-medium text-fg">
         <span>
-          Name <span className="font-normal text-muted">(optional)</span>
+          Name{" "}
+          {!search && (
+            <span className="font-normal text-muted">(optional)</span>
+          )}
         </span>
         <Input
+          required={!!search}
           maxLength={120}
           value={f.name}
           onChange={(e) => setF({ ...f, name: e.target.value })}
@@ -318,5 +325,7 @@ function PreviewResults({ results }: { results: SourceResult[] }) {
 /** A name for a search that wasn't given one: its query, cut short. */
 function nameFor(query: string): string {
   const q = query.trim().replace(/\s+/g, " ");
-  return q.length > 60 ? `${q.slice(0, 59)}…` : q;
+  // By characters, not UTF-16 units, so an emoji isn't cut in half.
+  const chars = Array.from(q);
+  return chars.length > 60 ? `${chars.slice(0, 59).join("")}…` : q;
 }

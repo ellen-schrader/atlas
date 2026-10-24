@@ -114,14 +114,30 @@ function SuggestionsPage() {
     const items = new Map<string, Suggestion[]>();
     for (const x of all) {
       const g = groupOf(x);
-      items.set(g, [...(items.get(g) ?? []), x]);
+      const group = items.get(g);
+      if (group) group.push(x);
+      else items.set(g, [x]);
     }
     const named = list
       .filter((x) => items.has(x.id))
-      .map((x) => ({ id: x.id, name: x.name, items: items.get(x.id)! }));
+      .map((x) => ({
+        id: x.id,
+        name: x.name,
+        items: items.get(x.id)!,
+        // All it has waiting; the list holds the newest few hundred overall.
+        count: Math.max(x.pending, items.get(x.id)!.length),
+      }));
     const earlier = items.get(EARLIER);
     return earlier
-      ? [...named, { id: EARLIER, name: "Deleted searches", items: earlier }]
+      ? [
+          ...named,
+          {
+            id: EARLIER,
+            name: "Deleted searches",
+            items: earlier,
+            count: earlier.length,
+          },
+        ]
       : named;
   }, [all, list, byId]);
   const pickedIds = all.filter((x) => picked.has(x.id)).map((x) => x.id);
@@ -207,9 +223,23 @@ function SuggestionsPage() {
 
   const togglePick = (id: string) => setPicked((cur) => toggled(cur, id));
   const toggleOpen = (id: string) => setOpen((cur) => toggled(cur, id));
-  const toggleFolded = (id: string) => setFolded((cur) => toggled(cur, id));
-  // Pick a whole group, or unpick it when it is all picked already.
-  const pickGroup = (items: Suggestion[]) =>
+  // Folding a group unpicks it, so Add / Dismiss never act on hidden rows.
+  const toggleFolded = (g: { id: string; items: Suggestion[] }) => {
+    if (!folded.has(g.id)) {
+      const hidden = new Set(g.items.map((x) => x.id));
+      setPicked((cur) => new Set([...cur].filter((id) => !hidden.has(id))));
+    }
+    setFolded((cur) => toggled(cur, g.id));
+  };
+  // Pick a whole group, or unpick it when it is all picked already. A folded
+  // group opens, so what is picked is in view.
+  const pickGroup = (g: { id: string; items: Suggestion[] }) => {
+    const items = g.items;
+    setFolded((cur) => {
+      const next = new Set(cur);
+      next.delete(g.id);
+      return next;
+    });
     setPicked((cur) => {
       const next = new Set(cur);
       const every = items.every((x) => cur.has(x.id));
@@ -219,23 +249,7 @@ function SuggestionsPage() {
       }
       return next;
     });
-
-  const rows = (items: Suggestion[]) => (
-    <ul className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
-      {items.map((s) => (
-        <SuggestionRow
-          key={s.id}
-          suggestion={s}
-          picked={picked.has(s.id)}
-          abstractOpen={open.has(s.id)}
-          onPick={() => togglePick(s.id)}
-          onToggleAbstract={() => toggleOpen(s.id)}
-          onAdd={() => decide.mutate({ ids: [s.id], decision: "import" })}
-          onDismiss={() => decide.mutate({ ids: [s.id], decision: "dismiss" })}
-        />
-      ))}
-    </ul>
-  );
+  };
 
   const loading = searches.isPending || suggestions.isPending;
   const failed = searches.isError || suggestions.isError;
@@ -326,6 +340,7 @@ function SuggestionsPage() {
               {groups.map((g) => {
                 const isFolded = folded.has(g.id);
                 const every = g.items.every((x) => picked.has(x.id));
+                const listId = `group-${g.id}`;
                 return (
                   <section
                     key={g.id}
@@ -335,8 +350,9 @@ function SuggestionsPage() {
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => toggleFolded(g.id)}
+                        onClick={() => toggleFolded(g)}
                         aria-expanded={!isFolded}
+                        aria-controls={listId}
                         className="inline-flex min-w-0 items-center gap-1 text-sm font-semibold text-fg hover:text-accent"
                       >
                         <ChevronDown
@@ -349,19 +365,46 @@ function SuggestionsPage() {
                         />
                         <span className="truncate">{g.name}</span>
                         <span className="font-normal text-muted">
-                          · {g.items.length}
+                          · {g.count}
                         </span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => pickGroup(g.items)}
-                        aria-label={`${every ? "Deselect" : "Select"} all from “${g.name}”`}
+                        onClick={() => pickGroup(g)}
+                        aria-pressed={every}
+                        aria-label={`Select all ${g.items.length} from “${g.name}”`}
                         className="ml-auto shrink-0 text-xs font-medium text-muted hover:text-fg"
                       >
                         {every ? "Deselect all" : "Select all"}
                       </button>
                     </div>
-                    {!isFolded && rows(g.items)}
+                    {!isFolded && (
+                      <ul
+                        id={listId}
+                        className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm"
+                      >
+                        {g.items.map((s) => (
+                          <SuggestionRow
+                            key={s.id}
+                            suggestion={s}
+                            picked={picked.has(s.id)}
+                            abstractOpen={open.has(s.id)}
+                            busy={decide.isPending}
+                            onPick={() => togglePick(s.id)}
+                            onToggleAbstract={() => toggleOpen(s.id)}
+                            onAdd={() =>
+                              decide.mutate({ ids: [s.id], decision: "import" })
+                            }
+                            onDismiss={() =>
+                              decide.mutate({
+                                ids: [s.id],
+                                decision: "dismiss",
+                              })
+                            }
+                          />
+                        ))}
+                      </ul>
+                    )}
                   </section>
                 );
               })}
@@ -376,6 +419,7 @@ function SuggestionsPage() {
                   </span>
                   <Button
                     size="sm"
+                    disabled={decide.isPending}
                     onClick={() =>
                       decide.mutate({ ids: pickedIds, decision: "import" })
                     }
@@ -386,6 +430,7 @@ function SuggestionsPage() {
                   <Button
                     size="sm"
                     variant="secondary"
+                    disabled={decide.isPending}
                     onClick={() =>
                       decide.mutate({ ids: pickedIds, decision: "dismiss" })
                     }
@@ -521,6 +566,7 @@ function SuggestionRow({
   suggestion,
   picked,
   abstractOpen,
+  busy,
   onPick,
   onToggleAbstract,
   onAdd,
@@ -529,6 +575,8 @@ function SuggestionRow({
   suggestion: Suggestion;
   picked: boolean;
   abstractOpen: boolean;
+  /** An add or dismiss is on its way: no second click. */
+  busy: boolean;
   onPick: () => void;
   onToggleAbstract: () => void;
   onAdd: () => void;
@@ -602,6 +650,7 @@ function SuggestionRow({
         <Button
           size="sm"
           variant="secondary"
+          disabled={busy}
           onClick={onAdd}
           aria-label={`Add “${p.title}” to the library`}
           title="Add to the library"
@@ -609,7 +658,11 @@ function SuggestionRow({
           <Plus size={13} aria-hidden />
           Add
         </Button>
-        <IconButton label={`Dismiss “${p.title}”`} onClick={onDismiss}>
+        <IconButton
+          label={`Dismiss “${p.title}”`}
+          onClick={onDismiss}
+          disabled={busy}
+        >
           <X size={15} />
         </IconButton>
       </div>
@@ -621,21 +674,24 @@ function IconButton({
   label,
   onClick,
   danger,
+  disabled,
   children,
 }: {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       title={label}
       aria-label={label}
       className={cn(
-        "grid h-8 w-8 place-items-center rounded-md text-faint transition hover:bg-surface-3",
+        "grid h-8 w-8 place-items-center rounded-md text-faint transition hover:bg-surface-3 disabled:opacity-50",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         danger ? "hover:text-danger" : "hover:text-fg",
       )}
