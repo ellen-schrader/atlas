@@ -282,10 +282,18 @@ def run_saved_search(svc, search: dict, today: date, feed: list[dict] | None) ->
 # --- suggestions -------------------------------------------------------------------------
 
 
-def list_suggestions(svc, user_id: str, team_id: str, limit: int = 300) -> list[dict]:
-    """The person's pending suggestions in this lab, newest first. Ones the lab
-    has gained another way since they were filed are marked and left out."""
-    rows = (
+def list_suggestions(
+    svc,
+    user_id: str,
+    team_id: str,
+    limit: int = 300,
+    offset: int = 0,
+    search_ids: list[str] | None = None,
+) -> list[dict]:
+    """The person's pending suggestions in this lab, newest first (only those
+    of ``search_ids``, if given). Ones the lab has gained another way since
+    they were filed are marked and left out, so a page can come back short."""
+    query = (
         svc.table("search_suggestions")
         .select(
             f"id, created_at, saved_search_id, candidate:search_candidates({_CANDIDATE_COLUMNS})"
@@ -293,8 +301,13 @@ def list_suggestions(svc, user_id: str, team_id: str, limit: int = 300) -> list[
         .eq("user_id", user_id)
         .eq("team_id", team_id)
         .eq("status", "pending")
-        .order("created_at", desc=True)
-        .limit(limit)
+    )
+    if search_ids is not None:
+        query = query.in_("saved_search_id", search_ids)
+    rows = (
+        query.order("created_at", desc=True)
+        .order("id")
+        .range(offset, offset + limit - 1)
         .execute()
         .data
         or []
@@ -445,12 +458,6 @@ def _require_feature(token: str, team_id: str) -> str:
     return require_feature(token, team_id, FEATURE)
 
 
-# Each preview or run-now reaches PubMed and arXiv; arXiv asks for 3 s between calls.
-_run_limiter = PerUserRateLimiter(
-    20, 3600.0, lambda: HTTPException(status_code=429, detail="Too many searches. Try later.")
-)
-
-
 class Refused(Exception):
     """A request this module turns down, in words for the person; ``status`` is
     the HTTP status the API answers with."""
@@ -458,6 +465,13 @@ class Refused(Exception):
     def __init__(self, message: str, status: int = 422) -> None:
         super().__init__(message)
         self.status = status
+
+
+# Each preview or run-now reaches PubMed and arXiv; arXiv asks for 3 s between
+# calls. One budget per person, shared by the web app and the Claude tools.
+run_limiter = PerUserRateLimiter(
+    20, 3600.0, lambda: Refused("Too many searches run in an hour. Try again later.", 429)
+)
 
 
 @contextmanager
@@ -483,11 +497,26 @@ def checked_query(query: str) -> str:
     return query
 
 
+_SOURCE_ALIASES = {"medrxiv": "biorxiv"}  # one feed holds both servers
+
+
 def checked_sources(picked: Iterable[str]) -> list[str]:
-    picked = [s for s in SOURCES if s in set(picked)]  # canonical order, no repeats
-    if not picked:
-        raise Refused("Pick at least one of: PubMed, bioRxiv/medRxiv, arXiv.")
-    return picked
+    """The sources in canonical order, without repeats; Refused naming the
+    accepted keys if any is unknown or none is given."""
+    asked = {_SOURCE_ALIASES.get(s.strip().lower(), s.strip().lower()) for s in picked}
+    unknown = sorted(asked - set(SOURCES))
+    if unknown or not asked:
+        what = f"Unknown source {', '.join(map(repr, unknown))}. " if unknown else ""
+        raise Refused(f"{what}Pick any of: pubmed, biorxiv (with medRxiv), arxiv.")
+    return [s for s in SOURCES if s in asked]
+
+
+def checked_name(name: str) -> str:
+    """The name on one line, or Refused."""
+    name = " ".join(name.split())
+    if not name or len(name) > 120:
+        raise Refused("Give the search a name of up to 120 characters.")
+    return name
 
 
 def own_searches(svc, user_id: str, team_id: str) -> list[dict]:
@@ -520,14 +549,12 @@ def own_searches(svc, user_id: str, team_id: str) -> list[dict]:
     return [{**r, "pending": counts.get(r["id"], 0)} for r in rows]
 
 
-def new_search(
+def checked_new(
     svc, user_id: str, team_id: str, name: str, query: str, picked: Iterable[str]
-) -> dict:
-    """Save a search for the person (checked; Refused if not). The caller runs it."""
-    name = " ".join(name.split())
-    if not name or len(name) > 120:
-        raise Refused("Give the search a name of up to 120 characters.")
-    query, picked = checked_query(query), checked_sources(picked)
+) -> tuple[str, str, list[str]]:
+    """(name, query, sources) for a new search, checked, under the person's
+    cap; Refused if not."""
+    name, query, picked = checked_name(name), checked_query(query), checked_sources(picked)
     have = (
         svc.table("saved_searches")
         .select("id", count="exact")
@@ -539,6 +566,16 @@ def new_search(
     )
     if have >= MAX_SEARCHES:
         raise Refused(f"You have {MAX_SEARCHES} saved searches; delete one first.", 409)
+    return name, query, picked
+
+
+def new_search(
+    svc, user_id: str, team_id: str, name: str, query: str, picked: Iterable[str]
+) -> dict:
+    """Save a search for the person, checked and within their run budget
+    (Refused if not). The caller runs it."""
+    name, query, picked = checked_new(svc, user_id, team_id, name, query, picked)
+    run_limiter.check(user_id)
     return (
         svc.table("saved_searches")
         .insert(
@@ -574,6 +611,21 @@ def preview_results(svc, team_id: str, query: str, picked: list[str]) -> list[So
             )
         )
     return out
+
+
+def pending_count(svc, user_id: str, team_id: str) -> int:
+    """How many suggestions are waiting for the person in this lab."""
+    return (
+        svc.table("search_suggestions")
+        .select("id", count="exact")
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .eq("status", "pending")
+        .limit(1)
+        .execute()
+        .count
+        or 0
+    )
 
 
 def pending_by_ids(svc, user_id: str, team_id: str, ids: list[str]) -> list[dict]:
@@ -720,9 +772,6 @@ def create_search(
     user_id = _require_feature(token, team)
     svc = service_client()
     with _as_http():
-        checked_query(req.query)
-        checked_sources(req.sources)
-        _run_limiter.check(user_id)
         row = new_search(svc, user_id, team, req.name, req.query, req.sources)
     background.add_task(run_now, row)
     return _search_out(row)
@@ -740,9 +789,9 @@ def update_search(
     svc = service_client()
     current = _own_search(svc, str(search_id), user_id, team)
     changes: dict = {}
-    if req.name is not None:
-        changes["name"] = req.name.strip()
     with _as_http():
+        if req.name is not None:
+            changes["name"] = checked_name(req.name)
         if req.query is not None:
             changes["query"] = checked_query(req.query)
         if req.sources is not None:
@@ -752,7 +801,8 @@ def update_search(
     # A changed query or source list starts again from a week back.
     rerun = any(changes.get(k, current[k]) != current[k] for k in ("query", "sources"))
     if rerun:
-        _run_limiter.check(user_id)
+        with _as_http():
+            run_limiter.check(user_id)
         changes.update(last_run_at=None, last_error=None, failed_runs=0)
     changes["updated_at"] = datetime.now(UTC).isoformat()
     row = (
@@ -783,7 +833,7 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
     user_id = _require_feature(token, team)
     with _as_http():
         query, picked = checked_query(req.query), checked_sources(req.sources)
-    _run_limiter.check(user_id)
+        run_limiter.check(user_id)
     return preview_results(service_client(), team, query, picked)
 
 

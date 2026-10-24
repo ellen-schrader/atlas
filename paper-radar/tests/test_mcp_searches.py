@@ -99,3 +99,34 @@ def test_a_paper_line_links_to_its_source_safely():
     assert head == "[A (title)(https://evil) here](https://doi.org/10.1/x)"
     assert "A, B, C et al." in meta and "medRxiv" in meta
     assert len(abstract) < 620 and abstract.endswith("…")
+
+
+def test_one_lookup_serves_every_switch(monkeypatch):
+    from atlas_mcp import features
+
+    calls = []
+
+    class _Q:
+        def __init__(self, table):
+            self.table = table
+
+        def __getattr__(self, _a):
+            return lambda *a, **k: self
+
+        def execute(self):
+            calls.append(self.table)
+            rows = {
+                "user_features": [{"feature": "saved_searches"}],
+                "team_members": [{"team_id": "lab"}],
+                "team_features": [{"feature": "clinical_trials"}],
+            }
+            return SimpleNamespace(data=rows[self.table])
+
+    monkeypatch.setattr(
+        features, "service_client", lambda: SimpleNamespace(table=lambda name: _Q(name))
+    )
+    features._enabled_cache.clear()
+    assert searches.entitled("ada") and trials.entitled("ada")
+    assert not features.entitled("ada", "something_else")
+    assert len(calls) == 3  # one cold lookup, then the cache
+    assert not searches.entitled(None)

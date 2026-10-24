@@ -20,29 +20,20 @@ hides a paper from this person, so it doesn't ask twice.
 
 from __future__ import annotations
 
-import functools
 import threading
 from uuid import UUID
 
-import anyio
-
 from api import saved_searches as ss
-from api.ratelimit import PerUserRateLimiter
 from api.supa import service_client
 
 from . import features, lab
-from .tools import TOOL_THREADS, _excerpt, _md_link, _untrusted, audited, in_worker_thread
+from .tools import _excerpt, _md_link, _untrusted, audited, in_worker_thread
 
 FEATURE = ss.FEATURE
 NOT_AVAILABLE = "Saved searches aren't switched on for you in this lab."
 _SOURCE_LABEL = {"pubmed": "PubMed", "biorxiv": "bioRxiv/medRxiv", "arxiv": "arXiv"}
 _PAPER_SOURCE = {"pubmed": "PubMed", "biorxiv": "bioRxiv", "medrxiv": "medRxiv", "arxiv": "arXiv"}
 _ABSTRACT_CHARS = 600
-
-# A preview reaches PubMed and arXiv (which asks for 3 s between requests).
-_run_limiter = PerUserRateLimiter(
-    20, 3600.0, lambda: lab.LabError("Too many searches run in an hour. Try again later.")
-)
 
 
 def entitled(user_id: str | None) -> bool:
@@ -56,16 +47,11 @@ def _check_feature(team: dict) -> None:
 
 
 def _team(team_id: str | None) -> dict:
-    """The lab to act on, resolved as the caller (this also attributes the call
-    for the audit log), then the saved searches switch."""
-    team = lab.resolve_team(team_id)
-    _check_feature(team)
-    return team
+    """The lab to act on: resolved as the caller, then the saved searches switch."""
+    return features.team_for(team_id, FEATURE, NOT_AVAILABLE)
 
 
-def _offload(fn, *args):
-    """Blocking work off the event loop, as the caller, within the tools' threads."""
-    return anyio.to_thread.run_sync(functools.partial(fn, *args), limiter=TOOL_THREADS)
+_offload = features.offload
 
 
 def _page() -> str:
@@ -170,21 +156,25 @@ def list_suggestions(
     svc = service_client()
     user_id = lab.current_user_id()
     searches = {r["id"]: r for r in ss.own_searches(svc, user_id, team["id"])}
-    rows = ss.list_suggestions(svc, user_id, team["id"])
+    ids = None
     if search:
-        wanted = search.strip().lower()
-        ids = {i for i, r in searches.items() if r["name"].lower() == wanted}
+        wanted = " ".join(search.split()).lower()
+        ids = [i for i, r in searches.items() if r["name"].lower() == wanted]
         if not ids:
             names = ", ".join(r["name"] for r in searches.values()) or "none"
             return f"Error: you have no saved search called {search!r}. Yours: {names}."
-        rows = [r for r in rows if r.get("saved_search_id") in ids]
-    if not rows:
-        return f"No suggestions waiting{f' from {search!r}' if search else ''} in {team['name']}."
+    if ids is None:  # all of them, a deleted search's included
+        total = ss.pending_count(svc, user_id, team["id"])
+    else:
+        total = sum(searches[i]["pending"] for i in ids)
     limit = max(1, min(int(limit), 50))
     offset = max(0, int(offset))
-    shown = rows[offset : offset + limit]
+    shown = ss.list_suggestions(svc, user_id, team["id"], limit, offset, ids)
     if not shown:
-        return f"Only {len(rows)} suggestions are waiting; nothing past {offset}."
+        if offset and total:
+            return f"Only {total} suggestions are waiting; nothing past {offset}."
+        return f"No suggestions waiting{f' from {search!r}' if search else ''} in {team['name']}."
+    total = max(total, offset + len(shown))
     blocks = []
     for r in shown:
         found_by = (
@@ -194,12 +184,15 @@ def list_suggestions(
             f"{_paper_line(r['candidate'], abstract=True)}\n"
             f"  found by: {found_by} · suggestion id: {r['id']}"
         )
-    more = len(rows) - offset - len(shown)
-    tail = f"\n\n{more} more: call again with offset={offset + len(shown)}." if more > 0 else ""
+    # The next page starts after this one as asked for (some may have been
+    # left out because the lab has them now).
+    nxt = offset + limit
+    more = total - nxt
+    tail = f"\n\nAbout {more} more: call again with offset={nxt}." if more > 0 else ""
     # Titles, authors and abstracts come from PubMed, bioRxiv and arXiv: data.
     return (
-        f"{len(rows)} suggestions waiting in {team['name']}; "
-        f"{offset + 1}-{offset + len(shown)}:\n"
+        f"{total} suggestions waiting in {team['name']}; "
+        f"showing {len(shown)} from {offset + 1}:\n"
         + _untrusted("suggestions", "\n\n".join(blocks))
         + tail
     )
@@ -261,6 +254,7 @@ async def import_suggestions(
             + "\n\nNothing imported yet. Re-run with confirm=true to import them."
         )
     taken = await _offload(ss.take_pending, svc, user_id, team["id"], ids, "importing")
+    taken = [r for r in taken if r.get("candidate")]
     if not taken:
         return "Error: none of those are suggestions waiting for you."
     # Each is looked up in full first, as posting a link is: in the background,
@@ -346,20 +340,23 @@ async def create_saved_search(
     try:
         team = lab.resolve_team(team_id)  # on the loop: attributes the call for the audit log
         await _offload(_check_feature, team)
-        query = ss.checked_query(query)
-        picked = ss.checked_sources(sources if sources is not None else ss.SOURCES)
-    except (lab.LabError, ss.Refused) as exc:
+    except lab.LabError as exc:
         return f"Error: {exc}"
     user_id = lab.current_user_id()
     svc = service_client()
+    picked = sources if sources is not None else ss.SOURCES
     if not confirm:
         try:
-            _run_limiter.check(user_id or "")
-        except lab.LabError as exc:
+            # Everything saving would refuse, refused before the search runs.
+            name, query, picked = await _offload(
+                ss.checked_new, svc, user_id, team["id"], name, query, picked
+            )
+            ss.run_limiter.check(user_id)
+        except ss.Refused as exc:
             return f"Error: {exc}"
         results = await _offload(ss.preview_results, svc, team["id"], query, picked)
         return (
-            f"Saved search {name.strip()!r} on "
+            f"Saved search {name!r} on "
             f"{', '.join(_SOURCE_LABEL[s] for s in picked)} would have found:\n\n"
             + _untrusted("results", _preview_text(results))
             + "\n\nNothing saved yet. Re-run with confirm=true to save it."

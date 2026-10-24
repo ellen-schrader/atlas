@@ -242,3 +242,20 @@ def test_nothing_runs_without_the_feature(monkeypatch):
     monkeypatch.setattr(run, "_feature_owners", lambda svc: (set(), set()))
     monkeypatch.setattr(run, "refresh_feed", lambda *a, **k: pytest.fail("no copying"))
     assert run.run() == (0, 0, 0)
+
+
+def test_sources_are_checked_and_named_by_key():
+    assert ss.checked_sources(["arxiv", "PubMed", "pubmed"]) == ["pubmed", "arxiv"]
+    assert ss.checked_sources(["medrxiv"]) == ["biorxiv"]  # one feed holds both
+    with pytest.raises(ss.Refused, match="Unknown source 'europepmc'.*pubmed, biorxiv"):
+        ss.checked_sources(["pubmed", "europepmc"])
+    with pytest.raises(ss.Refused, match="Pick any of"):
+        ss.checked_sources([])
+
+
+def test_names_go_on_one_line():
+    assert ss.checked_name("  TLS\n- fake: line ") == "TLS - fake: line"
+    with pytest.raises(ss.Refused):
+        ss.checked_name(" \n ")
+    with pytest.raises(ss.Refused):
+        ss.checked_name("x" * 121)

@@ -73,7 +73,7 @@ def _local(monkeypatch):
     monkeypatch.setattr(paper_identity, "published_record", lambda meta: None)
     monkeypatch.setattr(sources, "search_arxiv", lambda *a, **k: [])
     monkeypatch.setattr(searches.threading, "Thread", _Now)
-    features._entitled_cache.clear()
+    features._enabled_cache.clear()
     yield
     for cached in (get_api_settings, service_client, _anon_client):
         cached.cache_clear()
@@ -275,3 +275,42 @@ def test_every_tool_refuses_in_a_lab_without_the_feature(world):
     for tool, kwargs in calls:
         out = _as(c, tool, team_id=team, **kwargs)
         assert out == f"Error: {searches.NOT_AVAILABLE}", (tool.__name__, out)
+
+
+def test_saving_at_the_cap_is_refused_before_anything_is_searched(world, monkeypatch):
+    a, _b, team = _connected(world)
+    svc = service_client()
+    svc.table("saved_searches").insert(
+        [
+            {"user_id": a[0], "team_id": team, "name": f"s{i}", "query": "x", "sources": ["pubmed"]}
+            for i in range(ss.MAX_SEARCHES)
+        ]
+    ).execute()
+
+    def no_search(*_a, **_k):
+        raise AssertionError("searched although saving would be refused")
+
+    monkeypatch.setattr(sources, "search_pubmed", no_search)
+    out = _as(a, searches.create_saved_search, name="TLS", query="tertiary")
+    assert out == f"Error: You have {ss.MAX_SEARCHES} saved searches; delete one first."
+
+
+def test_a_searchs_suggestions_page_past_the_newest(world, monkeypatch):
+    a, _b, team = _connected(world)
+    hits = [world.hit(n) for n in range(1, 8)]
+    for name, found in (("Old", hits[:3]), ("New", hits[3:])):
+        monkeypatch.setattr(sources, "search_pubmed", lambda *a_, f=found, **k: list(f))
+        _as(
+            a,
+            searches.create_saved_search,
+            name=name,
+            query="tertiary",
+            sources=["pubmed"],
+            confirm=True,
+        )
+    first = _as(a, searches.list_suggestions, search="old", limit=2)
+    assert first.startswith("3 suggestions waiting") and "showing 2 from 1" in first
+    assert "found by: New" not in first and "offset=2" in first
+    rest = _as(a, searches.list_suggestions, search="Old", limit=2, offset=2)
+    assert len(_suggestion_ids(rest)) == 1 and "more:" not in rest
+    assert _as(a, searches.list_suggestions).startswith("7 suggestions waiting")

@@ -18,13 +18,10 @@ a write tool, which the tool descriptions say to wait for.
 
 from __future__ import annotations
 
-import functools
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-
-import anyio
 
 from api import trial_extract as te
 from api import trial_links
@@ -34,7 +31,7 @@ from paper_radar.trials import FEATURE, ctgov
 from paper_radar.trials.extraction import DIMENSIONS, Extraction
 
 from . import features, lab
-from .tools import TOOL_THREADS, _md_link, _paper_title_link, _untrusted, audited, in_worker_thread
+from .tools import _md_link, _paper_title_link, _untrusted, audited, in_worker_thread
 
 NOT_AVAILABLE = "Clinical trials isn't switched on for this lab."
 # What one get_trial_sources answer may hold: clients cut off (or refuse) tool
@@ -67,17 +64,11 @@ def _check_feature(team: dict) -> None:
 
 
 def _team(team_id: str | None) -> dict:
-    """The lab to act on: resolved as the caller (member, Claude access on; this
-    also attributes the call for the audit log), then the trials switch."""
-    team = lab.resolve_team(team_id)
-    _check_feature(team)
-    return team
+    """The lab to act on: resolved as the caller, then the trials switch."""
+    return features.team_for(team_id, FEATURE, NOT_AVAILABLE)
 
 
-def _offload(fn, *args):
-    """Run blocking work off the event loop, as the caller (anyio copies the
-    context), within the connector's own thread budget."""
-    return anyio.to_thread.run_sync(functools.partial(fn, *args), limiter=TOOL_THREADS)
+_offload = features.offload
 
 
 def _trial_link(t: dict[str, Any]) -> str:

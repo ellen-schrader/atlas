@@ -196,26 +196,30 @@ class AtlasMCP(FastMCP):
     them. A hidden tool called by name gets the same answer as one that doesn't
     exist."""
 
-    async def _allowed(self, module) -> bool:
+    async def _hidden(self) -> set[str]:
+        """The gated tools this caller may not see. One thread for all the
+        switches: they share one cached lookup (atlas_mcp/features.py)."""
         token = get_access_token()
         if token is None or not token.subject:
-            return False
-        try:
-            return await anyio.to_thread.run_sync(
-                module.entitled, token.subject, limiter=TOOL_THREADS
-            )
-        except Exception:  # noqa: BLE001 — when in doubt, hide them
-            log.warning(
-                "couldn't check access to %s; hiding its tools", module.__name__, exc_info=True
-            )
-            return False
+            return {n for module, names in _GATED for n in getattr(module, names)}
 
-    async def _hidden(self) -> set[str]:
-        hidden: set[str] = set()
-        for module, names in _GATED:
-            if not await self._allowed(module):
-                hidden |= getattr(module, names)
-        return hidden
+        def hidden() -> set[str]:
+            out: set[str] = set()
+            for module, names in _GATED:
+                try:
+                    ok = module.entitled(token.subject)
+                except Exception:  # noqa: BLE001 — when in doubt, hide them
+                    log.warning(
+                        "couldn't check access to %s; hiding its tools",
+                        module.__name__,
+                        exc_info=True,
+                    )
+                    ok = False
+                if not ok:
+                    out |= getattr(module, names)
+            return out
+
+        return await anyio.to_thread.run_sync(hidden, limiter=TOOL_THREADS)
 
     async def list_tools(self):
         tools = await super().list_tools()
@@ -223,9 +227,8 @@ class AtlasMCP(FastMCP):
         return [t for t in tools if t.name not in hidden]
 
     async def call_tool(self, name, arguments):
-        for module, names in _GATED:
-            if name in getattr(module, names) and not await self._allowed(module):
-                raise ToolError(f"Unknown tool: {name}")
+        if any(name in getattr(m, names) for m, names in _GATED) and name in await self._hidden():
+            raise ToolError(f"Unknown tool: {name}")
         return await super().call_tool(name, arguments)
 
 
