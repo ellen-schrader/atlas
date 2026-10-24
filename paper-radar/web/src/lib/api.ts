@@ -659,19 +659,27 @@ export async function listSuggestions(teamId: string): Promise<Suggestion[]> {
 /** The API takes at most this many ids per call. */
 export const MAX_PER_CALL = 50;
 
-/** Import or dismiss suggestions; returns how many were still waiting. */
+/** Import or dismiss suggestions, 50 ids a call. `count` is how many were
+ *  still waiting; `failed` says a later call failed after earlier ones went
+ *  through, so the caller can report the part that worked. A first call that
+ *  fails throws. */
 export async function decideSuggestions(
   teamId: string,
   ids: string[],
   decision: "import" | "dismiss",
-): Promise<number> {
+): Promise<{ count: number; failed: boolean }> {
   let count = 0;
   for (let i = 0; i < ids.length; i += MAX_PER_CALL) {
-    const out = await authedRequest<{ count: number }>(`/saved-searches/suggestions/${decision}`, {
-      method: "POST",
-      body: JSON.stringify({ team_id: teamId, ids: ids.slice(i, i + MAX_PER_CALL) }),
-    });
-    count += out.count;
+    try {
+      const out = await authedRequest<{ count: number }>(`/saved-searches/suggestions/${decision}`, {
+        method: "POST",
+        body: JSON.stringify({ team_id: teamId, ids: ids.slice(i, i + MAX_PER_CALL) }),
+      });
+      count += out.count;
+    } catch (e) {
+      if (i === 0) throw e;
+      return { count, failed: true };
+    }
   }
-  return count;
+  return { count, failed: false };
 }

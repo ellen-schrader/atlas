@@ -91,16 +91,21 @@ function SearchForm({
       ? { name: search.name, query: search.query, sources: search.sources }
       : EMPTY,
   );
-  // The preview answers the query as it was when tested; editing it again
-  // makes that answer stale, so it goes.
+  // The preview answers the query and sources as they were when tested; it
+  // shows only while the form still says the same.
   const [tested, setTested] = useState<{
     query: string;
+    sources: string;
     results: SourceResult[];
   } | null>(null);
 
   const preview = useMutation({
-    mutationFn: () => previewSearch(teamId, f.query, f.sources),
-    onSuccess: (results) => setTested({ query: f.query, results }),
+    // The arguments travel with the request, so the answer is filed under
+    // what was asked even if the form changed while it ran.
+    mutationFn: (asked: { query: string; sources: SourceKey[] }) =>
+      previewSearch(teamId, asked.query, asked.sources),
+    onSuccess: (results, asked) =>
+      setTested({ query: asked.query, sources: asked.sources.join(), results }),
   });
   const save = useMutation({
     mutationFn: () =>
@@ -115,6 +120,10 @@ function SearchForm({
     },
   });
 
+  const current =
+    tested !== null &&
+    tested.query === f.query &&
+    tested.sources === f.sources.join();
   const ready = f.name.trim() && f.query.trim() && f.sources.length > 0;
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -151,7 +160,6 @@ function SearchForm({
           value={f.query}
           onChange={(e) => {
             setF({ ...f, query: e.target.value });
-            if (tested && tested.query !== e.target.value) setTested(null);
           }}
           placeholder={
             '("tertiary lymphoid structure*"[tiab] OR TLS[tiab]) AND cancer'
@@ -183,7 +191,9 @@ function SearchForm({
             disabled={
               !f.query.trim() || f.sources.length === 0 || preview.isPending
             }
-            onClick={() => preview.mutate()}
+            onClick={() =>
+              preview.mutate({ query: f.query, sources: f.sources })
+            }
           >
             {preview.isPending ? (
               <Loader2 size={13} className="animate-spin" aria-hidden />
@@ -203,7 +213,7 @@ function SearchForm({
             {preview.error.message}
           </p>
         )}
-        {tested && !preview.isPending && (
+        {tested && current && !preview.isPending && (
           <PreviewResults results={tested.results} />
         )}
       </div>

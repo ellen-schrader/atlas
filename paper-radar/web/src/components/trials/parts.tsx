@@ -1,26 +1,16 @@
 import { type ReactNode, useRef, useState } from "react";
-import { Navigate } from "react-router-dom";
 import { Check, ChevronDown } from "lucide-react";
 
+import { RequireFeature } from "@/components/RequireFeature";
 import { Input } from "@/components/ui/input";
 import { useDismissable } from "@/hooks/useDismissable";
 import { THERAPY_CLASSES, THERAPY_COLOR, TRIALS_FEATURE, type TherapyClass } from "@/lib/trials";
 import { cn } from "@/lib/utils";
-import { useAppContext } from "@/routes/Layout";
 
 /** Renders its children only when clinical trials is on for the user in this
  *  lab; otherwise sends them home, as if the page didn't exist. */
 export function RequireTrials({ children }: { children: ReactNode }) {
-  const { features, featuresLoaded, featuresFailed } = useAppContext();
-  if (featuresFailed)
-    return (
-      <p role="alert" className="p-8 text-sm text-danger">
-        Couldn’t load this page. Check your connection and reload.
-      </p>
-    );
-  if (!featuresLoaded) return null;
-  if (!features.includes(TRIALS_FEATURE)) return <Navigate to="/" replace />;
-  return <>{children}</>;
+  return <RequireFeature feature={TRIALS_FEATURE}>{children}</RequireFeature>;
 }
 
 /** What a classification field shows before Claude has filled it in. */

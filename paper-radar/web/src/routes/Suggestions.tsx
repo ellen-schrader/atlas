@@ -1,6 +1,5 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate } from "react-router-dom";
 import {
   AlertTriangle,
   ChevronDown,
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { SelectCheckbox } from "@/components/ExportBar";
+import { RequireFeature } from "@/components/RequireFeature";
 import { SearchDialog } from "@/components/suggestions/SearchDialog";
 import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   listSuggestions,
   updateSearch,
 } from "@/lib/api";
+import { invalidateAfterPost } from "@/lib/paperLookup";
 import {
   PAPER_SOURCE_LABEL,
   SAVED_SEARCHES_FEATURE,
@@ -37,28 +38,19 @@ import { cn, formatAuthors, formatDate, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 /** After a search is saved it runs in the background; poll for its first
- *  suggestions this long. */
+ *  suggestions until it has run, or this long at most. */
 const FIRST_RUN_MS = 90_000;
-
-function RequireSavedSearches({ children }: { children: ReactNode }) {
-  const { features, featuresLoaded, featuresFailed } = useAppContext();
-  if (featuresFailed)
-    return (
-      <p role="alert" className="p-8 text-sm text-danger">
-        Couldn’t load this page. Check your connection and reload.
-      </p>
-    );
-  if (!featuresLoaded) return null;
-  if (!features.includes(SAVED_SEARCHES_FEATURE))
-    return <Navigate to="/" replace />;
-  return <>{children}</>;
-}
+/** Imports run in the background (a full lookup each, as posting a link
+ *  does): refresh the library after these delays. */
+const LIBRARY_REFRESH_MS = [15_000, 60_000];
+/** Suggestions from searches since deleted (their search id is gone). */
+const EARLIER = "earlier";
 
 export default function Suggestions() {
   return (
-    <RequireSavedSearches>
+    <RequireFeature feature={SAVED_SEARCHES_FEATURE}>
       <SuggestionsPage />
-    </RequireSavedSearches>
+    </RequireFeature>
   );
 }
 
@@ -68,31 +60,77 @@ function SuggestionsPage() {
   const toast = useToast();
   const [confirm, confirmDialog] = useConfirm();
   const [editing, setEditing] = useState<SavedSearch | "new" | null>(null);
-  const [runningUntil, setRunningUntil] = useState(0);
+  // The search running in the background since it was saved, if any.
+  const [watching, setWatching] = useState<{
+    id: string;
+    until: number;
+  } | null>(null);
   const [filter, setFilter] = useState<string>("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const timers = useRef<number[]>([]);
 
-  const running = runningUntil > Date.now();
   const searches = useQuery({
     queryKey: ["saved-searches", team.id],
     queryFn: () => listSearches(team.id),
-    refetchInterval: running ? 5000 : false,
+    refetchInterval: watching ? 5000 : false,
   });
   const suggestions = useQuery({
     queryKey: ["suggestions", team.id],
     queryFn: () => listSuggestions(team.id),
-    refetchInterval: running ? 5000 : false,
+    refetchInterval: watching ? 5000 : false,
   });
 
-  const byId = useMemo(
-    () => new Map((searches.data ?? []).map((s) => [s.id, s])),
-    [searches.data],
-  );
+  // Stop polling when the search has run (or failed), or when time is up --
+  // a timer, since nothing else re-renders the page when the clock passes it.
+  const watched = watching && searches.data?.find((x) => x.id === watching.id);
+  const finished = !!watched && !!(watched.last_run_at || watched.last_error);
+  useEffect(() => {
+    if (!watching) return;
+    if (finished) {
+      setWatching(null);
+      void qc.invalidateQueries({ queryKey: ["suggestions", team.id] });
+      return;
+    }
+    const t = setTimeout(
+      () => setWatching(null),
+      Math.max(0, watching.until - Date.now()),
+    );
+    return () => clearTimeout(t);
+  }, [watching, finished, qc, team.id]);
+  useEffect(() => () => timers.current.forEach((t) => clearTimeout(t)), []);
+
+  const list = searches.data ?? [];
+  const byId = useMemo(() => new Map(list.map((x) => [x.id, x])), [list]);
   const all = suggestions.data ?? [];
+  const groupOf = (x: Suggestion) =>
+    x.saved_search_id && byId.has(x.saved_search_id)
+      ? x.saved_search_id
+      : EARLIER;
+  // One chip per search that has something waiting, plus deleted searches'.
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const x of all)
+      counts.set(groupOf(x), (counts.get(groupOf(x)) ?? 0) + 1);
+    const named = list
+      .filter((x) => counts.has(x.id))
+      .map((x) => ({ id: x.id, name: x.name, count: counts.get(x.id)! }));
+    const earlier = counts.get(EARLIER);
+    return earlier
+      ? [...named, { id: EARLIER, name: "Deleted searches", count: earlier }]
+      : named;
+  }, [all, list, byId]);
+  // A filter whose chip has gone (search deleted, or all answered) shows all.
+  const active = groups.some((g) => g.id === filter) ? filter : "all";
   const shown =
-    filter === "all" ? all : all.filter((s) => s.saved_search_id === filter);
-  const shownPicked = shown.filter((s) => picked.has(s.id)).map((s) => s.id);
+    active === "all" ? all : all.filter((x) => groupOf(x) === active);
+  const shownPicked = shown.filter((x) => picked.has(x.id)).map((x) => x.id);
+  // The list is the newest few hundred; the searches count everything waiting.
+  const total = Math.max(
+    all.length,
+    list.reduce((n, x) => n + x.pending, 0) +
+      all.filter((x) => groupOf(x) === EARLIER).length,
+  );
 
   const decide = useMutation({
     mutationFn: ({
@@ -102,28 +140,36 @@ function SuggestionsPage() {
       ids: string[];
       decision: "import" | "dismiss";
     }) => decideSuggestions(team.id, ids, decision),
-    onMutate: ({ ids }) => {
-      // Off the list at once; the answer is on its way.
+    onMutate: async ({ ids }) => {
+      // Off the list at once; the answer is on its way. A poll already in
+      // flight would put them back, so it is cancelled first.
+      await qc.cancelQueries({ queryKey: ["suggestions", team.id] });
       const gone = new Set(ids);
       qc.setQueryData<Suggestion[]>(["suggestions", team.id], (cur) =>
-        (cur ?? []).filter((s) => !gone.has(s.id)),
+        (cur ?? []).filter((x) => !gone.has(x.id)),
       );
       setPicked((cur) => new Set([...cur].filter((id) => !gone.has(id))));
     },
-    onSuccess: (count, { decision }) => {
+    onSuccess: ({ count, failed }, { ids, decision }) => {
+      const papers = (n: number) => `${n} ${n === 1 ? "paper" : "papers"}`;
       if (decision === "import" && count > 0) {
         toast({
-          message: `Adding ${count} ${count === 1 ? "paper" : "papers"} to ${team.name}’s library. They appear within a minute.`,
+          message: failed
+            ? `Adding ${papers(count)} to ${team.name}’s library; the other ${ids.length - count} couldn’t be saved. Try those again.`
+            : `Adding ${papers(count)} to ${team.name}’s library. They appear within a minute.`,
         });
-        // Imports run in the background (a full lookup each, as posting a link
-        // does): refresh the library once they have had time to land.
-        for (const delay of [15_000, 60_000]) {
-          setTimeout(() => {
-            for (const key of ["paper-search", "paper-count"]) {
-              void qc.invalidateQueries({ queryKey: [key] });
-            }
-          }, delay);
+        for (const delay of LIBRARY_REFRESH_MS) {
+          timers.current.push(
+            window.setTimeout(
+              () => void invalidateAfterPost(qc, team.id),
+              delay,
+            ),
+          );
         }
+      } else if (failed) {
+        toast({
+          message: `Dismissed ${papers(count)}; the rest couldn’t be saved. Try again.`,
+        });
       }
     },
     onError: () => toast({ message: "Couldn’t save that. Try again." }),
@@ -134,32 +180,29 @@ function SuggestionsPage() {
   });
 
   const setActive = useMutation({
-    mutationFn: (s: SavedSearch) =>
-      updateSearch(team.id, s.id, { active: !s.active }),
+    mutationFn: (x: SavedSearch) =>
+      updateSearch(team.id, x.id, { active: !x.active }),
     onSettled: () =>
       void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] }),
     onError: () =>
       toast({ message: "Couldn’t change that search. Try again." }),
   });
   const remove = useMutation({
-    mutationFn: (s: SavedSearch) => deleteSearch(team.id, s.id),
-    onSuccess: (_v, s) => {
-      if (filter === s.id) setFilter("all");
-    },
+    mutationFn: (x: SavedSearch) => deleteSearch(team.id, x.id),
     onSettled: () =>
       void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] }),
     onError: () =>
       toast({ message: "Couldn’t delete that search. Try again." }),
   });
 
-  async function askDelete(s: SavedSearch) {
+  async function askDelete(x: SavedSearch) {
     const ok = await confirm({
-      title: `Delete “${s.name}”?`,
+      title: `Delete “${x.name}”?`,
       body: "It stops running. Suggestions it already found stay in your list.",
       confirmLabel: "Delete search",
       danger: true,
     });
-    if (ok) remove.mutate(s);
+    if (ok) remove.mutate(x);
   }
 
   const togglePick = (id: string) =>
@@ -178,7 +221,6 @@ function SuggestionsPage() {
     });
   const allPicked = shown.length > 0 && shownPicked.length === shown.length;
 
-  const list = searches.data ?? [];
   const loading = searches.isPending || suggestions.isPending;
   const failed = searches.isError || suggestions.isError;
 
@@ -238,7 +280,7 @@ function SuggestionsPage() {
         </section>
       )}
 
-      {running && (
+      {watching && (
         <p className="flex items-center gap-2 text-sm text-muted" role="status">
           <Loader2 size={14} className="animate-spin" aria-hidden />
           Running your search — its first suggestions appear here within a
@@ -246,38 +288,37 @@ function SuggestionsPage() {
         </p>
       )}
 
-      {list.length > 0 && !loading && (
+      {(list.length > 0 || all.length > 0) && !loading && (
         <section aria-labelledby="suggested" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 id="suggested" className="text-sm font-semibold text-fg">
               {all.length === 0
                 ? "Nothing waiting"
-                : `${all.length} waiting for you`}
+                : total > all.length
+                  ? `${total} waiting for you · the newest ${all.length} shown`
+                  : `${all.length} waiting for you`}
             </h2>
-            {list.length > 1 && all.length > 0 && (
+            {groups.length > 1 && (
               <div
                 role="radiogroup"
                 aria-label="Show suggestions from"
                 className="flex flex-wrap gap-1.5"
               >
                 <FilterChip
-                  on={filter === "all"}
+                  on={active === "all"}
                   onClick={() => setFilter("all")}
                 >
                   All · {all.length}
                 </FilterChip>
-                {list
-                  .filter((s) => s.pending > 0)
-                  .map((s) => (
-                    <FilterChip
-                      key={s.id}
-                      on={filter === s.id}
-                      onClick={() => setFilter(s.id)}
-                    >
-                      {s.name} ·{" "}
-                      {all.filter((x) => x.saved_search_id === s.id).length}
-                    </FilterChip>
-                  ))}
+                {groups.map((g) => (
+                  <FilterChip
+                    key={g.id}
+                    on={active === g.id}
+                    onClick={() => setFilter(g.id)}
+                  >
+                    {g.name} · {g.count}
+                  </FilterChip>
+                ))}
               </div>
             )}
           </div>
@@ -333,8 +374,8 @@ function SuggestionsPage() {
                     key={s.id}
                     suggestion={s}
                     searchName={
-                      list.length > 1 && s.saved_search_id
-                        ? byId.get(s.saved_search_id)?.name
+                      groups.length > 1
+                        ? byId.get(s.saved_search_id ?? "")?.name
                         : undefined
                     }
                     picked={picked.has(s.id)}
@@ -360,8 +401,10 @@ function SuggestionsPage() {
         onClose={() => setEditing(null)}
         teamId={team.id}
         search={editing === "new" ? null : editing}
-        onSaved={(_s, rerun) => {
-          if (rerun) setRunningUntil(Date.now() + FIRST_RUN_MS);
+        onSaved={(s, rerun) => {
+          // A paused search isn't run when its query changes.
+          if (rerun && s.active)
+            setWatching({ id: s.id, until: Date.now() + FIRST_RUN_MS });
         }}
       />
       {confirmDialog}
