@@ -7,7 +7,7 @@ skipped.
 
 Usage (from paper-radar/, with api/.env configured):
 
-    uv run python -m api.backfill_embeddings [--all] [--batch-size 64]
+    uv run python -m api.backfill_embeddings [--all] [--batch-size 4]
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 
 from . import embeddings
 from .supa import service_client
+
+_RATE_LIMIT_PAUSE = 60  # seconds: one full per-minute window
 
 _PAGE = 500
 
@@ -44,8 +46,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="re-embed every paper, not just those missing embedded_at",
     )
-    parser.add_argument("--batch-size", type=int, default=16, help="papers per API request")
-    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between batches")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=embeddings.BATCH_SIZE,
+        help="papers per API request (at most embeddings.BATCH_SIZE)",
+    )
+    parser.add_argument(
+        "--delay", type=float, default=20.0, help="Seconds between batches (3 a minute)"
+    )
     args = parser.parse_args(argv)
 
     svc = service_client()
@@ -58,14 +67,33 @@ def main(argv: list[str] | None = None) -> int:
     # Each batch's rows are written as soon as it embeds, so a mid-run failure
     # keeps all prior progress — re-running resumes (embedded_at is null only for
     # the rest). Batches are paced to stay under the API's per-minute limit.
+    # A chunk is one API request: a bigger one would be split by embed_texts,
+    # and a failure in a later piece would throw away vectors already paid for.
+    size = max(1, min(args.batch_size, embeddings.BATCH_SIZE))
     done = failed = 0
-    for start in range(0, len(todo), args.batch_size):
-        chunk = todo[start : start + args.batch_size]
+    for start in range(0, len(todo), size):
+        chunk = todo[start : start + size]
+        texts = [text for _, text in chunk]
         try:
-            vectors = embeddings.embed_texts([text for _, text in chunk])
+            try:
+                vectors = embeddings.embed_texts(texts)
+            except embeddings.EmbeddingError as exc:
+                if exc.status != 429:
+                    raise
+                # Past the client's own retries. A per-minute limit is over after
+                # a full minute; if the batch still fails, it is a quota or
+                # billing limit and every remaining batch would fail the same way.
+                print(f"  batch at {start} rate-limited ({exc.detail or exc}); waiting 60s")
+                time.sleep(_RATE_LIMIT_PAUSE)
+                vectors = embeddings.embed_texts(texts)
         except embeddings.EmbeddingError as exc:
+            reason = f"{exc}: {exc.detail}" if exc.detail else str(exc)
+            if exc.status == 429:
+                failed += len(todo) - start
+                print(f"  batch at {start} failed ({reason}); stopping, re-run to retry")
+                break
             failed += len(chunk)
-            print(f"  batch at {start} failed ({exc}); skipping, re-run to retry")
+            print(f"  batch at {start} failed ({reason}); skipping, re-run to retry")
             continue
         now = datetime.now(UTC).isoformat()
         for (row, _), vector in zip(chunk, vectors, strict=True):
