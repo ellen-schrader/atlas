@@ -27,6 +27,7 @@ import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
 import ReadingList from "@/routes/ReadingList";
 import Settings from "@/routes/Settings";
+import Suggestions from "@/routes/Suggestions";
 
 function Center({ children }: { children: ReactNode }) {
   return (
@@ -235,6 +236,8 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/maps" element={<MapsLibrary />} />
         <Route path="/maps/overview" element={<MapView />} />
         <Route path="/maps/:mapId" element={<MapDashboard />} />
+        {/* Saved searches (issue #164): dark unless the feature is on. */}
+        <Route path="/suggestions" element={<Suggestions />} />
         {/* Clinical trials: dark unless the feature is on (RequireTrials). */}
         <Route path="/trials" element={<Trials />} />
         <Route path="/trials/collections" element={<TrialCollections />} />

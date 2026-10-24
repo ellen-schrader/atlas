@@ -6,9 +6,11 @@ import {
   LayoutGrid,
   LibraryBig,
   Map as MapIcon,
+  Radar,
   type LucideIcon,
 } from "lucide-react";
 
+import { SAVED_SEARCHES_FEATURE } from "@/lib/savedSearches";
 import { TRIALS_FEATURE } from "@/lib/trials";
 
 export interface NavItem {
@@ -55,6 +57,14 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "My reading list",
         icon: Bookmark,
         description: () => "Papers you have saved to read",
+      },
+      {
+        to: "/suggestions",
+        label: "Suggestions",
+        icon: Radar,
+        beta: true,
+        feature: SAVED_SEARCHES_FEATURE,
+        description: () => "New papers from your saved PubMed, bioRxiv and arXiv searches",
       },
     ],
   },
