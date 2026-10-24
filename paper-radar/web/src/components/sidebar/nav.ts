@@ -6,7 +6,7 @@ import {
   LayoutGrid,
   LibraryBig,
   Map as MapIcon,
-  Radar,
+  ScanSearch,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,10 +61,10 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         to: "/suggestions",
         label: "Suggestions",
-        icon: Radar,
+        icon: ScanSearch,
         beta: true,
         feature: SAVED_SEARCHES_FEATURE,
-        description: () => "New papers from your saved PubMed, bioRxiv and arXiv searches",
+        description: () => "New papers from your saved searches, every week",
       },
     ],
   },

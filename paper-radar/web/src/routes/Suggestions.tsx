@@ -8,7 +8,7 @@ import {
   Pencil,
   Play,
   Plus,
-  Radar,
+  ScanSearch,
   Trash2,
   X,
 } from "lucide-react";
@@ -65,9 +65,10 @@ function SuggestionsPage() {
     id: string;
     until: number;
   } | null>(null);
-  const [filter, setFilter] = useState<string>("all");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // Search groups folded away.
+  const [folded, setFolded] = useState<Set<string>>(new Set());
   const timers = useRef<number[]>([]);
 
   const searches = useQuery({
@@ -107,24 +108,23 @@ function SuggestionsPage() {
     x.saved_search_id && byId.has(x.saved_search_id)
       ? x.saved_search_id
       : EARLIER;
-  // One chip per search that has something waiting, plus deleted searches'.
+  // One group per search that has something waiting, in the order of "Your
+  // searches", then deleted searches'.
   const groups = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const x of all)
-      counts.set(groupOf(x), (counts.get(groupOf(x)) ?? 0) + 1);
+    const items = new Map<string, Suggestion[]>();
+    for (const x of all) {
+      const g = groupOf(x);
+      items.set(g, [...(items.get(g) ?? []), x]);
+    }
     const named = list
-      .filter((x) => counts.has(x.id))
-      .map((x) => ({ id: x.id, name: x.name, count: counts.get(x.id)! }));
-    const earlier = counts.get(EARLIER);
+      .filter((x) => items.has(x.id))
+      .map((x) => ({ id: x.id, name: x.name, items: items.get(x.id)! }));
+    const earlier = items.get(EARLIER);
     return earlier
-      ? [...named, { id: EARLIER, name: "Deleted searches", count: earlier }]
+      ? [...named, { id: EARLIER, name: "Deleted searches", items: earlier }]
       : named;
   }, [all, list, byId]);
-  // A filter whose chip has gone (search deleted, or all answered) shows all.
-  const active = groups.some((g) => g.id === filter) ? filter : "all";
-  const shown =
-    active === "all" ? all : all.filter((x) => groupOf(x) === active);
-  const shownPicked = shown.filter((x) => picked.has(x.id)).map((x) => x.id);
+  const pickedIds = all.filter((x) => picked.has(x.id)).map((x) => x.id);
   // The list is the newest few hundred; the searches count everything waiting.
   const total = Math.max(
     all.length,
@@ -155,7 +155,7 @@ function SuggestionsPage() {
       if (decision === "import" && count > 0) {
         toast({
           message: failed
-            ? `Adding ${papers(count)} to ${team.name}’s library; the other ${ids.length - count} couldn’t be saved. Try those again.`
+            ? `Adding ${papers(count)} to ${team.name}’s library; the other ${ids.length - count} couldn’t be added. Try those again.`
             : `Adding ${papers(count)} to ${team.name}’s library. They appear within a minute.`,
         });
         for (const delay of LIBRARY_REFRESH_MS) {
@@ -205,21 +205,38 @@ function SuggestionsPage() {
     if (ok) remove.mutate(x);
   }
 
-  const togglePick = (id: string) =>
+  const togglePick = (id: string) => setPicked((cur) => toggled(cur, id));
+  const toggleOpen = (id: string) => setOpen((cur) => toggled(cur, id));
+  const toggleFolded = (id: string) => setFolded((cur) => toggled(cur, id));
+  const allPicked = all.length > 0 && pickedIds.length === all.length;
+  // Pick a whole group, or unpick it when it is all picked already.
+  const pickGroup = (items: Suggestion[]) =>
     setPicked((cur) => {
       const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const every = items.every((x) => cur.has(x.id));
+      for (const x of items) {
+        if (every) next.delete(x.id);
+        else next.add(x.id);
+      }
       return next;
     });
-  const toggleOpen = (id: string) =>
-    setOpen((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const allPicked = shown.length > 0 && shownPicked.length === shown.length;
+
+  const rows = (items: Suggestion[]) => (
+    <ul className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
+      {items.map((s) => (
+        <SuggestionRow
+          key={s.id}
+          suggestion={s}
+          picked={picked.has(s.id)}
+          abstractOpen={open.has(s.id)}
+          onPick={() => togglePick(s.id)}
+          onToggleAbstract={() => toggleOpen(s.id)}
+          onAdd={() => decide.mutate({ ids: [s.id], decision: "import" })}
+          onDismiss={() => decide.mutate({ ids: [s.id], decision: "dismiss" })}
+        />
+      ))}
+    </ul>
+  );
 
   const loading = searches.isPending || suggestions.isPending;
   const failed = searches.isError || suggestions.isError;
@@ -232,9 +249,9 @@ function SuggestionsPage() {
             Suggested papers
           </h1>
           <p className="mt-1.5 max-w-[62ch] text-sm text-muted">
-            New papers from your saved searches on PubMed, bioRxiv/medRxiv and
-            arXiv, every week. Only you see this list; what you import goes to{" "}
-            {team.name}’s library.
+            New papers that match your searches, every week. Add the good ones
+            to {team.name}’s library and dismiss the rest. Only you see this
+            list.
           </p>
         </div>
         <Button onClick={() => setEditing("new")} disabled={list.length >= 10}>
@@ -293,40 +310,17 @@ function SuggestionsPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 id="suggested" className="text-sm font-semibold text-fg">
               {all.length === 0
-                ? "Nothing waiting"
+                ? "No new papers"
                 : total > all.length
-                  ? `${total} waiting for you · the newest ${all.length} shown`
-                  : `${all.length} waiting for you`}
+                  ? `${total} new papers · the newest ${all.length} shown`
+                  : `${all.length} new ${all.length === 1 ? "paper" : "papers"}`}
             </h2>
-            {groups.length > 1 && (
-              <div
-                role="radiogroup"
-                aria-label="Show suggestions from"
-                className="flex flex-wrap gap-1.5"
-              >
-                <FilterChip
-                  on={active === "all"}
-                  onClick={() => setFilter("all")}
-                >
-                  All · {all.length}
-                </FilterChip>
-                {groups.map((g) => (
-                  <FilterChip
-                    key={g.id}
-                    on={active === g.id}
-                    onClick={() => setFilter(g.id)}
-                  >
-                    {g.name} · {g.count}
-                  </FilterChip>
-                ))}
-              </div>
-            )}
           </div>
 
           {all.length === 0 ? (
             <p className="rounded-card border border-dashed border-border p-6 text-sm text-muted">
-              You’re up to date. Your searches run once a week, and anything new
-              the lab doesn’t have yet will appear here.
+              You’re all caught up. New papers the lab doesn’t have yet show up
+              here after your searches’ next weekly run.
             </p>
           ) : (
             <>
@@ -335,62 +329,79 @@ function SuggestionsPage() {
                   checked={allPicked}
                   onChange={() =>
                     setPicked(
-                      allPicked ? new Set() : new Set(shown.map((s) => s.id)),
+                      allPicked ? new Set() : new Set(all.map((s) => s.id)),
                     )
                   }
-                  label={allPicked ? "Select none" : "Select all shown"}
+                  label={allPicked ? "Select none" : "Select all"}
                 />
                 <span className="text-muted">
-                  {shownPicked.length > 0
-                    ? `${shownPicked.length} selected`
+                  {pickedIds.length > 0
+                    ? `${pickedIds.length} selected`
                     : "Select all"}
                 </span>
-                {shownPicked.length > 0 && (
+                {pickedIds.length > 0 && (
                   <div className="ml-auto flex gap-2">
                     <Button
                       size="sm"
                       onClick={() =>
-                        decide.mutate({ ids: shownPicked, decision: "import" })
+                        decide.mutate({ ids: pickedIds, decision: "import" })
                       }
                     >
                       <Plus size={13} aria-hidden />
-                      Import {shownPicked.length}
+                      Add {pickedIds.length}
                     </Button>
                     <Button
                       size="sm"
                       variant="secondary"
                       onClick={() =>
-                        decide.mutate({ ids: shownPicked, decision: "dismiss" })
+                        decide.mutate({ ids: pickedIds, decision: "dismiss" })
                       }
                     >
-                      Dismiss {shownPicked.length}
+                      Dismiss {pickedIds.length}
                     </Button>
                   </div>
                 )}
               </div>
-              <ul className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
-                {shown.map((s) => (
-                  <SuggestionRow
-                    key={s.id}
-                    suggestion={s}
-                    searchName={
-                      groups.length > 1
-                        ? byId.get(s.saved_search_id ?? "")?.name
-                        : undefined
-                    }
-                    picked={picked.has(s.id)}
-                    abstractOpen={open.has(s.id)}
-                    onPick={() => togglePick(s.id)}
-                    onToggleAbstract={() => toggleOpen(s.id)}
-                    onImport={() =>
-                      decide.mutate({ ids: [s.id], decision: "import" })
-                    }
-                    onDismiss={() =>
-                      decide.mutate({ ids: [s.id], decision: "dismiss" })
-                    }
-                  />
-                ))}
-              </ul>
+              {groups.length > 1
+                ? groups.map((g) => {
+                    const isFolded = folded.has(g.id);
+                    return (
+                      <section
+                        key={g.id}
+                        aria-label={`From “${g.name}”`}
+                        className="flex flex-col gap-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <SelectCheckbox
+                            checked={g.items.every((x) => picked.has(x.id))}
+                            onChange={() => pickGroup(g.items)}
+                            label={`Select all from “${g.name}”`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleFolded(g.id)}
+                            aria-expanded={!isFolded}
+                            className="inline-flex min-w-0 items-center gap-1 text-sm font-semibold text-fg hover:text-accent"
+                          >
+                            <ChevronDown
+                              size={14}
+                              className={cn(
+                                "shrink-0 transition-transform",
+                                isFolded && "-rotate-90",
+                              )}
+                              aria-hidden
+                            />
+                            <span className="truncate">{g.name}</span>
+                            <span className="font-normal text-muted">
+                              · {g.items.length}
+                            </span>
+                          </button>
+                        </div>
+                        {!isFolded && rows(g.items)}
+                      </section>
+                    );
+                  })
+                : rows(all)}
             </>
           )}
         </section>
@@ -415,15 +426,12 @@ function SuggestionsPage() {
 function EmptySearches({ onNew }: { onNew: () => void }) {
   return (
     <div className="flex flex-col items-start gap-3 rounded-card border border-dashed border-border p-6">
-      <Radar size={22} className="text-accent" aria-hidden />
+      <ScanSearch size={22} className="text-accent" aria-hidden />
       <div>
-        <p className="font-medium text-fg">
-          Follow a topic, get the new papers every week
-        </p>
+        <p className="font-medium text-fg">Never miss a paper on your topic</p>
         <p className="mt-1 max-w-[60ch] text-sm text-muted">
-          Save a search — your PubMed alert string works as it is — and Atlas
-          runs it on PubMed, bioRxiv/medRxiv and arXiv once a week. You pick
-          which papers go into the library.
+          Type a few keywords, or paste a PubMed search. Every week Atlas checks
+          PubMed, bioRxiv, medRxiv and arXiv and lists the new papers here.
         </p>
       </div>
       <Button onClick={onNew}>
@@ -438,8 +446,8 @@ function searchStatus(s: SavedSearch): { text: string; warn: boolean } {
   if (!s.active) return { text: "Paused", warn: false };
   if (s.last_error)
     return { text: `Last run had a problem: ${s.last_error}`, warn: true };
-  if (!s.last_run_at) return { text: "Runs within a day", warn: false };
-  return { text: `Ran ${formatRelative(s.last_run_at)}`, warn: false };
+  if (!s.last_run_at) return { text: "First run within a day", warn: false };
+  return { text: `Last ran ${formatRelative(s.last_run_at)}`, warn: false };
 }
 
 function SearchRow({
@@ -512,21 +520,19 @@ function SearchRow({
 
 function SuggestionRow({
   suggestion,
-  searchName,
   picked,
   abstractOpen,
   onPick,
   onToggleAbstract,
-  onImport,
+  onAdd,
   onDismiss,
 }: {
   suggestion: Suggestion;
-  searchName?: string;
   picked: boolean;
   abstractOpen: boolean;
   onPick: () => void;
   onToggleAbstract: () => void;
-  onImport: () => void;
+  onAdd: () => void;
   onDismiss: () => void;
 }) {
   const p = suggestion.paper;
@@ -568,9 +574,6 @@ function SuggestionRow({
               {PAPER_SOURCE_LABEL[p.source] ?? p.source}
             </span>
           )}
-          {searchName && (
-            <span className="text-faint"> · from “{searchName}”</span>
-          )}
         </p>
         {p.abstract && (
           <button
@@ -600,11 +603,12 @@ function SuggestionRow({
         <Button
           size="sm"
           variant="secondary"
-          onClick={onImport}
-          aria-label={`Import “${p.title}”`}
+          onClick={onAdd}
+          aria-label={`Add “${p.title}” to the library`}
+          title="Add to the library"
         >
           <Plus size={13} aria-hidden />
-          Import
+          Add
         </Button>
         <IconButton label={`Dismiss “${p.title}”`} onClick={onDismiss}>
           <X size={15} />
@@ -642,30 +646,10 @@ function IconButton({
   );
 }
 
-function FilterChip({
-  on,
-  onClick,
-  children,
-}: {
-  on: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={on}
-      onClick={onClick}
-      className={cn(
-        "rounded-full border px-3 py-1 text-xs font-medium transition",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-        on
-          ? "border-accent/50 bg-accent-weak text-fg"
-          : "border-border text-muted hover:text-fg",
-      )}
-    >
-      {children}
-    </button>
-  );
+/** `cur` with `id` added, or taken out if it was there. */
+function toggled(cur: Set<string>, id: string): Set<string> {
+  const next = new Set(cur);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
 }
