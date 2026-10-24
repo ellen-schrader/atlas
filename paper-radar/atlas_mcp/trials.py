@@ -21,7 +21,6 @@ from __future__ import annotations
 import functools
 import json
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -34,7 +33,7 @@ from api.supa import service_client
 from paper_radar.trials import FEATURE, ctgov
 from paper_radar.trials.extraction import DIMENSIONS, Extraction
 
-from . import lab
+from . import features, lab
 from .tools import TOOL_THREADS, _md_link, _paper_title_link, _untrusted, audited, in_worker_thread
 
 NOT_AVAILABLE = "Clinical trials isn't switched on for this lab."
@@ -55,66 +54,16 @@ _record_limiter = PerUserRateLimiter(
 
 # --- who may use them ----------------------------------------------------------------
 
-_entitled_cache: dict[str, tuple[float, bool]] = {}
-_ENTITLED_FOR = 60.0  # seconds; a switch turned on shows within a minute
-_ENTITLED_MAX = 5_000  # people; past it, old answers are dropped
-
 
 def entitled(user_id: str | None) -> bool:
-    """Whether clinical trials is on for this person in any of their labs (for
-    them, or for a lab they belong to). Decides whether the tools are listed."""
-    if not user_id:
-        return False
-    hit = _entitled_cache.get(user_id)
-    if hit and time.monotonic() - hit[0] < _ENTITLED_FOR:
-        return hit[1]
-    svc = service_client()
-    mine = (
-        svc.table("user_features").select("feature").eq("user_id", user_id).eq("feature", FEATURE)
-    )
-    ok = bool(mine.execute().data)
-    if not ok:
-        teams = [
-            r["team_id"]
-            for r in svc.table("team_members")
-            .select("team_id")
-            .eq("user_id", user_id)
-            .execute()
-            .data
-            or []
-        ]
-        if teams:
-            on = (
-                svc.table("team_features")
-                .select("team_id")
-                .eq("feature", FEATURE)
-                .in_("team_id", teams)
-            )
-            ok = bool(on.execute().data)
-    if len(_entitled_cache) >= _ENTITLED_MAX:
-        now = time.monotonic()
-        for k in [k for k, (t, _) in _entitled_cache.items() if now - t >= _ENTITLED_FOR]:
-            del _entitled_cache[k]
-        if len(_entitled_cache) >= _ENTITLED_MAX:
-            _entitled_cache.clear()
-    _entitled_cache[user_id] = (time.monotonic(), ok)
-    return ok
+    """Whether clinical trials is on for this person in any of their labs.
+    Decides whether the tools are listed."""
+    return features.entitled(user_id, FEATURE)
 
 
 def _check_feature(team: dict) -> None:
     """The clinical trials switch, for this person in this (resolved) lab."""
-    svc = service_client()
-    lab_on = (
-        svc.table("team_features")
-        .select("team_id")
-        .eq("team_id", team["id"])
-        .eq("feature", FEATURE)
-    )
-    if lab_on.execute().data:
-        return
-    me = svc.table("user_features").select("user_id").eq("user_id", lab.current_user_id())
-    if not me.eq("feature", FEATURE).execute().data:
-        raise lab.LabError(NOT_AVAILABLE)
+    features.check(team, FEATURE, NOT_AVAILABLE)
 
 
 def _team(team_id: str | None) -> dict:

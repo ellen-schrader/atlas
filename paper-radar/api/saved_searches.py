@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
@@ -450,24 +451,145 @@ _run_limiter = PerUserRateLimiter(
 )
 
 
-def _checked_query(query: str) -> str:
-    """The query, stripped, or a 422 saying what is wrong with it in words (a
+class Refused(Exception):
+    """A request this module turns down, in words for the person; ``status`` is
+    the HTTP status the API answers with."""
+
+    def __init__(self, message: str, status: int = 422) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+@contextmanager
+def _as_http():
+    try:
+        yield
+    except Refused as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+def checked_query(query: str) -> str:
+    """The query, stripped, or Refused saying what is wrong with it in words (a
     pydantic validator would answer with a list the web app cannot show)."""
     query = query.strip()
+    if not query:
+        raise Refused("The query is empty.")
+    if len(query) > 2000:
+        raise Refused("The query is too long (2,000 characters at most).")
     try:
         q.parse(query)
     except q.QueryError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise Refused(str(exc)) from exc
     return query
 
 
-def _checked_sources(picked: list[str]) -> list[str]:
+def checked_sources(picked: Iterable[str]) -> list[str]:
     picked = [s for s in SOURCES if s in set(picked)]  # canonical order, no repeats
     if not picked:
-        raise HTTPException(
-            status_code=422, detail="Pick at least one of: PubMed, bioRxiv/medRxiv, arXiv."
-        )
+        raise Refused("Pick at least one of: PubMed, bioRxiv/medRxiv, arXiv.")
     return picked
+
+
+def own_searches(svc, user_id: str, team_id: str) -> list[dict]:
+    """The person's searches in this lab, oldest first, each with how many of
+    its suggestions are waiting (under "pending")."""
+    rows = (
+        svc.table("saved_searches")
+        .select(_SEARCH_COLUMNS)
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    pending = (
+        svc.table("search_suggestions")
+        .select("saved_search_id")
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .eq("status", "pending")
+        .limit(5000)
+        .execute()
+        .data
+        or []
+    )
+    counts: dict[str, int] = {}
+    for p in pending:
+        counts[p["saved_search_id"]] = counts.get(p["saved_search_id"], 0) + 1
+    return [{**r, "pending": counts.get(r["id"], 0)} for r in rows]
+
+
+def new_search(
+    svc, user_id: str, team_id: str, name: str, query: str, picked: Iterable[str]
+) -> dict:
+    """Save a search for the person (checked; Refused if not). The caller runs it."""
+    name = " ".join(name.split())
+    if not name or len(name) > 120:
+        raise Refused("Give the search a name of up to 120 characters.")
+    query, picked = checked_query(query), checked_sources(picked)
+    have = (
+        svc.table("saved_searches")
+        .select("id", count="exact")
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .execute()
+        .count
+        or 0
+    )
+    if have >= MAX_SEARCHES:
+        raise Refused(f"You have {MAX_SEARCHES} saved searches; delete one first.", 409)
+    return (
+        svc.table("saved_searches")
+        .insert(
+            {
+                "user_id": user_id,
+                "team_id": team_id,
+                "name": name,
+                "query": query,
+                "sources": picked,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+
+
+def preview_results(svc, team_id: str, query: str, picked: list[str]) -> list[SourceResult]:
+    """What a (checked) query finds over the past week, per source, with the
+    first ten papers of each marked if the lab has them."""
+    since, until = window(None, date.today())
+    feed = rxiv_feed(svc, since) if "biorxiv" in picked else None
+    found, errors = run_query(query, picked, since, until, feed=feed)
+    out = []
+    for source in picked:
+        hits = _dedupe(found.get(source, []))
+        in_lab = keys_in_lab(svc, team_id, hits[:10])
+        out.append(
+            SourceResult(
+                source=source,
+                count=len(hits),
+                papers=[_paper_out(h, h.key in in_lab) for h in hits[:10]],
+                error=errors.get(source),
+            )
+        )
+    return out
+
+
+def pending_by_ids(svc, user_id: str, team_id: str, ids: list[str]) -> list[dict]:
+    """The person's own pending suggestions among ``ids``, with their papers."""
+    rows = (
+        svc.table("search_suggestions")
+        .select("id, candidate_id, saved_search_id")
+        .in_("id", ids)
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    return with_candidates(svc, rows)
 
 
 class SearchIn(BaseModel):
@@ -563,8 +685,9 @@ def _own_search(svc, search_id: str, user_id: str, team_id: str) -> dict:
     return rows[0]
 
 
-def _run_now(search: dict) -> None:
-    """Background: a new or changed search runs at once rather than next week."""
+def run_now(search: dict) -> None:
+    """Background: a new or changed search runs at once rather than next week.
+    Never raises."""
     svc = service_client()
     try:
         since, _ = window(None, date.today())
@@ -580,32 +703,7 @@ def _run_now(search: dict) -> None:
 def my_searches(team_id: UUID, token: str = Depends(require_token)) -> list[SavedSearch]:
     team = str(team_id)
     user_id = _require_feature(token, team)
-    svc = service_client()
-    rows = (
-        svc.table("saved_searches")
-        .select(_SEARCH_COLUMNS)
-        .eq("user_id", user_id)
-        .eq("team_id", team)
-        .order("created_at")
-        .execute()
-        .data
-        or []
-    )
-    pending = (
-        svc.table("search_suggestions")
-        .select("saved_search_id")
-        .eq("user_id", user_id)
-        .eq("team_id", team)
-        .eq("status", "pending")
-        .limit(5000)
-        .execute()
-        .data
-        or []
-    )
-    counts: dict[str, int] = {}
-    for p in pending:
-        counts[p["saved_search_id"]] = counts.get(p["saved_search_id"], 0) + 1
-    return [_search_out(r, counts.get(r["id"], 0)) for r in rows]
+    return [_search_out(r, r["pending"]) for r in own_searches(service_client(), user_id, team)]
 
 
 def _search_out(row: dict, pending: int = 0) -> SavedSearch:
@@ -620,37 +718,13 @@ def create_search(
 ) -> SavedSearch:
     team = str(req.team_id)
     user_id = _require_feature(token, team)
-    query, picked = _checked_query(req.query), _checked_sources(req.sources)
     svc = service_client()
-    have = (
-        svc.table("saved_searches")
-        .select("id", count="exact")
-        .eq("user_id", user_id)
-        .eq("team_id", team)
-        .execute()
-        .count
-        or 0
-    )
-    if have >= MAX_SEARCHES:
-        raise HTTPException(
-            status_code=409, detail=f"You have {MAX_SEARCHES} saved searches; delete one first."
-        )
-    _run_limiter.check(user_id)
-    row = (
-        svc.table("saved_searches")
-        .insert(
-            {
-                "user_id": user_id,
-                "team_id": team,
-                "name": req.name.strip(),
-                "query": query,
-                "sources": picked,
-            }
-        )
-        .execute()
-        .data[0]
-    )
-    background.add_task(_run_now, row)
+    with _as_http():
+        checked_query(req.query)
+        checked_sources(req.sources)
+        _run_limiter.check(user_id)
+        row = new_search(svc, user_id, team, req.name, req.query, req.sources)
+    background.add_task(run_now, row)
     return _search_out(row)
 
 
@@ -668,10 +742,11 @@ def update_search(
     changes: dict = {}
     if req.name is not None:
         changes["name"] = req.name.strip()
-    if req.query is not None:
-        changes["query"] = _checked_query(req.query)
-    if req.sources is not None:
-        changes["sources"] = _checked_sources(req.sources)
+    with _as_http():
+        if req.query is not None:
+            changes["query"] = checked_query(req.query)
+        if req.sources is not None:
+            changes["sources"] = checked_sources(req.sources)
     if req.active is not None:
         changes["active"] = req.active
     # A changed query or source list starts again from a week back.
@@ -689,7 +764,7 @@ def update_search(
         .data[0]
     )
     if rerun and row["active"]:
-        background.add_task(_run_now, row)
+        background.add_task(run_now, row)
     return _search_out(row)
 
 
@@ -706,25 +781,10 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
     """What the query finds over the past week, before it is saved."""
     team = str(req.team_id)
     user_id = _require_feature(token, team)
-    query, picked = _checked_query(req.query), _checked_sources(req.sources)
+    with _as_http():
+        query, picked = checked_query(req.query), checked_sources(req.sources)
     _run_limiter.check(user_id)
-    svc = service_client()
-    since, until = window(None, date.today())
-    feed = rxiv_feed(svc, since) if "biorxiv" in picked else None
-    found, errors = run_query(query, picked, since, until, feed=feed)
-    out = []
-    for source in picked:
-        hits = _dedupe(found.get(source, []))
-        in_lab = keys_in_lab(svc, team, hits[:10])
-        out.append(
-            SourceResult(
-                source=source,
-                count=len(hits),
-                papers=[_paper_out(h, h.key in in_lab) for h in hits[:10]],
-                error=errors.get(source),
-            )
-        )
-    return out
+    return preview_results(service_client(), team, query, picked)
 
 
 @router.get("/suggestions", response_model=list[Suggestion])
