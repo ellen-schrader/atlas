@@ -84,6 +84,7 @@ function SuggestionsPage() {
   const toast = useToast();
   const [confirm, confirmDialog] = useConfirm();
   const [editing, setEditing] = useState<SavedSearch | "new" | null>(null);
+  const [order, setOrder] = useState<Order>(savedOrder);
   // What a new search starts from (a suggested search), if anything.
   const [initial, setInitial] = useState<Partial<SearchFields>>();
   // The search running in the background since it was saved, if any.
@@ -97,7 +98,6 @@ function SuggestionsPage() {
   const [folded, setFolded] = useState<Set<string>>(new Set());
   // Groups whose less likely matches are shown.
   const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
-  const [order, setOrder] = useState<Order>(savedOrder);
   const timers = useRef<number[]>([]);
 
   const searches = useQuery({
@@ -105,9 +105,12 @@ function SuggestionsPage() {
     queryFn: () => listSearches(team.id),
     refetchInterval: watching ? 5000 : false,
   });
+  // Keyed under ["suggestions", team.id] like before, so the mutations'
+  // updates and invalidations reach whichever order is on screen.
   const suggestions = useQuery({
-    queryKey: ["suggestions", team.id],
-    queryFn: () => listSuggestions(team.id),
+    queryKey: ["suggestions", team.id, order],
+    queryFn: () => listSuggestions(team.id, order),
+    placeholderData: (previous) => previous,
     refetchInterval: watching ? 5000 : false,
   });
   // Recomputed when the queries change: a search that covers an idea retires it.
@@ -208,8 +211,9 @@ function SuggestionsPage() {
       // flight would put them back, so it is cancelled first.
       await qc.cancelQueries({ queryKey: ["suggestions", team.id] });
       const gone = new Set(ids);
-      qc.setQueryData<Suggestion[]>(["suggestions", team.id], (cur) =>
-        (cur ?? []).filter((x) => !gone.has(x.id)),
+      qc.setQueriesData<Suggestion[]>(
+        { queryKey: ["suggestions", team.id] },
+        (cur) => (cur ?? []).filter((x) => !gone.has(x.id)),
       );
       setPicked((cur) => new Set([...cur].filter((id) => !gone.has(id))));
     },
@@ -309,6 +313,23 @@ function SuggestionsPage() {
   // The rows of a group in view.
   const visible = (g: Group) =>
     unfolded.has(g.id) ? [...g.items, ...g.unlikely] : g.items;
+  // Rows can leave the view without a click: re-sorting, a refetch moving the
+  // "less likely" cut, scores arriving. Unpick them, so Add / Dismiss only
+  // ever act on what is on screen.
+  useEffect(() => {
+    const inView = new Set(
+      groups
+        .flatMap((g) => (folded.has(g.id) ? [] : visible(g)))
+        .map((x) => x.id),
+    );
+    setPicked((cur) =>
+      [...cur].every((id) => inView.has(id))
+        ? cur
+        : new Set([...cur].filter((id) => inView.has(id))),
+    );
+    // visible() reads unfolded; folded and groups are the rest of its inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, folded, unfolded]);
   // Pick a whole group (what is in view), or unpick it when it is all picked
   // already. A folded group opens, so what is picked is in view.
   const pickGroup = (g: Group) => {
@@ -434,7 +455,7 @@ function SuggestionsPage() {
                 ? "No new papers"
                 : `${all.length}${cut ? "+" : ""} new ${all.length === 1 ? "paper" : "papers"}`}
             </h2>
-            {scored && all.length > 1 && (
+            {all.length > 1 && (
               <div
                 role="radiogroup"
                 aria-label="Sort papers"
@@ -468,6 +489,12 @@ function SuggestionsPage() {
             )}
           </div>
 
+          {order === "relevant" && !scored && all.length > 1 && (
+            <p className="text-xs text-faint">
+              Newest first for now: sorting by fit starts once Atlas has read
+              these papers, within a day of a search finding them.
+            </p>
+          )}
           {all.length === 0 ? (
             <p className="rounded-card border border-dashed border-border p-6 text-sm text-muted">
               You’re all caught up. New papers the lab doesn’t have yet show up
@@ -567,8 +594,8 @@ function SuggestionsPage() {
                     )}
                     {!isFolded && g.count > g.size && (
                       <p className="text-xs text-faint">
-                        Showing the newest {g.size} of {g.count}. Add or dismiss
-                        these to see the rest.
+                        Showing the {byFit ? "best-fitting" : "newest"} {g.size}{" "}
+                        of {g.count}. Add or dismiss these to see the rest.
                       </p>
                     )}
                   </section>

@@ -377,6 +377,25 @@ def blend_taste(
     )
 
 
+def taste_vector(client, user_id: str, team_id: str) -> list[float] | None:
+    """The person's blended taste vector in this lab (:func:`blend_taste` over
+    their profile and :func:`engagement_weights`), read with ``client``; None
+    for someone Atlas knows nothing about yet. For callers that need only the
+    vector -- Discover also keeps what it read, for its reasons."""
+    profile = (
+        client.table("profiles")
+        .select("profile_vec, display_name")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )[0]
+    weights = engagement_weights(client, user_id, team_id, display_name=profile.get("display_name"))
+    papers = papers_by_id(client, list(weights), "id, title, embedding")
+    return blend_taste(parse_vec(profile.get("profile_vec")), weights, papers)
+
+
 # --- reasons -------------------------------------------------------------------------
 
 

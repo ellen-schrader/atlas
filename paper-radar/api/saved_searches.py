@@ -23,6 +23,7 @@ import time
 from collections.abc import Iterable, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -59,6 +60,7 @@ DEFAULT_ARXIV = ("q-bio",)
 MAX_ARXIV_CATEGORIES = 20
 EMBED_PAUSE = 20.0  # seconds between Voyage requests: the free tier allows 3 a minute
 TASTE_TTL = 600.0  # seconds a person's taste vector is reused for their list
+EMBEDDING_DIM = 1024  # search_candidates.embedding, pending_suggestions(p_taste)
 
 router = APIRouter(prefix="/saved-searches", tags=["saved-searches"])
 
@@ -390,11 +392,12 @@ def page_suggestions(
     per_search: int = PER_SEARCH,
     taste_vec: list[float] | None = None,
 ) -> list[dict]:
-    """The Suggestions page's list: the newest ``per_search`` of each search
-    (and of those no remaining search found), so a noisy search does not
-    crowd out the rest. Newest first, each with "search_ids", "candidate" and
-    "score": its similarity to ``taste_vec`` (None without one, or before the
-    job has embedded the paper)."""
+    """The Suggestions page's list: ``per_search`` of each search (and of
+    those no remaining search found), so a noisy search does not crowd out the
+    rest -- its newest, or with ``taste_vec`` its best-fitting. Newest first,
+    each with "search_ids", "candidate" and "score": cosine similarity to
+    ``taste_vec``, -1..1 (None without one, or before the job has embedded the
+    paper)."""
     args = {"p_user": user_id, "p_team": team_id, "p_per_search": per_search}
     if taste_vec is not None:
         args["p_taste"] = taste_vec
@@ -439,29 +442,18 @@ _taste_lock = threading.Lock()
 
 
 def taste_vector(svc, user_id: str, team_id: str) -> list[float] | None:
-    """The person's taste vector in this lab, as Discover builds it (profile,
-    followed tags' papers, what they posted, saved, reacted to); None for
-    someone Atlas knows nothing about yet. Reused for a few minutes: the page
-    refetches its list after every answer."""
+    """The person's taste vector (taste.taste_vector), reused for a few
+    minutes: the page refetches its list after every answer. None for someone
+    Atlas knows nothing about yet, or a vector the scores can't use (another
+    model's length, or all zeros)."""
     key = (user_id, team_id)
     with _taste_lock:
         hit = _taste_cache.get(key)
         if hit and time.monotonic() - hit[0] < TASTE_TTL:
             return hit[1]
-    profile = (
-        svc.table("profiles")
-        .select("profile_vec, display_name")
-        .eq("id", user_id)
-        .limit(1)
-        .execute()
-        .data
-        or [{}]
-    )[0]
-    weights = taste.engagement_weights(
-        svc, user_id, team_id, display_name=profile.get("display_name")
-    )
-    papers = taste.papers_by_id(svc, list(weights), "id, title, embedding")
-    vec = taste.blend_taste(taste.parse_vec(profile.get("profile_vec")), weights, papers)
+    vec = taste.taste_vector(svc, user_id, team_id)
+    if vec is not None and (len(vec) != EMBEDDING_DIM or not any(vec)):
+        vec = None
     with _taste_lock:
         if len(_taste_cache) > 1000:
             _taste_cache.clear()
@@ -971,8 +963,8 @@ class Suggestion(BaseModel):
     saved_search_id: str | None
     search_ids: list[str] = []
     created_at: str
-    # Similarity to the person's taste (0-1); None until the paper is embedded,
-    # or for someone Atlas knows nothing about yet.
+    # Cosine similarity to the person's taste (-1..1); None until the paper is
+    # embedded, for someone Atlas knows nothing about yet, or with order=newest.
     score: float | None = None
     paper: PaperOut
 
@@ -1148,15 +1140,27 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
 
 
 @router.get("/suggestions", response_model=list[Suggestion])
-def my_suggestions(team_id: UUID, token: str = Depends(require_token)) -> list[Suggestion]:
+def my_suggestions(
+    team_id: UUID,
+    order: Literal["relevant", "newest"] = "relevant",
+    token: str = Depends(require_token),
+) -> list[Suggestion]:
+    """The caller's waiting suggestions: each search's best-fitting hundred
+    (``order=relevant``, scored), or its newest (``order=newest``, unscored)."""
     user_id = _require_feature(token, str(team_id))
     svc = service_client()
-    try:
-        vec = taste_vector(svc, user_id, str(team_id))
-    except Exception as exc:  # the list matters more than its order
-        log.warning("taste vector for %s failed: %s", user_id, exc)
-        vec = None
-    rows = page_suggestions(svc, user_id, str(team_id), taste_vec=vec)
+    rows = None
+    if order == "relevant":
+        # The list matters more than its order: anything wrong with the
+        # scoring falls back to the newest, unscored.
+        try:
+            vec = taste_vector(svc, user_id, str(team_id))
+            if vec is not None:
+                rows = page_suggestions(svc, user_id, str(team_id), taste_vec=vec)
+        except Exception as exc:
+            log.warning("scoring suggestions for %s failed: %s", user_id, exc)
+    if rows is None:
+        rows = page_suggestions(svc, user_id, str(team_id))
     return [
         Suggestion(
             id=r["id"],

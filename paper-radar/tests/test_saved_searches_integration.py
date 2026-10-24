@@ -661,6 +661,14 @@ def test_waiting_papers_are_embedded_once_and_scored_against_the_persons_taste(w
     assert scored[near.title] == pytest.approx(1.0)
     assert scored[far.title] == pytest.approx(0.0, abs=1e-6)
 
+    # Newest first skips the scoring altogether.
+    newest = client.get(
+        "/saved-searches/suggestions",
+        params={"team_id": lab, "order": "newest"},
+        headers=a_auth,
+    ).json()
+    assert {s["score"] for s in newest} == {None}
+
 
 def test_embedding_stops_quietly_without_a_key(world, monkeypatch):
     a, a_auth = world.user()
