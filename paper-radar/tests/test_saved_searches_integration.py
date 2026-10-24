@@ -325,9 +325,19 @@ def test_connectors_cannot_read_the_tables(world):
     token = a_auth["Authorization"].split()[1]
     as_user = create_client(LOCAL_URL, ANON)
     as_user.postgrest.auth(token)
-    for table in ("saved_searches", "search_suggestions", "search_candidates", "rxiv_feed"):
+    for table in (
+        "saved_searches",
+        "search_suggestions",
+        "search_candidates",
+        "search_suggestion_searches",
+        "rxiv_feed",
+    ):
         with pytest.raises(Exception, match="permission denied"):
             as_user.table(table).select("*").limit(1).execute()
+    with pytest.raises(Exception, match="permission denied"):
+        as_user.rpc(
+            "pending_suggestions", {"p_user": a, "p_team": lab, "p_per_search": 10}
+        ).execute()
 
 
 def test_an_interrupted_import_is_finished_by_the_job(world, monkeypatch):
@@ -378,3 +388,209 @@ def test_query_errors_come_back_as_a_sentence(world):
         "/saved-searches/preview", json={"team_id": lab, "query": "(tls"}, headers=a_auth
     )
     assert bad.status_code == 422 and bad.json() == {"detail": "A '(' is never closed."}
+
+
+# --- round 2: several searches per paper, order, arXiv subjects, ideas ----------------
+
+
+def _suggestions(client, lab, auth) -> list[dict]:
+    out = client.get("/saved-searches/suggestions", params={"team_id": lab}, headers=auth)
+    assert out.status_code == 200, out.text
+    return out.json()
+
+
+def _searches(client, lab, auth) -> list[dict]:
+    return client.get("/saved-searches", params={"team_id": lab}, headers=auth).json()
+
+
+def test_a_paper_two_searches_find_shows_under_both_and_one_answer_clears_it(world, monkeypatch):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    shared, only_first = world.hit(1), world.hit(2)
+    client = TestClient(app)
+
+    _stub_pubmed(monkeypatch, [shared, only_first])
+    first = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "One", "query": "tls", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+    _stub_pubmed(monkeypatch, [shared])
+    second = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "Two", "query": "b cells", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+
+    mine = {s["paper"]["title"]: s for s in _suggestions(client, lab, a_auth)}
+    assert len(mine) == 2  # one suggestion per paper, however many searches found it
+    assert mine[shared.title]["search_ids"] == sorted([first["id"], second["id"]])
+    assert mine[only_first.title]["search_ids"] == [first["id"]]
+    assert [s["pending"] for s in _searches(client, lab, a_auth)] == [2, 1]
+
+    out = client.post(
+        "/saved-searches/suggestions/dismiss",
+        json={"team_id": lab, "ids": [mine[shared.title]["id"]]},
+        headers=a_auth,
+    )
+    assert out.json() == {"count": 1}
+    assert [s["pending"] for s in _searches(client, lab, a_auth)] == [1, 0]
+
+    # Deleting the first search leaves its paper waiting, under no search.
+    client.delete(f"/saved-searches/{first['id']}", params={"team_id": lab}, headers=a_auth)
+    (left,) = _suggestions(client, lab, a_auth)
+    assert left["search_ids"] == []
+
+
+def test_the_page_lists_the_newest_few_of_every_search(world, monkeypatch):
+    """A noisy search does not crowd a quiet one off the page."""
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    client = TestClient(app)
+    _stub_pubmed(monkeypatch, [world.hit(1)])
+    quiet = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "Quiet", "query": "tls", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+    _stub_pubmed(monkeypatch, [world.hit(n) for n in range(10, 16)])
+    noisy = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "Noisy", "query": "ai", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+
+    rows = ss.page_suggestions(service_client(), a, lab, per_search=3)
+    by_search: dict[str, int] = {}
+    for r in rows:
+        for sid in r["search_ids"]:
+            by_search[sid] = by_search.get(sid, 0) + 1
+    assert by_search == {quiet["id"]: 1, noisy["id"]: 3}
+
+
+def test_searches_keep_the_order_their_owner_gives(world, monkeypatch):
+    a, a_auth = world.user()
+    b, b_auth = world.user()
+    lab = world.lab(a, b)
+    _stub_pubmed(monkeypatch, [])
+    client = TestClient(app)
+    ids = [
+        client.post(
+            "/saved-searches",
+            json={"team_id": lab, "name": name, "query": "tls", "sources": ["pubmed"]},
+            headers=a_auth,
+        ).json()["id"]
+        for name in ("A", "B", "C")
+    ]
+    assert [s["name"] for s in _searches(client, lab, a_auth)] == ["A", "B", "C"]
+
+    out = client.put(
+        "/saved-searches/order",
+        json={"team_id": lab, "ids": [ids[2], ids[0], ids[1]]},
+        headers=a_auth,
+    )
+    assert out.status_code == 204, out.text
+    assert [s["name"] for s in _searches(client, lab, a_auth)] == ["C", "A", "B"]
+
+    # Not all of them, or someone else's: refused, and nothing moves.
+    for bad in ([ids[0], ids[1]], [ids[0], ids[1], ids[2], ids[2]]):
+        out = client.put("/saved-searches/order", json={"team_id": lab, "ids": bad}, headers=a_auth)
+        assert out.status_code == 422
+    out = client.put("/saved-searches/order", json={"team_id": lab, "ids": ids}, headers=b_auth)
+    assert out.status_code == 422
+    assert [s["name"] for s in _searches(client, lab, a_auth)] == ["C", "A", "B"]
+
+
+def test_new_searches_keep_to_biology_on_arxiv_unless_told_otherwise(world, monkeypatch):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    asked: list[str] = []
+    monkeypatch.setattr(sources, "search_arxiv", lambda query, *a, **k: asked.append(query) or [])
+    client = TestClient(app)
+
+    made = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "FM", "query": '"flow matching"', "sources": ["arxiv"]},
+        headers=a_auth,
+    ).json()
+    assert made["arxiv_categories"] == ["q-bio"]
+    assert asked[-1].endswith("AND (cat:q-bio*)")
+
+    out = client.patch(
+        f"/saved-searches/{made['id']}",
+        json={"team_id": lab, "arxiv_categories": []},
+        headers=a_auth,
+    )
+    assert out.json()["arxiv_categories"] == []
+    assert "cat:" not in asked[-1]  # the change re-ran it, on all of arXiv
+
+    out = client.patch(
+        f"/saved-searches/{made['id']}",
+        json={"team_id": lab, "arxiv_categories": ["q-bio.GN", "drop table"]},
+        headers=a_auth,
+    )
+    assert out.status_code == 422
+    assert "arXiv subject code" in out.json()["detail"]
+
+
+def test_ideas_come_from_the_persons_tags_and_skip_what_they_search_already(world, monkeypatch):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    client = TestClient(app)
+    world.admin.table("profiles").update({"interests": ["organoids"]}).eq("id", a).execute()
+    for n, tags in enumerate(
+        (
+            ["spatial-transcriptomics", "breast-cancer", "review"],
+            ["spatial-transcriptomics", "breast-cancer"],
+            ["tertiary-lymphoid-structures"],
+            ["tertiary-lymphoid-structures"],
+        )
+    ):
+        doi = f"10.9999/ss-{world.tag}-idea-{n}"
+        world.dois.append(doi)
+        paper = (
+            world.admin.table("papers")
+            .insert(
+                {
+                    "url": f"https://doi.org/{doi}",
+                    "url_norm": f"doi.org/{doi}",
+                    "doi": doi,
+                    "title": f"Idea {n}",
+                }
+            )
+            .execute()
+            .data[0]
+        )
+        world.admin.table("paper_posts").insert(
+            {
+                "team_id": lab,
+                "paper_id": paper["id"],
+                "posted_by": a,
+                "source": "web",
+                "tags": tags,
+            }
+        ).execute()
+
+    got = client.get("/saved-searches/ideas", params={"team_id": lab}, headers=a_auth)
+    assert got.status_code == 200, got.text
+    ideas = got.json()
+    assert ideas[0]["query"] == '"breast cancer"[tiab] AND "spatial transcriptomics"[tiab]'
+    queries = [i["query"] for i in ideas]
+    assert "organoids[tiab]" in queries
+    assert '"tertiary lymphoid structures"[tiab]' in queries
+    assert not any("review" in x for x in queries)
+
+    # Once a search covers TLS, it is no longer suggested.
+    _stub_pubmed(monkeypatch, [])
+    client.post(
+        "/saved-searches",
+        json={
+            "team_id": lab,
+            "name": "TLS",
+            "query": '"tertiary lymphoid structures"',
+            "sources": ["pubmed"],
+        },
+        headers=a_auth,
+    )
+    again = client.get("/saved-searches/ideas", params={"team_id": lab}, headers=a_auth).json()
+    assert not any("tertiary" in i["query"] for i in again)

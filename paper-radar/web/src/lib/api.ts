@@ -3,6 +3,7 @@ import type {
   SavedSearch,
   SearchFields,
   SourceKey,
+  SearchIdea,
   SourceResult,
   Suggestion,
 } from "@/lib/savedSearches";
@@ -645,11 +646,25 @@ export async function previewSearch(
   teamId: string,
   query: string,
   sources: SourceKey[],
+  arxivCategories: string[],
 ): Promise<SourceResult[]> {
   return authedRequest("/saved-searches/preview", {
     method: "POST",
-    body: JSON.stringify({ team_id: teamId, query, sources }),
+    body: JSON.stringify({ team_id: teamId, query, sources, arxiv_categories: arxivCategories }),
   });
+}
+
+/** Put the searches in this order, highest priority first. */
+export async function reorderSearches(teamId: string, ids: string[]): Promise<void> {
+  return authedRequest("/saved-searches/order", {
+    method: "PUT",
+    body: JSON.stringify({ team_id: teamId, ids }),
+  });
+}
+
+/** A few searches to start from, built from the caller's tags. */
+export async function listSearchIdeas(teamId: string): Promise<SearchIdea[]> {
+  return authedRequest(`/saved-searches/ideas?${new URLSearchParams({ team_id: teamId })}`);
 }
 
 export async function listSuggestions(teamId: string): Promise<Suggestion[]> {
