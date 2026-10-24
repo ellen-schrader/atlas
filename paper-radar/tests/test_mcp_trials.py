@@ -13,7 +13,7 @@ pytest.importorskip("mcp")
 
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
 
-from atlas_mcp import http, lab, trials  # noqa: E402
+from atlas_mcp import features, http, lab, trials  # noqa: E402
 
 
 def _server():
@@ -91,7 +91,7 @@ class _Svc:
 def test_each_tool_checks_the_lab_switch(monkeypatch, team_on, user_on, ok):
     monkeypatch.setattr(lab, "resolve_team", lambda _t: {"id": "lab", "name": "Lab"})
     monkeypatch.setattr(lab, "current_user_id", lambda: "ada")
-    monkeypatch.setattr(trials, "service_client", lambda: _Svc(team_on, user_on))
+    monkeypatch.setattr(features, "service_client", lambda: _Svc(team_on, user_on))
     if ok:
         assert trials._team(None)["id"] == "lab"
     else:
