@@ -23,9 +23,9 @@ from paper_radar.trials import FEATURE, cited, ctgov, jats, pubmed
 from paper_radar.trials.extraction import clean_anchor, clean_quote
 
 from . import trial_extract, trial_links
-from .deps import require_token
+from .deps import require_feature, require_token
 from .ratelimit import PerUserRateLimiter
-from .supa import get_user_id, service_client, user_client
+from .supa import service_client, user_client
 
 log = logging.getLogger(__name__)
 
@@ -39,15 +39,8 @@ _TRIAL_COLUMNS = (
 
 
 def _require_feature(token: str, team_id: str) -> str:
-    """The caller's id, or 404 unless the feature is on for them in this lab.
-    Asked as the caller, so has_feature() checks membership too."""
-    user_id = get_user_id(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    ok = user_client(token).rpc("has_feature", {"t": team_id, "f": FEATURE}).execute().data
-    if ok is not True:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    return user_id
+    """The caller's id, or 404 unless clinical trials is on for them in this lab."""
+    return require_feature(token, team_id, FEATURE)
 
 
 def _limit(user_id: str) -> None:

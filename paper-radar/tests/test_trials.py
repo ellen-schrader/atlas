@@ -501,8 +501,10 @@ class _Rpc:
 
 
 def test_endpoints_404_without_the_feature(monkeypatch):
-    monkeypatch.setattr(trials_api, "get_user_id", lambda _t: "u1")
-    monkeypatch.setattr(trials_api, "user_client", lambda _t: _Rpc(False))
+    import api.supa as supa  # the shared feature gate (api.deps) asks through these
+
+    monkeypatch.setattr(supa, "get_user_id", lambda _t: "u1")
+    monkeypatch.setattr(supa, "user_client", lambda _t: _Rpc(False))
     monkeypatch.setattr(ctgov, "search", lambda *_a, **_k: pytest.fail("must not search"))
 
     r = client.get("/trials/search", params={"team_id": "lab", "q": "KEYNOTE"}, headers=AUTH)

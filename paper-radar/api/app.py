@@ -40,6 +40,7 @@ from . import (
     integrations,
     maps,
     merge_suggestions,
+    saved_searches,
     taste,
     teams_integration,
     trial_links,
@@ -119,6 +120,7 @@ if _mcp is not None:
 app.include_router(maps.router)
 app.include_router(integrations.router)
 app.include_router(trials.router)
+app.include_router(saved_searches.router)
 
 
 # --- schemas ---------------------------------------------------------------

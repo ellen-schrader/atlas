@@ -39,3 +39,18 @@ def require_token(authorization: str | None = Header(default=None)) -> str:
     if _is_connector_token(token):
         raise HTTPException(status_code=403, detail="Claude connections can't use this API.")
     return token
+
+
+def require_feature(token: str, team_id: str, feature: str) -> str:
+    """The caller's id, or 404 unless ``feature`` is on for them in this lab, so
+    a dark feature is not advertised. Asked as the caller, so has_feature()
+    checks membership too."""
+    from .supa import get_user_id, user_client  # lazy: keep this module import-light
+
+    user_id = get_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    ok = user_client(token).rpc("has_feature", {"t": team_id, "f": feature}).execute().data
+    if ok is not True:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return user_id
