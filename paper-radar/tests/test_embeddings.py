@@ -97,6 +97,79 @@ def test_non_retryable_http_error_raises(monkeypatch):
         embeddings.embed_texts(["a"], settings=_settings())
 
 
+def test_error_carries_voyage_detail_and_status(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        body = io.BytesIO(json.dumps({"detail": "You have exceeded your usage quota"}).encode())
+        raise urllib.error.HTTPError(embeddings.VOYAGE_URL, 429, "Too Many", None, body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(embeddings.time, "sleep", lambda _s: None)
+    with pytest.raises(embeddings.EmbeddingError) as caught:
+        embeddings.embed_texts(["a"], settings=_settings())
+    assert caught.value.status == 429
+    assert "usage quota" in caught.value.detail
+    # Users see the message (search, maps, Claude); the operator's billing stays in logs.
+    assert "quota" not in str(caught.value)
+
+
+def test_retry_after_seconds_are_honoured(monkeypatch):
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                embeddings.VOYAGE_URL, 429, "rate limited", {"Retry-After": "0.5"}, None
+            )
+        return _FakeResponse(_voyage_body([[1.0, 0, 0]]))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(embeddings.time, "sleep", slept.append)
+    embeddings.embed_texts(["a"], settings=_settings())
+    assert slept == [0.5]
+
+
+def test_backfill_waits_once_then_stops_on_a_persistent_429(monkeypatch):
+    from api import backfill_embeddings
+
+    rows = [{"id": str(i), "title": f"t{i}", "abstract": "x"} for i in range(5)]
+    sizes: list[int] = []
+    slept: list[float] = []
+
+    def fake_embed(texts):
+        sizes.append(len(texts))
+        raise embeddings.EmbeddingError("Voyage API returned HTTP 429", status=429)
+
+    monkeypatch.setattr(backfill_embeddings, "service_client", lambda: None)
+    monkeypatch.setattr(backfill_embeddings, "_fetch_papers", lambda svc, all_: rows)
+    monkeypatch.setattr(backfill_embeddings.time, "sleep", slept.append)
+    monkeypatch.setattr(embeddings, "embed_texts", fake_embed)
+
+    assert backfill_embeddings.main(["--batch-size", "2", "--delay", "0"]) == 5
+    assert sizes == [2, 2]  # the first batch, once more after the pause, then stop
+    assert slept == [backfill_embeddings._RATE_LIMIT_PAUSE]
+
+
+def test_backfill_chunks_never_exceed_one_request(monkeypatch):
+    from api import backfill_embeddings
+
+    rows = [{"id": str(i), "title": f"t{i}", "abstract": "x"} for i in range(5)]
+    sizes: list[int] = []
+
+    def fake_embed(texts):
+        sizes.append(len(texts))
+        raise embeddings.EmbeddingError("Voyage API returned HTTP 500", status=500)
+
+    monkeypatch.setattr(backfill_embeddings, "service_client", lambda: None)
+    monkeypatch.setattr(backfill_embeddings, "_fetch_papers", lambda svc, all_: rows)
+    monkeypatch.setattr(embeddings, "BATCH_SIZE", 2)
+    monkeypatch.setattr(embeddings, "embed_texts", fake_embed)
+
+    assert backfill_embeddings.main(["--batch-size", "64", "--delay", "0"]) == 5
+    assert sizes == [2, 2, 1]
+
+
 def test_missing_key_raises():
     with pytest.raises(embeddings.EmbeddingError, match="VOYAGE_API_KEY"):
         embeddings.embed_texts(["a"], settings=_settings(voyage_api_key=""))
