@@ -689,11 +689,7 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     def _alias_paper(column: str, value: str) -> dict | None:
         rows = _retry_stale_connection(
             lambda: (
-                svc.table("paper_aliases")
-                .select("paper_id")
-                .eq(column, value)
-                .limit(1)
-                .execute()
+                svc.table("paper_aliases").select("paper_id").eq(column, value).limit(1).execute()
             )
         ).data
         return _paper_by("id", rows[0]["paper_id"]) if rows else None
@@ -809,12 +805,8 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
     """Resolve one URL and add it to the lab as source='teams'. Runs off the reply
     path, so it may take the full metadata-fetch budget. Idempotent (dedup on
     url_norm/DOI and unique(paper_id, team_id)); failures are logged, not raised."""
-    # Deferred import: app imports this module, so importing app at module load
-    # would be circular. These helpers carry the tested dedup + embed logic.
-    from .app import _embed_and_store, _enrich_and_store, _upsert_paper
-    from .merge_suggestions import suggest_for_post
-    from .paper_identity import swap_to_published
-    from .trial_links import link_paper
+    # Deferred import: lab_papers imports app, which imports this module.
+    from .lab_papers import add_to_lab
 
     try:
         url = _clean_url(url)
@@ -825,52 +817,19 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
             log.info("inbound: %s did not resolve to a paper (%s); queued", url, reason)
             record_unresolved(team_id, url, url_norm, sender_name, reason)
             return None
-        # A published preprint is stored as its published version. The queue row
-        # below is keyed on the link as posted, so url_norm stays the original.
-        meta, stored_url, preprint = swap_to_published(meta, url)
-        paper_id, needs_embedding = _upsert_paper(
-            meta, stored_url, _normalize_key(stored_url), [preprint] if preprint else []
+        added = add_to_lab(
+            service_client(),
+            team_id,
+            meta,
+            url,
+            source="teams",
+            posted_by_label=(sender_name or "Teams")[:_INBOUND_LABEL_MAX],
         )
         # It resolved, so any queue row for this link is done -- whether it was
-        # queued a minute ago or is being re-driven months later.
-        close_unresolved(team_id, url_norm, paper_id)
-        svc = service_client()
-        existing = (
-            svc.table("paper_posts")
-            .select("id")
-            .eq("paper_id", paper_id)
-            .eq("team_id", team_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if existing:
-            return paper_id  # already in the lab (matched by DOI under another URL)
-        try:
-            svc.table("paper_posts").insert(
-                {
-                    "paper_id": paper_id,
-                    "team_id": team_id,
-                    "posted_by": None,
-                    "posted_by_label": (sender_name or "Teams")[:_INBOUND_LABEL_MAX],
-                    "source": "teams",
-                }
-            ).execute()
-        except Exception as insert_exc:
-            # A second @mention of the same new paper can race past the `existing`
-            # check; the unique(paper_id, team_id) constraint (23505) is the
-            # backstop — a benign no-op, not a failure worth warning about.
-            if getattr(insert_exc, "code", None) == "23505":
-                return paper_id
-            raise
-        if needs_embedding and get_api_settings().voyage_api_key:
-            _embed_and_store(paper_id, meta.title, meta.abstract)
-        if needs_embedding:
-            _enrich_and_store(paper_id, meta.title, meta.abstract)
-        suggest_for_post(team_id, paper_id)
-        link_paper(team_id, paper_id)  # clinical trials; never raises
-        return paper_id
+        # queued a minute ago or is being re-driven months later. The row is
+        # keyed on the link as posted, not the published version stored.
+        close_unresolved(team_id, url_norm, added.paper_id)
+        return added.paper_id
     except Exception as exc:
         log.warning("inbound import for team %s (%s) failed: %s", team_id, url, exc)
         # Transient by assumption (network, DB), so it belongs in the queue too --

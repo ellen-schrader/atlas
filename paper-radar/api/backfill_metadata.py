@@ -114,9 +114,7 @@ def follow_year(patch: dict, row: dict) -> None:
         patch["published_at"] = new
 
 
-def plan_update(
-    row: dict, meta, doi_owner: str | None, held=()
-) -> tuple[dict, str | None]:
+def plan_update(row: dict, meta, doi_owner: str | None, held=()) -> tuple[dict, str | None]:
     """The patch for one row, plus a note if something needed a human.
 
     ``held`` is the row's ``edited_fields``: keys a person has corrected by hand.

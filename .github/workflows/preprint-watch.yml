@@ -15,6 +15,7 @@
 #   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — the hosted project (service role)
 #   ANTHROPIC_API_KEY, VOYAGE_API_KEY        — re-tag and re-embed what changed;
 #                                              keys of their own, with low limits
+#   NCBI_API_KEY (optional)                  — PubMed at 10 requests/s, not 3
 # Without them the job fails at the first database call and nothing is written.
 name: preprint-watch
 
@@ -50,6 +51,7 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
       # Deep links on the Teams cards. Not a secret.
       ATLAS_WEB_URL: https://labatlas.app
     steps:
@@ -66,6 +68,11 @@ jobs:
       # Still runs if the abstract step failed on a paper or two.
       - if: ${{ !cancelled() }}
         run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}
+      # Saved searches (issue #164): copy the week's bioRxiv/medRxiv preprints,
+      # then run the searches that are due and file their suggestions. Only
+      # for labs with the feature; a manual run defaults to a dry run.
+      - if: ${{ !cancelled() }}
+        run: uv run --frozen python -m api.saved_searches_run ${{ inputs.dry_run && '--dry-run' || '' }}
       # Link lab papers to the clinical trials they name (only for labs with the
       # feature on; a no-op otherwise). Writes, so a manual dry run skips it.
       - if: ${{ !cancelled() && !inputs.dry_run }}

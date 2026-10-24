@@ -195,8 +195,13 @@ def list_maps(team_id: str, token: str = Depends(require_token)) -> list[MapList
     _require_user(token)
     uc = user_client(token)
     rows = (
-        uc.table("maps").select(_COLUMNS).eq("team_id", team_id)
-        .order("updated_at", desc=True).execute().data or []
+        uc.table("maps")
+        .select(_COLUMNS)
+        .eq("team_id", team_id)
+        .order("updated_at", desc=True)
+        .execute()
+        .data
+        or []
     )
     if not rows:
         return []
@@ -236,9 +241,7 @@ def delete_map(map_id: str, token: str = Depends(require_token)) -> dict:
     """Delete a map. RLS allows only the map's creator, so a non-owner deletes zero
     rows and gets a 404 rather than silently succeeding."""
     _require_user(token)
-    deleted = (
-        user_client(token).table("maps").delete().eq("id", map_id).execute().data or []
-    )
+    deleted = user_client(token).table("maps").delete().eq("id", map_id).execute().data or []
     if not deleted:
         raise HTTPException(status_code=404, detail="No such map, or it isn't yours to delete.")
     return {"deleted": True}
