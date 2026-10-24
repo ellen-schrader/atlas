@@ -594,3 +594,82 @@ def test_ideas_come_from_the_persons_tags_and_skip_what_they_search_already(worl
     )
     again = client.get("/saved-searches/ideas", params={"team_id": lab}, headers=a_auth).json()
     assert not any("tertiary" in i["query"] for i in again)
+
+
+# --- relevance --------------------------------------------------------------------------
+
+
+def _axis(i: int) -> list[float]:
+    """A unit vector along axis i: two papers on the same axis match exactly."""
+    v = [0.0] * 1024
+    v[i] = 1.0
+    return v
+
+
+def test_waiting_papers_are_embedded_once_and_scored_against_the_persons_taste(world, monkeypatch):
+    from api import embeddings
+
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    near, far = world.hit(1), world.hit(2)
+    far.title, far.abstract = "Piano demos into pop productions", "Music."
+    _stub_pubmed(monkeypatch, [near, far])
+    client = TestClient(app)
+    client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "FM", "query": "flow matching", "sources": ["pubmed"]},
+        headers=a_auth,
+    )
+
+    # Not embedded yet: listed, unscored.
+    assert {s["score"] for s in _suggestions(client, lab, a_auth)} == {None}
+
+    sent: list[str] = []
+
+    def fake_embed(texts, **kw):
+        sent.extend(texts)
+        return [_axis(1) if "Piano" in t else _axis(0) for t in texts]
+
+    monkeypatch.setattr(embeddings, "embed_texts", fake_embed)
+    monkeypatch.setattr(ss, "EMBED_PAUSE", 0.0)
+    # The job embeds every waiting paper in the database: put back the ones
+    # other tests (or a local dev session) left unembedded.
+    others = [
+        r["id"]
+        for r in world.admin.table("search_candidates")
+        .select("id")
+        .is_("embedding", "null")
+        .not_.in_("doi", [near.doi, far.doi])
+        .execute()
+        .data
+    ]
+    try:
+        ss.embed_candidates(service_client(), budget=60)
+        ss.embed_candidates(service_client(), budget=60)
+    finally:
+        for start in range(0, len(others), 100):
+            world.admin.table("search_candidates").update(
+                {"embedding": None, "embedded_at": None}
+            ).in_("id", others[start : start + 100]).execute()
+    mine = [t for t in sent if "Saved-search paper 1" in t or "Piano" in t]
+    assert len(mine) == 2  # each embedded once, however often the job runs
+
+    # The person's profile points the way of the first paper.
+    world.admin.table("profiles").update({"profile_vec": _axis(0)}).eq("id", a).execute()
+    ss._taste_cache.clear()
+    scored = {s["paper"]["title"]: s["score"] for s in _suggestions(client, lab, a_auth)}
+    assert scored[near.title] == pytest.approx(1.0)
+    assert scored[far.title] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_embedding_stops_quietly_without_a_key(world, monkeypatch):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    _stub_pubmed(monkeypatch, [world.hit(1)])
+    TestClient(app).post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "x", "query": "tls", "sources": ["pubmed"]},
+        headers=a_auth,
+    )
+    # VOYAGE_API_KEY is blank in these tests: nothing embedded, nothing raised.
+    assert ss.embed_candidates(service_client(), budget=60) == 0

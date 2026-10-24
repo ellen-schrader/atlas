@@ -34,6 +34,7 @@ from paper_radar.search import query as q
 from paper_radar.search import sources
 from paper_radar.search.sources import Hit, SourceError
 
+from . import embeddings, taste
 from .deps import require_feature, require_token
 from .ratelimit import PerUserRateLimiter
 from .search_ideas import search_ideas
@@ -56,6 +57,8 @@ PER_SEARCH = 100  # suggestions the page lists per search (newest first)
 # papers a month, 9 of them in q-bio).
 DEFAULT_ARXIV = ("q-bio",)
 MAX_ARXIV_CATEGORIES = 20
+EMBED_PAUSE = 20.0  # seconds between Voyage requests: the free tier allows 3 a minute
+TASTE_TTL = 600.0  # seconds a person's taste vector is reused for their list
 
 router = APIRouter(prefix="/saved-searches", tags=["saved-searches"])
 
@@ -380,11 +383,21 @@ def list_suggestions(
     return _drop_in_lab(svc, team_id, rows)
 
 
-def page_suggestions(svc, user_id: str, team_id: str, per_search: int = PER_SEARCH) -> list[dict]:
+def page_suggestions(
+    svc,
+    user_id: str,
+    team_id: str,
+    per_search: int = PER_SEARCH,
+    taste_vec: list[float] | None = None,
+) -> list[dict]:
     """The Suggestions page's list: the newest ``per_search`` of each search
     (and of those no remaining search found), so a noisy search does not
-    crowd out the rest. Newest first, each with "search_ids" and "candidate"."""
+    crowd out the rest. Newest first, each with "search_ids", "candidate" and
+    "score": its similarity to ``taste_vec`` (None without one, or before the
+    job has embedded the paper)."""
     args = {"p_user": user_id, "p_team": team_id, "p_per_search": per_search}
+    if taste_vec is not None:
+        args["p_taste"] = taste_vec
     picked: list[dict] = []
     page = 1000  # PostgREST's max rows per response
     while True:
@@ -414,11 +427,86 @@ def page_suggestions(svc, user_id: str, team_id: str, per_search: int = PER_SEAR
         )
     by_id = {r["id"]: r for r in rows}
     out = [
-        {**by_id[p["id"]], "search_ids": sorted(p["search_ids"] or [])}
+        {**by_id[p["id"]], "search_ids": sorted(p["search_ids"] or []), "score": p.get("score")}
         for p in picked
         if p["id"] in by_id
     ]
     return _drop_in_lab(svc, team_id, out)
+
+
+_taste_cache: dict[tuple[str, str], tuple[float, list[float] | None]] = {}
+_taste_lock = threading.Lock()
+
+
+def taste_vector(svc, user_id: str, team_id: str) -> list[float] | None:
+    """The person's taste vector in this lab, as Discover builds it (profile,
+    followed tags' papers, what they posted, saved, reacted to); None for
+    someone Atlas knows nothing about yet. Reused for a few minutes: the page
+    refetches its list after every answer."""
+    key = (user_id, team_id)
+    with _taste_lock:
+        hit = _taste_cache.get(key)
+        if hit and time.monotonic() - hit[0] < TASTE_TTL:
+            return hit[1]
+    profile = (
+        svc.table("profiles")
+        .select("profile_vec, display_name")
+        .eq("id", user_id)
+        .limit(1)
+        .execute()
+        .data
+        or [{}]
+    )[0]
+    weights = taste.engagement_weights(
+        svc, user_id, team_id, display_name=profile.get("display_name")
+    )
+    papers = taste.papers_by_id(svc, list(weights), "id, title, embedding")
+    vec = taste.blend_taste(taste.parse_vec(profile.get("profile_vec")), weights, papers)
+    with _taste_lock:
+        if len(_taste_cache) > 1000:
+            _taste_cache.clear()
+        _taste_cache[key] = (time.monotonic(), vec)
+    return vec
+
+
+def embed_candidates(svc, budget: float, limit: int = 1000) -> int:
+    """Embed candidates someone is waiting on, newest first, for up to
+    ``budget`` seconds; returns how many. Paced for Voyage's free tier. Stops
+    quietly without a key, and at a rate limit the client's retries didn't
+    clear (tomorrow carries on)."""
+    rows = (
+        svc.table("search_candidates")
+        .select("id, title, abstract, waiting:search_suggestions!inner(status)")
+        .is_("embedding", "null")
+        .eq("waiting.status", "pending")
+        .order("first_seen_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    todo = [(r["id"], embeddings.paper_text(r["title"], r.get("abstract"))) for r in rows]
+    todo = [(cid, text) for cid, text in todo if text]
+    started = time.monotonic()
+    done = 0
+    for start in range(0, len(todo), embeddings.BATCH_SIZE):
+        if time.monotonic() - started > budget:
+            break
+        chunk = todo[start : start + embeddings.BATCH_SIZE]
+        try:
+            vectors = embeddings.embed_texts([text for _, text in chunk])
+        except embeddings.EmbeddingError as exc:
+            log.warning("embedding suggestions stopped: %s", exc)
+            break
+        now = datetime.now(UTC).isoformat()
+        for (cid, _), vec in zip(chunk, vectors, strict=True):
+            svc.table("search_candidates").update({"embedding": vec, "embedded_at": now}).eq(
+                "id", cid
+            ).execute()
+        done += len(chunk)
+        if start + embeddings.BATCH_SIZE < len(todo):
+            time.sleep(EMBED_PAUSE)
+    return done
 
 
 def _drop_in_lab(svc, team_id: str, rows: list[dict]) -> list[dict]:
@@ -883,6 +971,9 @@ class Suggestion(BaseModel):
     saved_search_id: str | None
     search_ids: list[str] = []
     created_at: str
+    # Similarity to the person's taste (0-1); None until the paper is embedded,
+    # or for someone Atlas knows nothing about yet.
+    score: float | None = None
     paper: PaperOut
 
 
@@ -1059,13 +1150,20 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
 @router.get("/suggestions", response_model=list[Suggestion])
 def my_suggestions(team_id: UUID, token: str = Depends(require_token)) -> list[Suggestion]:
     user_id = _require_feature(token, str(team_id))
-    rows = page_suggestions(service_client(), user_id, str(team_id))
+    svc = service_client()
+    try:
+        vec = taste_vector(svc, user_id, str(team_id))
+    except Exception as exc:  # the list matters more than its order
+        log.warning("taste vector for %s failed: %s", user_id, exc)
+        vec = None
+    rows = page_suggestions(svc, user_id, str(team_id), taste_vec=vec)
     return [
         Suggestion(
             id=r["id"],
             saved_search_id=r.get("saved_search_id"),
             search_ids=r["search_ids"],
             created_at=r["created_at"],
+            score=r.get("score"),
             paper=_paper_out(r["candidate"]),
         )
         for r in rows

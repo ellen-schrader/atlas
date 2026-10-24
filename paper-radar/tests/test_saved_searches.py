@@ -233,8 +233,12 @@ def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
     monkeypatch.setattr(run, "refresh_feed", lambda svc, today, dry_run: copied.append(today) or 0)
     monkeypatch.setattr(ss, "retry_stuck_imports", lambda svc, now: 0)
     monkeypatch.setattr(run, "due_searches", lambda svc, now: [])
+    embedded: list[float] = []
+    monkeypatch.setattr(ss, "embed_candidates", lambda svc, budget: embedded.append(budget) or 0)
     assert run.run() == (0, 0, 0)
     assert len(copied) == 1
+    # Yesterday's leftovers are embedded on a day with nothing due, too.
+    assert embedded == [run.EMBED_BUDGET]
 
 
 def test_nothing_runs_without_the_feature(monkeypatch):
