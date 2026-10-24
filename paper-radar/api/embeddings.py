@@ -20,11 +20,12 @@ from .config import ApiSettings, get_api_settings
 
 log = logging.getLogger(__name__)
 
-# Batches are deliberately small: the free tier caps tokens-per-minute, and one
-# large batch of abstracts can exceed it in a single request. Small batches +
-# 429 backoff keep us under the limit.
+# Batches are deliberately small: the free tier allows 3 requests and 10K tokens
+# a minute, and 16 long abstracts came to more than 10K in one request -- a 429
+# no wait could cure (preprint-watch failed daily from 19 Oct 2026). Four
+# abstracts are ~2-3K tokens, so three requests a minute stay under the cap.
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
-BATCH_SIZE = 16  # texts per request
+BATCH_SIZE = 4  # texts per request
 _RETRIES = 6  # attempts per batch on 429/5xx
 _TIMEOUT = 60  # seconds per request
 _RATE_LIMIT_WAIT = 30  # fallback seconds to wait on a 429 with no Retry-After
@@ -32,7 +33,40 @@ _RETRYABLE = {429, 500, 502, 503, 529}
 
 
 class EmbeddingError(RuntimeError):
-    """The embedding API could not produce vectors."""
+    """The embedding API could not produce vectors.
+
+    The message stays generic because callers show it to users; ``detail`` is
+    Voyage's own explanation (rate limit vs. quota vs. bad key), for logs only.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, detail: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.detail = detail
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    """Voyage's error body, trimmed, and the response closed. Best effort: a
+    failure here must not replace the error being reported."""
+    try:
+        body = exc.read(500).decode("utf-8", "replace") if exc.fp else ""
+    except Exception:
+        body = ""
+    finally:
+        exc.close()
+    try:
+        detail = json.loads(body).get("detail") or body
+    except (ValueError, AttributeError):
+        detail = body
+    return " ".join(str(detail).split())[:300]
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float:
+    """Seconds to wait on a 429: Voyage's Retry-After when it is a number."""
+    try:
+        return max(0.0, float((exc.headers or {}).get("Retry-After", "")))
+    except ValueError:
+        return _RATE_LIMIT_WAIT
 
 
 def paper_text(title: str | None, abstract: str | None) -> str:
@@ -92,20 +126,24 @@ def _embed_batch(batch: list[str], input_type: str, settings: ApiSettings) -> li
             break
         except urllib.error.HTTPError as exc:
             last_error = exc
+            detail = _error_detail(exc)
             if exc.code in _RETRYABLE and attempt < _RETRIES - 1:
-                if exc.code == 429:
-                    # Honor Retry-After when present; the free tier's per-minute
-                    # limit needs a real cooldown, not a 1-2s backoff.
-                    retry_after = (exc.headers or {}).get("Retry-After")
-                    time.sleep(
-                        int(retry_after)
-                        if retry_after and retry_after.isdigit()
-                        else _RATE_LIMIT_WAIT
-                    )
-                else:
-                    time.sleep(2**attempt)
+                # The free tier's per-minute limit needs a real cooldown, not a
+                # 1-2s backoff.
+                wait = _retry_after(exc) if exc.code == 429 else 2**attempt
+                log.warning(
+                    "Voyage HTTP %s (attempt %d/%d), retrying in %.0fs: %s",
+                    exc.code,
+                    attempt + 1,
+                    _RETRIES,
+                    wait,
+                    detail or "no detail",
+                )
+                time.sleep(wait)
                 continue
-            raise EmbeddingError(f"Voyage API returned HTTP {exc.code}") from exc
+            raise EmbeddingError(
+                f"Voyage API returned HTTP {exc.code}", status=exc.code, detail=detail
+            ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
             if attempt < _RETRIES - 1:
