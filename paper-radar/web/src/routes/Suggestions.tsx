@@ -208,7 +208,6 @@ function SuggestionsPage() {
   const togglePick = (id: string) => setPicked((cur) => toggled(cur, id));
   const toggleOpen = (id: string) => setOpen((cur) => toggled(cur, id));
   const toggleFolded = (id: string) => setFolded((cur) => toggled(cur, id));
-  const allPicked = all.length > 0 && pickedIds.length === all.length;
   // Pick a whole group, or unpick it when it is all picked already.
   const pickGroup = (items: Suggestion[]) =>
     setPicked((cur) => {
@@ -324,84 +323,84 @@ function SuggestionsPage() {
             </p>
           ) : (
             <>
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <SelectCheckbox
-                  checked={allPicked}
-                  onChange={() =>
-                    setPicked(
-                      allPicked ? new Set() : new Set(all.map((s) => s.id)),
-                    )
-                  }
-                  label={allPicked ? "Select none" : "Select all"}
-                />
-                <span className="text-muted">
-                  {pickedIds.length > 0
-                    ? `${pickedIds.length} selected`
-                    : "Select all"}
-                </span>
-                {pickedIds.length > 0 && (
-                  <div className="ml-auto flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        decide.mutate({ ids: pickedIds, decision: "import" })
-                      }
-                    >
-                      <Plus size={13} aria-hidden />
-                      Add {pickedIds.length}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() =>
-                        decide.mutate({ ids: pickedIds, decision: "dismiss" })
-                      }
-                    >
-                      Dismiss {pickedIds.length}
-                    </Button>
-                  </div>
-                )}
-              </div>
-              {groups.length > 1
-                ? groups.map((g) => {
-                    const isFolded = folded.has(g.id);
-                    return (
-                      <section
-                        key={g.id}
-                        aria-label={`From “${g.name}”`}
-                        className="flex flex-col gap-2"
+              {groups.map((g) => {
+                const isFolded = folded.has(g.id);
+                const every = g.items.every((x) => picked.has(x.id));
+                return (
+                  <section
+                    key={g.id}
+                    aria-label={`From “${g.name}”`}
+                    className="flex flex-col gap-2"
+                  >
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleFolded(g.id)}
+                        aria-expanded={!isFolded}
+                        className="inline-flex min-w-0 items-center gap-1 text-sm font-semibold text-fg hover:text-accent"
                       >
-                        <div className="flex items-center gap-3">
-                          <SelectCheckbox
-                            checked={g.items.every((x) => picked.has(x.id))}
-                            onChange={() => pickGroup(g.items)}
-                            label={`Select all from “${g.name}”`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => toggleFolded(g.id)}
-                            aria-expanded={!isFolded}
-                            className="inline-flex min-w-0 items-center gap-1 text-sm font-semibold text-fg hover:text-accent"
-                          >
-                            <ChevronDown
-                              size={14}
-                              className={cn(
-                                "shrink-0 transition-transform",
-                                isFolded && "-rotate-90",
-                              )}
-                              aria-hidden
-                            />
-                            <span className="truncate">{g.name}</span>
-                            <span className="font-normal text-muted">
-                              · {g.items.length}
-                            </span>
-                          </button>
-                        </div>
-                        {!isFolded && rows(g.items)}
-                      </section>
-                    );
-                  })
-                : rows(all)}
+                        <ChevronDown
+                          size={14}
+                          className={cn(
+                            "shrink-0 transition-transform",
+                            isFolded && "-rotate-90",
+                          )}
+                          aria-hidden
+                        />
+                        <span className="truncate">{g.name}</span>
+                        <span className="font-normal text-muted">
+                          · {g.items.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => pickGroup(g.items)}
+                        aria-label={`${every ? "Deselect" : "Select"} all from “${g.name}”`}
+                        className="ml-auto shrink-0 text-xs font-medium text-muted hover:text-fg"
+                      >
+                        {every ? "Deselect all" : "Select all"}
+                      </button>
+                    </div>
+                    {!isFolded && rows(g.items)}
+                  </section>
+                );
+              })}
+              {pickedIds.length > 0 && (
+                <div
+                  role="region"
+                  aria-label="Selected papers"
+                  className="sticky bottom-4 z-10 mx-auto flex flex-wrap items-center gap-2 rounded-card border border-border bg-surface px-4 py-2.5 text-sm shadow-lg"
+                >
+                  <span className="mr-2 font-medium text-fg">
+                    {pickedIds.length} selected
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      decide.mutate({ ids: pickedIds, decision: "import" })
+                    }
+                  >
+                    <Plus size={13} aria-hidden />
+                    Add {pickedIds.length}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      decide.mutate({ ids: pickedIds, decision: "dismiss" })
+                    }
+                  >
+                    Dismiss {pickedIds.length}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setPicked(new Set())}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </section>
