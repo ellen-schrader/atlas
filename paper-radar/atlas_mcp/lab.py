@@ -711,12 +711,12 @@ def digest(team: dict, days: int, offset: int = 0) -> dict:
     `offset`), plus — on the first page only — the "For you" picks (None when
     Atlas has no signal for the caller), the new-comment count and the papers the
     caller was @-mentioned on. All RLS-scoped to the lab."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import UTC, datetime, timedelta
 
     client = get_client()
     tid = team["id"]
     uid = current_user_id()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
     # Page the rendered list so an active lab can't dump hundreds of papers into one
     # tool result; the exact-count header still reports the true total. The id

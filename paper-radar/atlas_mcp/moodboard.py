@@ -273,7 +273,7 @@ def _cluster(kr: list, ks: list, kh: list, n: int) -> list[str]:
     hues: list[int] = []
     for _count, _sat, rgb, hue in sorted(agg.values(), key=lambda r: -r[0]):
         if all(min(abs(hue - hh), 255 - abs(hue - hh)) > _HUE_SEP for hh in hues):
-            out.append("#%02x%02x%02x" % rgb)
+            out.append("#{:02x}{:02x}{:02x}".format(*rgb))
             hues.append(hue)
         if len(out) >= n:
             break

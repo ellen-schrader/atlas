@@ -63,7 +63,9 @@ _BARE_DOI_RE = re.compile(r"^(?:doi:\s*)?(10\.[0-9]{4,9}/\S+)$", re.IGNORECASE)
 # ``127.1``, ``localhost``) must NOT gain a scheme here, or it would sail past the
 # API's fast syntactic SSRF gate (which can't parse those as IPs) and rely solely on
 # the deferred fetch-time DNS check. Denying coercion keeps their original hard 400.
-_HOSTLIKE_PREFIX_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[:/?#]|$)", re.IGNORECASE)
+_HOSTLIKE_PREFIX_RE = re.compile(
+    r"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[:/?#]|$)", re.IGNORECASE
+)
 
 
 def coerce_fetch_url(raw: str) -> str:

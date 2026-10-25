@@ -350,7 +350,7 @@ def test_cvd_simulation_leaves_gray_unchanged():
 
 
 def _almost(a, b, tol=1e-9):
-    return all(abs(x - y) <= tol for x, y in zip(a, b))
+    return all(abs(x - y) <= tol for x, y in zip(a, b, strict=True))
 
 
 def test_parse_embedding_handles_json_string_and_list():
