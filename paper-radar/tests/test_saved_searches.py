@@ -259,3 +259,21 @@ def test_names_go_on_one_line():
         ss.checked_name(" \n ")
     with pytest.raises(ss.Refused):
         ss.checked_name("x" * 121)
+
+
+def test_arxiv_subjects_narrow_the_query():
+    node = q.without_filters(q.parse('"flow matching" AND protein'))
+    plain = q.to_arxiv(node)
+    assert ss.arxiv_query(node, []) == plain
+    # An archive takes in all its subcategories; a subcategory is itself.
+    assert ss.arxiv_query(node, ["q-bio", "cs.LG"]) == f"{plain} AND (cat:q-bio* OR cat:cs.LG)"
+
+
+def test_arxiv_subject_codes_are_checked():
+    assert ss.checked_categories([" q-bio.* ", "q-bio", "cs.LG", "q-bio*"]) == ["q-bio", "cs.LG"]
+    assert ss.checked_categories([]) == []
+    for bad in ("cs.LG OR ti:x", "q bio", "", "cat:q-bio"):
+        with pytest.raises(ss.Refused, match="arXiv subject code"):
+            ss.checked_categories([bad])
+    with pytest.raises(ss.Refused, match="at most"):
+        ss.checked_categories([f"cs.A{chr(97 + i)}" for i in range(21)])

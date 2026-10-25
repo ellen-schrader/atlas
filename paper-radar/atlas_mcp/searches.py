@@ -115,6 +115,9 @@ def list_saved_searches(team_id: str | None = None) -> str:
     lines = []
     for r in rows:
         state = [", ".join(_SOURCE_LABEL[s] for s in r["sources"] if s in _SOURCE_LABEL)]
+        if "arxiv" in r["sources"]:
+            cats = r.get("arxiv_categories") or []
+            state.append(f"arXiv subjects: {', '.join(cats)}" if cats else "all of arXiv")
         state.append(f"{r['pending']} waiting")
         state.append(f"last ran {r['last_run_at'][:10]}" if r.get("last_run_at") else "not run yet")
         if not r["active"]:
@@ -122,7 +125,8 @@ def list_saved_searches(team_id: str | None = None) -> str:
         if r.get("last_error"):
             state.append(f"last run had trouble: {r['last_error']}")
         lines.append(f"- {r['name']}: {r['query']}\n  " + " · ".join(state))
-    total = sum(r["pending"] for r in rows)
+    # Distinct papers: one two searches found counts once here.
+    total = ss.pending_count(service_client(), lab.current_user_id(), team["id"])
     # The names and queries are the person's own, but framed as data all the same.
     return (
         f"Your {len(rows)} saved searches in {team['name']} "
@@ -177,9 +181,8 @@ def list_suggestions(
     total = max(total, offset + len(shown))
     blocks = []
     for r in shown:
-        found_by = (
-            searches.get(r.get("saved_search_id") or "", {}).get("name") or "a deleted search"
-        )
+        names = [searches[i]["name"] for i in r.get("search_ids") or [] if i in searches]
+        found_by = ", ".join(names) or "a deleted search"
         blocks.append(
             f"{_paper_line(r['candidate'], abstract=True)}\n"
             f"  found by: {found_by} · suggestion id: {r['id']}"
@@ -312,6 +315,7 @@ async def create_saved_search(
     name: str,
     query: str,
     sources: list[str] | None = None,
+    arxiv_subjects: list[str] | None = None,
     team_id: str | None = None,
     confirm: bool = False,
 ) -> str:
@@ -334,6 +338,10 @@ async def create_saved_search(
         query: The search, in PubMed syntax.
         sources: Any of "pubmed", "biorxiv" (with medRxiv), "arxiv"; all three
             if left out.
+        arxiv_subjects: arXiv subject codes the search keeps to on arXiv, e.g.
+            ["q-bio"] (all of quantitative biology, cross-lists included) or
+            ["q-bio.GN", "cs.LG"]; [] for all of arXiv. Left out: ["q-bio"],
+            since most of arXiv is physics, maths and computer science.
         team_id: Which lab, if you belong to more than one.
         confirm: Set true to save it (after previewing).
     """
@@ -345,24 +353,28 @@ async def create_saved_search(
     user_id = lab.current_user_id()
     svc = service_client()
     picked = sources if sources is not None else ss.SOURCES
+    subjects = arxiv_subjects if arxiv_subjects is not None else ss.DEFAULT_ARXIV
     if not confirm:
         try:
             # Everything saving would refuse, refused before the search runs.
             name, query, picked = await _offload(
                 ss.checked_new, svc, user_id, team["id"], name, query, picked
             )
+            subjects = ss.checked_categories(subjects)
             ss.run_limiter.check(user_id)
         except ss.Refused as exc:
             return f"Error: {exc}"
-        results = await _offload(ss.preview_results, svc, team["id"], query, picked)
+        results = await _offload(ss.preview_results, svc, team["id"], query, picked, subjects)
         return (
             f"Saved search {name!r} on "
-            f"{', '.join(_SOURCE_LABEL[s] for s in picked)} would have found:\n\n"
+            f"{', '.join(_SOURCE_LABEL[s] for s in picked)}"
+            + (f" (arXiv subjects: {', '.join(subjects) or 'all'})" if "arxiv" in picked else "")
+            + " would have found:\n\n"
             + _untrusted("results", _preview_text(results))
             + "\n\nNothing saved yet. Re-run with confirm=true to save it."
         )
     try:
-        row = await _offload(ss.new_search, svc, user_id, team["id"], name, query, picked)
+        row = await _offload(ss.new_search, svc, user_id, team["id"], name, query, picked, subjects)
     except ss.Refused as exc:
         return f"Error: {exc}"
     threading.Thread(target=ss.run_now, args=(row,), daemon=True).start()

@@ -249,11 +249,9 @@ def _p_stacked_bar(fig, ax, panel, dom, palettes, rng, base_size):
             c = colours[k % len(colours)]
             label = f"Region {_letter(k)}"
             if horizontal:
-                ax.barh(y + off, comp[:, k], height=thick * 0.92, color=c, label=label,
-                        linewidth=0)
+                ax.barh(y + off, comp[:, k], height=thick * 0.92, color=c, label=label, linewidth=0)
             else:
-                ax.bar(y + off, comp[:, k], width=thick * 0.92, color=c, label=label,
-                       linewidth=0)
+                ax.bar(y + off, comp[:, k], width=thick * 0.92, color=c, label=label, linewidth=0)
         span = float(comp.max())
     else:
         base = np.zeros(dom.n)
@@ -304,8 +302,12 @@ def _p_annotation_track(fig, ax, panel, dom, palettes, rng, base_size):
     # to be sampled: otherwise a strip that draws only groups {1,2} paints group 1
     # with colours[0], and the same group takes a different colour each render.
     ax.imshow(
-        strip, aspect="auto", cmap=ListedColormap(colours[:k]),
-        vmin=0, vmax=k - 1, interpolation="nearest",
+        strip,
+        aspect="auto",
+        cmap=ListedColormap(colours[:k]),
+        vmin=0,
+        vmax=k - 1,
+        interpolation="nearest",
     )
     ax.set_xticks([])
     ax.grid(False)
@@ -480,10 +482,18 @@ def draw(fig, spec: dict, rng) -> None:
         # legend lands on top of the panels' tick labels.
         if spec["legend"]["loc"] == "below":
             fig.legend(
-                hs, ls, loc="outside lower center", ncols=min(len(ls), 4),
-                frameon=False, fontsize=base_size - 1,
+                hs,
+                ls,
+                loc="outside lower center",
+                ncols=min(len(ls), 4),
+                frameon=False,
+                fontsize=base_size - 1,
             )
         else:
             fig.legend(
-                hs, ls, loc="outside center right", frameon=False, fontsize=base_size - 1,
+                hs,
+                ls,
+                loc="outside center right",
+                frameon=False,
+                fontsize=base_size - 1,
             )

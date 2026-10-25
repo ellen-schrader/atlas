@@ -9,6 +9,7 @@ import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
 import { createSearch, previewSearch, updateSearch } from "@/lib/api";
 import {
+  ARXIV_BIOLOGY,
   PAPER_SOURCE_LABEL,
   type SavedSearch,
   type SearchFields,
@@ -24,21 +25,25 @@ const EMPTY: SearchFields = {
   name: "",
   query: "",
   sources: ["pubmed", "biorxiv", "arxiv"],
+  arxiv_categories: ARXIV_BIOLOGY,
 };
 
-/** New search, or edit one (`search`). Saving runs it at once, so the first
- *  week's suggestions arrive within a minute rather than next week. */
+/** New search, or edit one (`search`). A new one can start from `initial`
+ *  (a suggested search). Saving runs it at once, so the first week's
+ *  suggestions arrive within a minute rather than next week. */
 export function SearchDialog({
   open,
   onClose,
   teamId,
   search,
+  initial,
   onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
   search?: SavedSearch | null;
+  initial?: Partial<SearchFields>;
   onSaved?: (s: SavedSearch, rerun: boolean) => void;
 }) {
   const title = search ? "Edit search" : "New search";
@@ -58,9 +63,10 @@ export function SearchDialog({
         </div>
         {open && (
           <SearchForm
-            key={search?.id ?? "new"}
+            key={search?.id ?? `new:${initial?.query ?? ""}`}
             teamId={teamId}
             search={search ?? null}
+            initial={initial}
             onDone={(s, rerun) => {
               onSaved?.(s, rerun);
               onClose();
@@ -76,35 +82,41 @@ export function SearchDialog({
 function SearchForm({
   teamId,
   search,
+  initial,
   onDone,
   onCancel,
 }: {
   teamId: string;
   search: SavedSearch | null;
+  initial?: Partial<SearchFields>;
   onDone: (s: SavedSearch, rerun: boolean) => void;
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
   const [f, setF] = useState<SearchFields>(
     search
-      ? { name: search.name, query: search.query, sources: search.sources }
-      : EMPTY,
+      ? {
+          name: search.name,
+          query: search.query,
+          sources: search.sources,
+          arxiv_categories: search.arxiv_categories,
+        }
+      : { ...EMPTY, ...initial },
   );
-  // The preview answers the query and sources as they were when tested; it
-  // shows only while the form still says the same.
+  // The preview answers the form as it was when tested; it shows only while
+  // the form still says the same.
   const [tested, setTested] = useState<{
-    query: string;
-    sources: string;
+    asked: string;
     results: SourceResult[];
   } | null>(null);
 
   const preview = useMutation({
     // The arguments travel with the request, so the answer is filed under
     // what was asked even if the form changed while it ran.
-    mutationFn: (asked: { query: string; sources: SourceKey[] }) =>
-      previewSearch(teamId, asked.query, asked.sources),
+    mutationFn: (asked: SearchFields) =>
+      previewSearch(teamId, asked.query, asked.sources, asked.arxiv_categories),
     onSuccess: (results, asked) =>
-      setTested({ query: asked.query, sources: asked.sources.join(), results }),
+      setTested({ asked: previewKey(asked), results }),
   });
   const save = useMutation({
     mutationFn: () => {
@@ -119,15 +131,13 @@ function SearchForm({
       const rerun =
         !search ||
         search.query !== s.query ||
-        search.sources.join() !== s.sources.join();
+        search.sources.join() !== s.sources.join() ||
+        search.arxiv_categories.join() !== s.arxiv_categories.join();
       onDone(s, rerun);
     },
   });
 
-  const current =
-    tested !== null &&
-    tested.query === f.query &&
-    tested.sources === f.sources.join();
+  const current = tested !== null && tested.asked === previewKey(f);
   // A new search may go unnamed (it is called by its query); an existing one
   // keeps a name rather than being renamed by clearing the field.
   const ready =
@@ -192,6 +202,12 @@ function SearchForm({
         selected={f.sources}
         onToggle={toggle}
       />
+      {f.sources.includes("arxiv") && (
+        <ArxivSubjects
+          value={f.arxiv_categories}
+          onChange={(v) => setF((cur) => ({ ...cur, arxiv_categories: v }))}
+        />
+      )}
 
       <label className="flex flex-col gap-1 text-sm font-medium text-fg">
         <span>
@@ -223,9 +239,7 @@ function SearchForm({
             disabled={
               !f.query.trim() || f.sources.length === 0 || preview.isPending
             }
-            onClick={() =>
-              preview.mutate({ query: f.query, sources: f.sources })
-            }
+            onClick={() => preview.mutate(f)}
           >
             {preview.isPending ? (
               <Loader2 size={13} className="animate-spin" aria-hidden />
@@ -267,6 +281,106 @@ function SearchForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/** What a preview depends on, as one string to compare. */
+function previewKey(f: SearchFields): string {
+  return JSON.stringify([f.query, f.sources, f.arxiv_categories]);
+}
+
+type SubjectMode = "biology" | "all" | "custom";
+
+/** Which arXiv subjects to keep to: most of arXiv is physics, maths and
+ *  computer science, so new searches keep to quantitative biology. */
+function ArxivSubjects({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [mode, setMode] = useState<SubjectMode>(
+    value.length === 0
+      ? "all"
+      : value.join() === ARXIV_BIOLOGY.join()
+        ? "biology"
+        : "custom",
+  );
+  const [custom, setCustom] = useState(
+    mode === "custom" ? value.join(" ") : "",
+  );
+  const codes = (text: string) => text.split(/[\s,]+/).filter(Boolean);
+  const pick = (m: SubjectMode) => {
+    setMode(m);
+    onChange(
+      m === "biology" ? ARXIV_BIOLOGY : m === "all" ? [] : codes(custom),
+    );
+  };
+  const options: { key: SubjectMode; label: string }[] = [
+    { key: "biology", label: "Biology" },
+    { key: "all", label: "All of arXiv" },
+    { key: "custom", label: "Choose subjects" },
+  ];
+  return (
+    <fieldset className="-mt-2 flex flex-col gap-1.5">
+      <legend className="mb-1.5 text-xs font-medium text-muted">
+        On arXiv, look in
+      </legend>
+      <div role="radiogroup" className="flex flex-wrap gap-1.5">
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            role="radio"
+            aria-checked={mode === o.key}
+            onClick={() => pick(o.key)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs font-medium transition",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              mode === o.key
+                ? "border-accent/50 bg-accent-weak text-fg"
+                : "border-border text-muted hover:text-fg",
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {mode === "biology" && (
+        <p className="text-xs text-muted">
+          Quantitative biology, including machine-learning papers cross-listed
+          there.
+        </p>
+      )}
+      {mode === "custom" && (
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          <Input
+            value={custom}
+            spellCheck={false}
+            className="font-mono text-[13px]"
+            placeholder="q-bio.GN cs.LG"
+            aria-label="arXiv subject codes"
+            onChange={(e) => {
+              setCustom(e.target.value);
+              onChange(codes(e.target.value));
+            }}
+          />
+          <span>
+            Subject codes, separated by spaces (
+            <a
+              href="https://arxiv.org/category_taxonomy"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-fg"
+            >
+              list of codes
+            </a>
+            ). Left empty, all of arXiv.
+          </span>
+        </label>
+      )}
+    </fieldset>
   );
 }
 

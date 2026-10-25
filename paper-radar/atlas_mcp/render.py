@@ -220,8 +220,9 @@ def _draw_heatmap(fig, ax, spec: dict, rng) -> None:
         field += rng.uniform(0.5, 1.0) * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / 0.04)
     pal = spec["palette"]
     stops = list(pal) if len(pal) >= 2 else ["#ffffff", pal[0]]
-    im = ax.imshow(field, cmap=LinearSegmentedColormap.from_list("style_card", stops),
-                   origin="lower")
+    im = ax.imshow(
+        field, cmap=LinearSegmentedColormap.from_list("style_card", stops), origin="lower"
+    )
     fig.colorbar(im, ax=ax, shrink=0.85)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -346,6 +347,7 @@ _DRAW = {
     "heatmap": _draw_heatmap,
     "box": _draw_box,
 }
+
 
 def render(raw_spec: dict, seed: int) -> tuple[bytes, int, int]:
     """Render a spec → ``(png_bytes, width_px, height_px)``.

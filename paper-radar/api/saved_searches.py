@@ -17,9 +17,10 @@ Every endpoint answers 404 unless the feature is on for the caller in that lab.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
@@ -35,6 +36,7 @@ from paper_radar.search.sources import Hit, SourceError
 
 from .deps import require_feature, require_token
 from .ratelimit import PerUserRateLimiter
+from .search_ideas import search_ideas
 from .supa import service_client
 
 log = logging.getLogger(__name__)
@@ -48,11 +50,18 @@ OVERLAP_DAYS = 3  # later runs reach back past the last one: arXiv announces a
 # Thursday submission on Sunday evening, and PubMed indexes late too
 RETRY_RUNS = 3  # a failing search is tried daily this many times, then weekly
 IMPORT_STUCK_AFTER = timedelta(hours=1)  # an import still running after this was lost
+PER_SEARCH = 100  # suggestions the page lists per search (newest first)
+# arXiv subjects a new search keeps to unless told otherwise: all of
+# quantitative biology, cross-lists included ("flow matching" finds ~450 arXiv
+# papers a month, 9 of them in q-bio).
+DEFAULT_ARXIV = ("q-bio",)
+MAX_ARXIV_CATEGORIES = 20
 
 router = APIRouter(prefix="/saved-searches", tags=["saved-searches"])
 
 _SEARCH_COLUMNS = (
-    "id, user_id, team_id, name, query, sources, active, last_run_at, last_error, failed_runs"
+    "id, user_id, team_id, name, query, sources, arxiv_categories, position, active,"
+    " last_run_at, last_error, failed_runs"
 )
 _CANDIDATE_COLUMNS = "key, source, doi, pmid, url, title, authors, venue, published_on, abstract"
 
@@ -138,11 +147,13 @@ def run_query(
     *,
     feed: Iterable[dict] | None,
     limit: int = sources.MAX_HITS,
+    arxiv_categories: Sequence[str] = (),
 ) -> tuple[dict[str, list[Hit]], dict[str, str]]:
     """Run ``query`` on each picked source: (hits per source, error per source).
 
     A source failing does not stop the others. ``feed`` is the bioRxiv/medRxiv
-    copy (:func:`rxiv_feed`); None skips those servers."""
+    copy (:func:`rxiv_feed`); None skips those servers. ``arxiv_categories``
+    keeps arXiv to those subjects (:func:`arxiv_query`)."""
     node = q.without_filters(q.parse(query))
     found: dict[str, list[Hit]] = {}
     errors: dict[str, str] = {}
@@ -153,12 +164,28 @@ def run_query(
             elif node is None:
                 found[source] = []  # only PubMed filters: nothing to look for here
             elif source == "arxiv":
-                found[source] = sources.search_arxiv(q.to_arxiv(node), since, until, limit)
+                found[source] = sources.search_arxiv(
+                    arxiv_query(node, arxiv_categories), since, until, limit
+                )
             elif source == "biorxiv" and feed is not None:
                 found[source] = _rxiv_hits(node, feed, since, until)[:limit]
         except SourceError as exc:
             errors[source] = str(exc)
     return found, errors
+
+
+def arxiv_query(node: q.Node, categories: Sequence[str]) -> str:
+    """The query in arXiv's syntax, kept to ``categories`` if any: an archive
+    ("q-bio") takes in all its subcategories, and arXiv's ``cat:`` matches
+    cross-lists too, so a cs.LG paper cross-listed to q-bio.BM is in q-bio."""
+    rendered = q.to_arxiv(node)
+    if not categories:
+        return rendered
+    # Words take no wildcard on arXiv (see query._arxiv_term), but categories
+    # do: checked 2026-10-24, "flow matching" AND cat:q-bio* found the same 9
+    # papers as the ten q-bio subcategories OR'ed, cross-lists included.
+    cats = " OR ".join(f"cat:{c}" if "." in c else f"cat:{c}*" for c in categories)
+    return f"{rendered} AND ({cats})"
 
 
 def _dedupe(hits: Iterable[Hit]) -> list[Hit]:
@@ -256,14 +283,44 @@ def file_hits(svc, search: dict, hits: list[Hit]) -> int:
         .execute()
         .data
     )
+    _link_search(svc, search, [s["candidate_id"] for s in suggestions])
     return len(added or [])
+
+
+def _link_search(svc, search: dict, candidate_ids: list[str]) -> None:
+    """Record that ``search`` found these candidates, on the owner's
+    suggestions for them -- new ones and ones another search filed first."""
+    for start in range(0, len(candidate_ids), 100):
+        rows = (
+            svc.table("search_suggestions")
+            .select("id")
+            .eq("user_id", search["user_id"])
+            .eq("team_id", search["team_id"])
+            .in_("candidate_id", candidate_ids[start : start + 100])
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            svc.table("search_suggestion_searches").upsert(
+                [{"suggestion_id": r["id"], "saved_search_id": search["id"]} for r in rows],
+                on_conflict="suggestion_id,saved_search_id",
+                ignore_duplicates=True,
+            ).execute()
 
 
 def run_saved_search(svc, search: dict, today: date, feed: list[dict] | None) -> tuple[int, str]:
     """Run one saved search and file its results: (new suggestions, error text)."""
     since, until = window(search.get("last_run_at"), today)
     try:
-        found, errors = run_query(search["query"], search["sources"], since, until, feed=feed)
+        found, errors = run_query(
+            search["query"],
+            search["sources"],
+            since,
+            until,
+            feed=feed,
+            arxiv_categories=search.get("arxiv_categories") or (),
+        )
     except q.QueryError as exc:
         found, errors = {}, {"query": str(exc)}
     new = file_hits(svc, search, [h for hits in found.values() for h in hits])
@@ -291,19 +348,25 @@ def list_suggestions(
     search_ids: list[str] | None = None,
 ) -> list[dict]:
     """The person's pending suggestions in this lab, newest first (only those
-    of ``search_ids``, if given). Ones the lab has gained another way since
-    they were filed are marked and left out, so a page can come back short."""
+    one of ``search_ids`` found, if given), each with the searches that found
+    it under "search_ids" (those among ``search_ids``, when given). Ones the
+    lab has gained another way since they were filed are marked and left out,
+    so a page can come back short."""
+    # Filtering on the links needs an inner join; without a filter, a left one
+    # keeps the suggestions no remaining search found.
+    join = "!inner" if search_ids is not None else ""
     query = (
         svc.table("search_suggestions")
         .select(
-            f"id, created_at, saved_search_id, candidate:search_candidates({_CANDIDATE_COLUMNS})"
+            f"id, created_at, saved_search_id, candidate:search_candidates({_CANDIDATE_COLUMNS}),"
+            f" links:search_suggestion_searches{join}(saved_search_id)"
         )
         .eq("user_id", user_id)
         .eq("team_id", team_id)
         .eq("status", "pending")
     )
     if search_ids is not None:
-        query = query.in_("saved_search_id", search_ids)
+        query = query.in_("links.saved_search_id", search_ids)
     rows = (
         query.order("created_at", desc=True)
         .order("id")
@@ -312,6 +375,55 @@ def list_suggestions(
         .data
         or []
     )
+    for r in rows:
+        r["search_ids"] = sorted({link["saved_search_id"] for link in r.pop("links", None) or []})
+    return _drop_in_lab(svc, team_id, rows)
+
+
+def page_suggestions(svc, user_id: str, team_id: str, per_search: int = PER_SEARCH) -> list[dict]:
+    """The Suggestions page's list: the newest ``per_search`` of each search
+    (and of those no remaining search found), so a noisy search does not
+    crowd out the rest. Newest first, each with "search_ids" and "candidate"."""
+    args = {"p_user": user_id, "p_team": team_id, "p_per_search": per_search}
+    picked: list[dict] = []
+    page = 1000  # PostgREST's max rows per response
+    while True:
+        chunk = (
+            svc.rpc("pending_suggestions", args)
+            .range(len(picked), len(picked) + page - 1)
+            .execute()
+            .data
+            or []
+        )
+        picked += chunk
+        if len(chunk) < page:
+            break
+    rows: list[dict] = []
+    ids = [r["id"] for r in picked]
+    for start in range(0, len(ids), 150):
+        rows += (
+            svc.table("search_suggestions")
+            .select(
+                f"id, created_at, saved_search_id,"
+                f" candidate:search_candidates({_CANDIDATE_COLUMNS})"
+            )
+            .in_("id", ids[start : start + 150])
+            .execute()
+            .data
+            or []
+        )
+    by_id = {r["id"]: r for r in rows}
+    out = [
+        {**by_id[p["id"]], "search_ids": sorted(p["search_ids"] or [])}
+        for p in picked
+        if p["id"] in by_id
+    ]
+    return _drop_in_lab(svc, team_id, out)
+
+
+def _drop_in_lab(svc, team_id: str, rows: list[dict]) -> list[dict]:
+    """``rows`` without the suggestions whose paper the lab has gained another
+    way since; those are marked 'in_library'."""
     rows = [r for r in rows if r.get("candidate")]
     hits = [_hit_of(r["candidate"]) for r in rows]
     in_lab = keys_in_lab(svc, team_id, hits)
@@ -511,6 +623,27 @@ def checked_sources(picked: Iterable[str]) -> list[str]:
     return [s for s in SOURCES if s in asked]
 
 
+_ARXIV_CODE = re.compile(r"^[a-z][a-z-]*(\.[A-Za-z][A-Za-z-]*)?$")
+
+
+def checked_categories(categories: Iterable[str]) -> list[str]:
+    """arXiv subject codes ("q-bio", "cs.LG"), without repeats, or Refused.
+    A trailing ".*" or "*" is dropped: an archive alone takes in all of it."""
+    out: list[str] = []
+    for raw in categories:
+        code = raw.strip().removesuffix("*").removesuffix(".")
+        if not _ARXIV_CODE.match(code):
+            raise Refused(
+                f"{raw.strip()!r} isn't an arXiv subject code. "
+                "Use codes like q-bio, q-bio.GN or cs.LG."
+            )
+        if code not in out:
+            out.append(code)
+    if len(out) > MAX_ARXIV_CATEGORIES:
+        raise Refused(f"Pick at most {MAX_ARXIV_CATEGORIES} arXiv subjects.")
+    return out
+
+
 def checked_name(name: str) -> str:
     """The name on one line, or Refused."""
     name = " ".join(name.split())
@@ -520,33 +653,37 @@ def checked_name(name: str) -> str:
 
 
 def own_searches(svc, user_id: str, team_id: str) -> list[dict]:
-    """The person's searches in this lab, oldest first, each with how many of
-    its suggestions are waiting (under "pending")."""
+    """The person's searches in this lab in their order (highest priority
+    first), each with how many suggestions it found are waiting (under
+    "pending"; a paper two searches found counts for both)."""
     rows = (
         svc.table("saved_searches")
         .select(_SEARCH_COLUMNS)
         .eq("user_id", user_id)
         .eq("team_id", team_id)
+        .order("position")
         .order("created_at")
         .execute()
         .data
         or []
     )
-    pending = (
-        svc.table("search_suggestions")
-        .select("saved_search_id")
-        .eq("user_id", user_id)
-        .eq("team_id", team_id)
-        .eq("status", "pending")
-        .limit(5000)
+    if not rows:
+        return []
+    counted = svc.rpc("pending_counts", {"p_user": user_id, "p_team": team_id}).execute().data or []
+    counts = {c["saved_search_id"]: c["pending"] for c in counted}
+    return [{**r, "pending": counts.get(r["id"], 0)} for r in rows]
+
+
+def reorder_searches(svc, user_id: str, team_id: str, ids: list[str]) -> None:
+    """Put the person's searches in the order of ``ids`` (highest priority
+    first). Refused unless ``ids`` are exactly their searches in this lab."""
+    done = (
+        svc.rpc("reorder_saved_searches", {"p_user": user_id, "p_team": team_id, "p_ids": ids})
         .execute()
         .data
-        or []
     )
-    counts: dict[str, int] = {}
-    for p in pending:
-        counts[p["saved_search_id"]] = counts.get(p["saved_search_id"], 0) + 1
-    return [{**r, "pending": counts.get(r["id"], 0)} for r in rows]
+    if not done:
+        raise Refused("List each of your searches once, in the order you want them.")
 
 
 def checked_new(
@@ -570,12 +707,29 @@ def checked_new(
 
 
 def new_search(
-    svc, user_id: str, team_id: str, name: str, query: str, picked: Iterable[str]
+    svc,
+    user_id: str,
+    team_id: str,
+    name: str,
+    query: str,
+    picked: Iterable[str],
+    arxiv_categories: Iterable[str] = DEFAULT_ARXIV,
 ) -> dict:
     """Save a search for the person, checked and within their run budget
-    (Refused if not). The caller runs it."""
+    (Refused if not), last in their order. The caller runs it."""
     name, query, picked = checked_new(svc, user_id, team_id, name, query, picked)
+    categories = checked_categories(arxiv_categories)
     run_limiter.check(user_id)
+    last = (
+        svc.table("saved_searches")
+        .select("position")
+        .eq("user_id", user_id)
+        .eq("team_id", team_id)
+        .order("position", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
     return (
         svc.table("saved_searches")
         .insert(
@@ -585,6 +739,8 @@ def new_search(
                 "name": name,
                 "query": query,
                 "sources": picked,
+                "arxiv_categories": categories,
+                "position": last[0]["position"] + 1 if last else 0,
             }
         )
         .execute()
@@ -592,12 +748,20 @@ def new_search(
     )
 
 
-def preview_results(svc, team_id: str, query: str, picked: list[str]) -> list[SourceResult]:
+def preview_results(
+    svc,
+    team_id: str,
+    query: str,
+    picked: list[str],
+    arxiv_categories: Sequence[str] = DEFAULT_ARXIV,
+) -> list[SourceResult]:
     """What a (checked) query finds over the past week, per source, with the
     first ten papers of each marked if the lab has them."""
     since, until = window(None, date.today())
     feed = rxiv_feed(svc, since) if "biorxiv" in picked else None
-    found, errors = run_query(query, picked, since, until, feed=feed)
+    found, errors = run_query(
+        query, picked, since, until, feed=feed, arxiv_categories=arxiv_categories
+    )
     out = []
     for source in picked:
         hits = _dedupe(found.get(source, []))
@@ -649,6 +813,8 @@ class SearchIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     query: str = Field(min_length=1, max_length=2000)
     sources: list[str] = Field(default_factory=lambda: list(SOURCES), max_length=10)
+    # Empty: all of arXiv.
+    arxiv_categories: list[str] = Field(default_factory=lambda: list(DEFAULT_ARXIV), max_length=50)
 
 
 class SearchPatch(BaseModel):
@@ -656,7 +822,19 @@ class SearchPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     query: str | None = Field(default=None, min_length=1, max_length=2000)
     sources: list[str] | None = Field(default=None, max_length=10)
+    arxiv_categories: list[str] | None = Field(default=None, max_length=50)
     active: bool | None = None
+
+
+class SearchIdea(BaseModel):
+    name: str
+    query: str
+    reason: str
+
+
+class SearchOrder(BaseModel):
+    team_id: UUID
+    ids: list[UUID] = Field(min_length=1, max_length=MAX_SEARCHES)
 
 
 class SavedSearch(BaseModel):
@@ -664,6 +842,8 @@ class SavedSearch(BaseModel):
     name: str
     query: str
     sources: list[str]
+    arxiv_categories: list[str] = []
+    position: int = 0
     active: bool
     last_run_at: str | None
     last_error: str | None
@@ -674,6 +854,7 @@ class PreviewIn(BaseModel):
     team_id: UUID
     query: str = Field(min_length=1, max_length=2000)
     sources: list[str] = Field(default_factory=lambda: list(SOURCES), max_length=10)
+    arxiv_categories: list[str] = Field(default_factory=lambda: list(DEFAULT_ARXIV), max_length=50)
 
 
 class PaperOut(BaseModel):
@@ -698,7 +879,9 @@ class SourceResult(BaseModel):
 
 class Suggestion(BaseModel):
     id: str
+    # The first search to find it, and every remaining search that did.
     saved_search_id: str | None
+    search_ids: list[str] = []
     created_at: str
     paper: PaperOut
 
@@ -772,7 +955,7 @@ def create_search(
     user_id = _require_feature(token, team)
     svc = service_client()
     with _as_http():
-        row = new_search(svc, user_id, team, req.name, req.query, req.sources)
+        row = new_search(svc, user_id, team, req.name, req.query, req.sources, req.arxiv_categories)
     background.add_task(run_now, row)
     return _search_out(row)
 
@@ -796,10 +979,14 @@ def update_search(
             changes["query"] = checked_query(req.query)
         if req.sources is not None:
             changes["sources"] = checked_sources(req.sources)
+        if req.arxiv_categories is not None:
+            changes["arxiv_categories"] = checked_categories(req.arxiv_categories)
     if req.active is not None:
         changes["active"] = req.active
-    # A changed query or source list starts again from a week back.
-    rerun = any(changes.get(k, current[k]) != current[k] for k in ("query", "sources"))
+    # A changed query, source list or arXiv subjects starts again from a week back.
+    rerun = any(
+        changes.get(k, current[k]) != current[k] for k in ("query", "sources", "arxiv_categories")
+    )
     if rerun:
         with _as_http():
             run_limiter.check(user_id)
@@ -818,6 +1005,37 @@ def update_search(
     return _search_out(row)
 
 
+@router.get("/ideas", response_model=list[SearchIdea])
+def ideas(team_id: UUID, token: str = Depends(require_token)) -> list[SearchIdea]:
+    """A few searches to start from, built from the caller's tags (see
+    api/search_ideas.py). Nothing is saved."""
+    team = str(team_id)
+    user_id = _require_feature(token, team)
+    svc = service_client()
+    lab = svc.table("teams").select("name").eq("id", team).limit(1).execute().data or []
+    rows = (
+        svc.table("saved_searches")
+        .select("query")
+        .eq("user_id", user_id)
+        .eq("team_id", team)
+        .execute()
+        .data
+        or []
+    )
+    queries = [r["query"] for r in rows]
+    found = search_ideas(svc, user_id, team, lab[0]["name"] if lab else "the lab", queries)
+    return [SearchIdea(**i) for i in found]
+
+
+@router.put("/order", status_code=204)
+def order_searches(req: SearchOrder, token: str = Depends(require_token)) -> None:
+    """Put the caller's searches in this order, highest priority first."""
+    team = str(req.team_id)
+    user_id = _require_feature(token, team)
+    with _as_http():
+        reorder_searches(service_client(), user_id, team, [str(i) for i in req.ids])
+
+
 @router.delete("/{search_id}", status_code=204)
 def delete_search(search_id: UUID, team_id: UUID, token: str = Depends(require_token)) -> None:
     user_id = _require_feature(token, str(team_id))
@@ -833,18 +1051,20 @@ def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceR
     user_id = _require_feature(token, team)
     with _as_http():
         query, picked = checked_query(req.query), checked_sources(req.sources)
+        categories = checked_categories(req.arxiv_categories)
         run_limiter.check(user_id)
-    return preview_results(service_client(), team, query, picked)
+    return preview_results(service_client(), team, query, picked, categories)
 
 
 @router.get("/suggestions", response_model=list[Suggestion])
 def my_suggestions(team_id: UUID, token: str = Depends(require_token)) -> list[Suggestion]:
     user_id = _require_feature(token, str(team_id))
-    rows = list_suggestions(service_client(), user_id, str(team_id))
+    rows = page_suggestions(service_client(), user_id, str(team_id))
     return [
         Suggestion(
             id=r["id"],
             saved_search_id=r.get("saved_search_id"),
+            search_ids=r["search_ids"],
             created_at=r["created_at"],
             paper=_paper_out(r["candidate"]),
         )

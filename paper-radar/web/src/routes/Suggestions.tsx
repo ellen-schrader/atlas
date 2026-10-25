@@ -2,6 +2,8 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   Loader2,
   Pause,
@@ -9,6 +11,7 @@ import {
   Play,
   Plus,
   ScanSearch,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -22,15 +25,20 @@ import { useConfirm } from "@/components/ui/confirm";
 import {
   decideSuggestions,
   deleteSearch,
+  listSearchIdeas,
   listSearches,
   listSuggestions,
+  reorderSearches,
   updateSearch,
 } from "@/lib/api";
 import { invalidateAfterPost } from "@/lib/paperLookup";
 import {
+  ARXIV_BIOLOGY,
   PAPER_SOURCE_LABEL,
   SAVED_SEARCHES_FEATURE,
   type SavedSearch,
+  type SearchFields,
+  type SearchIdea,
   type Suggestion,
   sourcesLabel,
 } from "@/lib/savedSearches";
@@ -45,6 +53,8 @@ const FIRST_RUN_MS = 90_000;
 const LIBRARY_REFRESH_MS = [15_000, 60_000];
 /** Suggestions from searches since deleted (their search id is gone). */
 const EARLIER = "earlier";
+/** A person's saved searches per lab (the API's MAX_SEARCHES). */
+const MAX_SEARCHES = 10;
 
 export default function Suggestions() {
   return (
@@ -60,6 +70,8 @@ function SuggestionsPage() {
   const toast = useToast();
   const [confirm, confirmDialog] = useConfirm();
   const [editing, setEditing] = useState<SavedSearch | "new" | null>(null);
+  // What a new search starts from (a suggested search), if anything.
+  const [initial, setInitial] = useState<Partial<SearchFields>>();
   // The search running in the background since it was saved, if any.
   const [watching, setWatching] = useState<{
     id: string;
@@ -80,6 +92,17 @@ function SuggestionsPage() {
     queryKey: ["suggestions", team.id],
     queryFn: () => listSuggestions(team.id),
     refetchInterval: watching ? 5000 : false,
+  });
+  // Recomputed when the queries change: a search that covers an idea retires it.
+  const ideas = useQuery({
+    queryKey: [
+      "search-ideas",
+      team.id,
+      (searches.data ?? []).map((x) => x.query).join("\n"),
+    ],
+    queryFn: () => listSearchIdeas(team.id),
+    enabled: searches.isSuccess,
+    staleTime: 5 * 60_000,
   });
 
   // Stop polling when the search has run (or failed), or when time is up --
@@ -104,19 +127,17 @@ function SuggestionsPage() {
   const list = searches.data ?? [];
   const byId = useMemo(() => new Map(list.map((x) => [x.id, x])), [list]);
   const all = suggestions.data ?? [];
-  const groupOf = (x: Suggestion) =>
-    x.saved_search_id && byId.has(x.saved_search_id)
-      ? x.saved_search_id
-      : EARLIER;
   // One group per search that has something waiting, in the order of "Your
-  // searches", then deleted searches'.
+  // searches", then deleted searches'. A paper two searches found is in both.
   const groups = useMemo(() => {
     const items = new Map<string, Suggestion[]>();
     for (const x of all) {
-      const g = groupOf(x);
-      const group = items.get(g);
-      if (group) group.push(x);
-      else items.set(g, [x]);
+      const live = x.search_ids.filter((id) => byId.has(id));
+      for (const g of live.length ? live : [EARLIER]) {
+        const group = items.get(g);
+        if (group) group.push(x);
+        else items.set(g, [x]);
+      }
     }
     const named = list
       .filter((x) => items.has(x.id))
@@ -124,7 +145,7 @@ function SuggestionsPage() {
         id: x.id,
         name: x.name,
         items: items.get(x.id)!,
-        // All it has waiting; the list holds the newest few hundred overall.
+        // All it has waiting; the list holds its newest hundred (the API's PER_SEARCH).
         count: Math.max(x.pending, items.get(x.id)!.length),
       }));
     const earlier = items.get(EARLIER);
@@ -141,12 +162,8 @@ function SuggestionsPage() {
       : named;
   }, [all, list, byId]);
   const pickedIds = all.filter((x) => picked.has(x.id)).map((x) => x.id);
-  // The list is the newest few hundred; the searches count everything waiting.
-  const total = Math.max(
-    all.length,
-    list.reduce((n, x) => n + x.pending, 0) +
-      all.filter((x) => groupOf(x) === EARLIER).length,
-  );
+  // Some search has more waiting than the page lists.
+  const cut = groups.some((g) => g.count > g.items.length);
 
   const decide = useMutation({
     mutationFn: ({
@@ -203,6 +220,29 @@ function SuggestionsPage() {
     onError: () =>
       toast({ message: "Couldn’t change that search. Try again." }),
   });
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => reorderSearches(team.id, ids),
+    onMutate: async (ids) => {
+      // Moved at once; the groups below follow.
+      await qc.cancelQueries({ queryKey: ["saved-searches", team.id] });
+      qc.setQueryData<SavedSearch[]>(["saved-searches", team.id], (cur) =>
+        cur ? ids.flatMap((id) => cur.find((x) => x.id === id) ?? []) : cur,
+      );
+    },
+    onError: () => toast({ message: "Couldn’t move that search. Try again." }),
+    onSettled: () =>
+      void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] }),
+  });
+  const move = (i: number, by: -1 | 1) => {
+    const ids = list.map((x) => x.id);
+    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
+    reorder.mutate(ids);
+  };
+  const startFrom = (idea?: SearchIdea) => {
+    setInitial(idea ? { name: idea.name, query: idea.query } : undefined);
+    setEditing("new");
+  };
+
   const remove = useMutation({
     mutationFn: (x: SavedSearch) => deleteSearch(team.id, x.id),
     onSettled: () =>
@@ -267,7 +307,10 @@ function SuggestionsPage() {
             list.
           </p>
         </div>
-        <Button onClick={() => setEditing("new")} disabled={list.length >= 10}>
+        <Button
+          onClick={() => startFrom()}
+          disabled={list.length >= MAX_SEARCHES}
+        >
           <Plus size={15} aria-hidden />
           New search
         </Button>
@@ -285,7 +328,12 @@ function SuggestionsPage() {
       )}
 
       {!loading && !failed && list.length === 0 && (
-        <EmptySearches onNew={() => setEditing("new")} />
+        <EmptySearches
+          onNew={() => startFrom()}
+          ideas={
+            <SearchIdeas ideas={ideas.data ?? []} onUse={(i) => startFrom(i)} />
+          }
+        />
       )}
 
       {list.length > 0 && (
@@ -297,16 +345,38 @@ function SuggestionsPage() {
             Your searches
           </h2>
           <ul className="divide-y divide-border overflow-hidden rounded-card border border-border">
-            {list.map((s) => (
+            {list.map((s, i) => (
               <SearchRow
                 key={s.id}
                 search={s}
+                onUp={i > 0 ? () => move(i, -1) : undefined}
+                onDown={i < list.length - 1 ? () => move(i, 1) : undefined}
                 onEdit={() => setEditing(s)}
                 onToggle={() => setActive.mutate(s)}
                 onDelete={() => void askDelete(s)}
               />
             ))}
           </ul>
+          {list.length > 1 && (
+            <p className="text-xs text-faint">
+              Papers are grouped by search in this order. Use the arrows to put
+              the searches that matter most first.
+            </p>
+          )}
+          {(ideas.data?.length ?? 0) > 0 && list.length < MAX_SEARCHES && (
+            <details className="group mt-1">
+              <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-muted hover:text-fg">
+                <Sparkles size={13} aria-hidden />
+                Ideas for more searches
+              </summary>
+              <div className="mt-2">
+                <SearchIdeas
+                  ideas={ideas.data ?? []}
+                  onUse={(i) => startFrom(i)}
+                />
+              </div>
+            </details>
+          )}
         </section>
       )}
 
@@ -324,9 +394,7 @@ function SuggestionsPage() {
             <h2 id="suggested" className="text-sm font-semibold text-fg">
               {all.length === 0
                 ? "No new papers"
-                : total > all.length
-                  ? `${total} new papers · the newest ${all.length} shown`
-                  : `${all.length} new ${all.length === 1 ? "paper" : "papers"}`}
+                : `${all.length}${cut ? "+" : ""} new ${all.length === 1 ? "paper" : "papers"}`}
             </h2>
           </div>
 
@@ -405,6 +473,12 @@ function SuggestionsPage() {
                         ))}
                       </ul>
                     )}
+                    {!isFolded && g.count > g.items.length && (
+                      <p className="text-xs text-faint">
+                        Showing the newest {g.items.length} of {g.count}. Add or
+                        dismiss these to see the rest.
+                      </p>
+                    )}
                   </section>
                 );
               })}
@@ -456,6 +530,7 @@ function SuggestionsPage() {
         onClose={() => setEditing(null)}
         teamId={team.id}
         search={editing === "new" ? null : editing}
+        initial={editing === "new" ? initial : undefined}
         onSaved={(s, rerun) => {
           // A paused search isn't run when its query changes.
           if (rerun && s.active)
@@ -467,9 +542,15 @@ function SuggestionsPage() {
   );
 }
 
-function EmptySearches({ onNew }: { onNew: () => void }) {
+function EmptySearches({
+  onNew,
+  ideas,
+}: {
+  onNew: () => void;
+  ideas: ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-start gap-3 rounded-card border border-dashed border-border p-6">
+    <div className="flex flex-col items-start gap-4 rounded-card border border-dashed border-border p-6">
       <ScanSearch size={22} className="text-accent" aria-hidden />
       <div>
         <p className="font-medium text-fg">Never miss a paper on your topic</p>
@@ -478,12 +559,66 @@ function EmptySearches({ onNew }: { onNew: () => void }) {
           PubMed, bioRxiv, medRxiv and arXiv and lists the new papers here.
         </p>
       </div>
-      <Button onClick={onNew}>
+      {ideas}
+      <Button onClick={onNew} variant="secondary">
         <Plus size={15} aria-hidden />
-        New search
+        Write your own
       </Button>
     </div>
   );
+}
+
+/** Ready-made searches from the person's tags; "Use this" opens the form
+ *  filled in, to preview and adjust before saving. */
+function SearchIdeas({
+  ideas,
+  onUse,
+}: {
+  ideas: SearchIdea[];
+  onUse: (idea: SearchIdea) => void;
+}) {
+  if (ideas.length === 0) return null;
+  return (
+    <section
+      aria-label="Suggested searches"
+      className="flex w-full flex-col gap-2"
+    >
+      <p className="text-xs font-medium text-muted">
+        Start from one of these, based on your papers and tags:
+      </p>
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {ideas.map((idea) => (
+          <li
+            key={idea.query}
+            className="flex flex-col gap-1.5 rounded-card border border-border bg-surface p-3"
+          >
+            <p className="text-sm font-semibold text-fg">{idea.name}</p>
+            <p className="break-words font-mono text-xs text-muted">
+              {idea.query}
+            </p>
+            <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+              <span className="text-xs text-faint">{idea.reason}</span>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onUse(idea)}
+                aria-label={`Use the search “${idea.name}”`}
+              >
+                Use this
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** "biology", "all subjects", or the codes. */
+function arxivLabel(codes: string[]): string {
+  if (codes.length === 0) return "all subjects";
+  if (codes.join() === ARXIV_BIOLOGY.join()) return "biology";
+  return codes.join(", ");
 }
 
 function searchStatus(s: SavedSearch): { text: string; warn: boolean } {
@@ -496,11 +631,16 @@ function searchStatus(s: SavedSearch): { text: string; warn: boolean } {
 
 function SearchRow({
   search,
+  onUp,
+  onDown,
   onEdit,
   onToggle,
   onDelete,
 }: {
   search: SavedSearch;
+  /** Move it up or down the order; absent at either end. */
+  onUp?: () => void;
+  onDown?: () => void;
   onEdit: () => void;
   onToggle: () => void;
   onDelete: () => void;
@@ -538,11 +678,28 @@ function SearchRow({
             <AlertTriangle size={12} className="mt-px shrink-0" aria-hidden />
           )}
           <span>
-            {sourcesLabel(search.sources)} · {status.text}
+            {sourcesLabel(search.sources)}
+            {search.sources.includes("arxiv") &&
+              ` (${arxivLabel(search.arxiv_categories)})`}{" "}
+            · {status.text}
           </span>
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
+        <IconButton
+          label={`Move “${search.name}” up`}
+          onClick={() => onUp?.()}
+          disabled={!onUp}
+        >
+          <ArrowUp size={14} />
+        </IconButton>
+        <IconButton
+          label={`Move “${search.name}” down`}
+          onClick={() => onDown?.()}
+          disabled={!onDown}
+        >
+          <ArrowDown size={14} />
+        </IconButton>
         <IconButton label={`Edit “${search.name}”`} onClick={onEdit}>
           <Pencil size={14} />
         </IconButton>
