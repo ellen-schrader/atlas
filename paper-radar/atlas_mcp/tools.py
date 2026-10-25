@@ -2,9 +2,10 @@
 gate, untrusted-content framing, and citation formatting.
 
 Tool functions live in `papers` (the paper tools), `figures` (the beta mood
-board) and `trials` (clinical trials). They are plain functions here; each server
-entry point registers the set it serves (`server` for stdio: papers and figures;
-the hosted server: read-only papers, plus the trial tools for those who have them).
+board), `trials` (clinical trials) and `searches` (saved searches). They are
+plain functions here; each server entry point registers the set it serves
+(`server` for stdio: papers and figures; the hosted server: read-only papers,
+plus the trial and saved searches tools for those who have them).
 """
 
 from __future__ import annotations
