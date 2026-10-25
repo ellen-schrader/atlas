@@ -245,8 +245,11 @@ function SuggestionsPage() {
 
   const remove = useMutation({
     mutationFn: (x: SavedSearch) => deleteSearch(team.id, x.id),
-    onSettled: () =>
-      void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] }),
+    // Its waiting papers went with it.
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] });
+      void qc.invalidateQueries({ queryKey: ["suggestions", team.id] });
+    },
     onError: () =>
       toast({ message: "Couldn’t delete that search. Try again." }),
   });
@@ -254,7 +257,7 @@ function SuggestionsPage() {
   async function askDelete(x: SavedSearch) {
     const ok = await confirm({
       title: `Delete “${x.name}”?`,
-      body: "It stops running. Suggestions it already found stay in your list.",
+      body: "It stops running, and the papers it found that you haven’t added or dismissed go too.",
       confirmLabel: "Delete search",
       danger: true,
     });
