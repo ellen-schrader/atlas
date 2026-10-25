@@ -2,12 +2,13 @@ import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
+import { ClaudeAccessToggle, ClaudeActivity } from "@/components/ClaudeAccess";
 import { LabManagement } from "@/components/LabManagement";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useProfile } from "@/hooks/useProfile";
@@ -25,12 +26,12 @@ export default function Settings() {
   const { team, userId, session, features } = useAppContext();
   const { data: profile } = useProfile(userId);
   const { data: role } = useMyRole(team.id, userId);
+  useDocumentTitle("Settings");
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-8">
       <header>
         <h1 className="text-display font-bold tracking-tight">Settings</h1>
-        <p className="mt-1.5 text-sm text-muted">Your account, profile, and lab.</p>
       </header>
 
       <AccountPanel
@@ -66,9 +67,8 @@ export default function Settings() {
  *
  * Connect is where you *set the integration up*; this is where someone goes when the
  * question is "what can Claude see of my lab, and who decided that?" — which is a
- * privacy question, and privacy questions get answered in Settings. The control and
- * the scope copy are shared with Connect, so the two screens can't tell different
- * stories.
+ * privacy question, and privacy questions get answered in Settings. The control is
+ * shared with Connect; the full scope list lives there, linked from here.
  */
 function ClaudePrivacyPanel({
   teamId,
@@ -82,7 +82,7 @@ function ClaudePrivacyPanel({
   return (
     <Panel
       title="Claude access"
-      desc={`Whether Claude can read ${teamName} — and what it can see when it does.`}
+      desc={`Choose whether Claude can read ${teamName}’s papers.`}
     >
       <div className="mt-4 flex flex-col gap-5">
         <ClaudeAccessToggle teamId={teamId} teamName={teamName} userId={userId} />
@@ -91,11 +91,12 @@ function ClaudePrivacyPanel({
           <h3 className="text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
             What Claude can see
           </h3>
-          <div className="mt-2.5">
-            <ClaudeScope teamName={teamName} />
-          </div>
-          <p className="mt-3 text-xs leading-relaxed text-faint">
-            Access is lab-wide and owner-controlled, because it isn’t one member’s call.
+          <p className="mt-2.5 text-sm leading-relaxed text-fg">
+            Claude can read papers, notes and tags. It can’t read comments, see other labs, or
+            change anything.{" "}
+            <Link to="/connect" className="font-medium text-accent hover:underline">
+              See details →
+            </Link>
           </p>
         </div>
 
@@ -376,7 +377,7 @@ function AccountPanel({
       ? {
           ok: false,
           text: linkError.reset
-            ? `${linkError.message} You're signed in as ${currentEmail}: change that account's password below, or email yourself a fresh reset link if you don't know the current one.`
+            ? `${linkError.message} You’re signed in as ${currentEmail}, so you can change your password below.`
             : linkError.message,
         }
       : null,
@@ -468,7 +469,7 @@ function AccountPanel({
               size="sm"
               disabled={nameBusy || !name.trim() || name.trim() === currentName}
             >
-              {nameBusy ? "…" : "Save"}
+              {nameBusy ? "Saving…" : "Save"}
             </Button>
           </div>
           <FieldNote note={nameNote} />
@@ -491,7 +492,7 @@ function AccountPanel({
               size="sm"
               disabled={emailBusy || !email.trim() || email.trim() === currentEmail}
             >
-              {emailBusy ? "…" : "Update"}
+              {emailBusy ? "Updating…" : "Update"}
             </Button>
           </div>
           <FieldNote note={emailNote} />
@@ -538,7 +539,7 @@ function AccountPanel({
           />
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <Button type="submit" size="sm" disabled={pwBusy || !currentPw || !pw || !pw2}>
-              {pwBusy ? "…" : "Update password"}
+              {pwBusy ? "Updating…" : "Update password"}
             </Button>
             <button
               type="button"
@@ -611,8 +612,7 @@ function ProfilePanel({ userId, initial }: { userId: string; initial: string }) 
         )}
         {outcome === "unused" && (
           <span className="text-xs text-danger">
-            Saved, but it couldn’t be processed, so recommendations still use your previous
-            description (if any).
+            Saved, but recommendations still use your old description. Try again later.
           </span>
         )}
         {error && <span className="text-xs text-danger">{error}</span>}
@@ -678,7 +678,7 @@ function FollowedTagsPanel({
   return (
     <Panel
       title="Tags you follow"
-      desc="Papers with these tags rank higher in your recommendations, and say so. Quicker than a description, and they work together."
+      desc="Papers with these tags rank higher in your recommendations."
     >
       {follows.length > 0 ? (
         <ul className="flex flex-wrap gap-1.5">

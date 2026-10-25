@@ -80,7 +80,7 @@ export function BookmarkButton({
       aria-pressed={on}
       aria-label={on ? "Remove from reading list" : "Save to reading list"}
       // A deliberate save is the heaviest taste signal there is (1.5x in `_taste_vector`).
-      title={on ? "Saved — the strongest signal of your lab’s taste" : "Save — the strongest signal of your lab’s taste"}
+      title={on ? "Remove from reading list" : "Save to reading list"}
       className={cn("inline-flex items-center gap-1.5 transition", className)}
     >
       <Bookmark size={15} fill={on ? "currentColor" : "none"} />

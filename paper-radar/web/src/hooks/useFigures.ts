@@ -186,7 +186,7 @@ export async function uploadFigure(input: UploadFigureInput): Promise<string> {
   const { file, teamId, userId, title, caption, category, paperId } = input;
 
   if (!ACCEPTED_MIME.includes(file.type as (typeof ACCEPTED_MIME)[number])) {
-    throw new Error("Unsupported format — use PNG, JPEG, WebP or GIF.");
+    throw new Error("Use a PNG, JPEG, WebP or GIF image.");
   }
   if (file.size > MAX_FILE_BYTES) {
     throw new Error("That image is over the 10 MB limit.");
@@ -263,7 +263,7 @@ export async function updateFigure(input: UpdateFigureInput): Promise<void> {
       throw new Error("A style card's image is a render of its spec and can't be replaced.");
     }
     if (!ACCEPTED_MIME.includes(newFile.type as (typeof ACCEPTED_MIME)[number])) {
-      throw new Error("Unsupported format — use PNG, JPEG, WebP or GIF.");
+      throw new Error("Use a PNG, JPEG, WebP or GIF image.");
     }
     if (newFile.size > MAX_FILE_BYTES) {
       throw new Error("That image is over the 10 MB limit.");
@@ -294,7 +294,7 @@ export async function updateFigure(input: UpdateFigureInput): Promise<void> {
     // Roll back the orphaned new object (nothing points at it).
     if (freshObjectPath) await supabase.storage.from(FIGURES_BUCKET).remove([freshObjectPath]);
     if (error) throw error;
-    throw new Error("Couldn’t save — you can only edit figures you posted.");
+    throw new Error("Couldn’t save. You can only edit figures you posted.");
   }
 
   // Success: drop the superseded old object (only when it was renamed away).

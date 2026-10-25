@@ -74,7 +74,7 @@ export function FigureUploadDialog({
     if (!f) return;
     setError(null);
     if (!ACCEPTED_MIME.includes(f.type as (typeof ACCEPTED_MIME)[number])) {
-      setError("Unsupported format — use PNG, JPEG, WebP or GIF.");
+      setError("Use a PNG, JPEG, WebP or GIF image.");
       return;
     }
     if (f.size > MAX_FILE_BYTES) {
@@ -199,7 +199,7 @@ export function FigureUploadDialog({
           </Button>
           <Button onClick={submit} disabled={busy || !file}>
             {busy ? <Loader2 className="animate-spin" size={15} /> : null}
-            {busy ? "Uploading…" : "Add to board"}
+            {busy ? "Uploading…" : "Add to gallery"}
           </Button>
         </div>
       </div>

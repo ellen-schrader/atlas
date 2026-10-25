@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { Container, ISSUES_URL, PublicFooter, PublicHeader, REPO_URL } from "@/components/landing/PublicChrome";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 /** About, Privacy and Terms. Open signed in and signed out (both route trees in
  *  App.tsx), so a member can read the terms they agreed to. The text is
@@ -11,7 +12,19 @@ import { Container, ISSUES_URL, PublicFooter, PublicHeader, REPO_URL } from "@/c
 const CONTACT = "hello@labatlas.app";
 const UPDATED = "18 October 2026";  // bump when the text changes
 
-function PublicPage({ title, signedIn, children }: { title: string; signedIn: boolean; children: ReactNode }) {
+function PublicPage({
+  title,
+  tab,
+  signedIn,
+  children,
+}: {
+  title: string;
+  /** The browser tab's name, when it differs from the heading. */
+  tab?: string;
+  signedIn: boolean;
+  children: ReactNode;
+}) {
+  useDocumentTitle(tab ?? title);
   return (
     <div className="flex min-h-full flex-col bg-bg text-fg">
       <PublicHeader signedIn={signedIn} />
@@ -58,7 +71,7 @@ function A({ href, children }: { href: string; children: ReactNode }) {
 
 export function About({ signedIn = false }: { signedIn?: boolean }) {
   return (
-    <PublicPage title="About Atlas" signedIn={signedIn}>
+    <PublicPage title="About Atlas" tab="About" signedIn={signedIn}>
       <p>
         Atlas is a shared paper library for research groups. Everyone in a lab adds the papers they read;
         Atlas fills in the metadata, merges duplicates and preprints, and keeps the lab’s notes and

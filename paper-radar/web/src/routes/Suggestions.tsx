@@ -20,6 +20,7 @@ import { SelectCheckbox } from "@/components/ExportBar";
 import { RequireFeature } from "@/components/RequireFeature";
 import { SearchDialog } from "@/components/suggestions/SearchDialog";
 import { useToast } from "@/components/Toast";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import {
@@ -355,6 +356,9 @@ function SuggestionsPage() {
 
   const loading = searches.isPending || suggestions.isPending;
   const failed = searches.isError || suggestions.isError;
+  useDocumentTitle(
+    all.length > 0 ? `(${all.length}) Suggested papers` : "Suggested papers",
+  );
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 sm:p-8">
@@ -364,8 +368,7 @@ function SuggestionsPage() {
             Suggested papers
           </h1>
           <p className="mt-1.5 max-w-[62ch] text-sm text-muted">
-            New papers that match your searches, every week. Add the good ones
-            to {team.name}’s library and dismiss the rest. Only you see this
+            New papers from your saved searches, every week. Only you see this
             list.
           </p>
         </div>
@@ -421,8 +424,7 @@ function SuggestionsPage() {
           </ul>
           {list.length > 1 && (
             <p className="text-xs text-faint">
-              Papers are grouped by search in this order. Use the arrows to put
-              the searches that matter most first.
+              Use the arrows to put your most important searches first.
             </p>
           )}
           {(ideas.data?.length ?? 0) > 0 && list.length < MAX_SEARCHES && (
@@ -445,8 +447,7 @@ function SuggestionsPage() {
       {watching && (
         <p className="flex items-center gap-2 text-sm text-muted" role="status">
           <Loader2 size={14} className="animate-spin" aria-hidden />
-          Running your search — its first suggestions appear here within a
-          minute or so.
+          Running your search. Results appear here in about a minute.
         </p>
       )}
 
@@ -494,14 +495,13 @@ function SuggestionsPage() {
 
           {order === "relevant" && !scored && all.length > 1 && (
             <p className="text-xs text-faint">
-              Newest first for now: sorting by fit starts once Atlas has read
-              these papers, within a day of a search finding them.
+              Sorted by newest until Atlas has read these papers (within a
+              day).
             </p>
           )}
           {all.length === 0 ? (
             <p className="rounded-card border border-dashed border-border p-6 text-sm text-muted">
-              You’re all caught up. New papers the lab doesn’t have yet show up
-              here after your searches’ next weekly run.
+              You’re all caught up. New papers arrive weekly.
             </p>
           ) : (
             <>
@@ -675,7 +675,7 @@ function EmptySearches({
     <div className="flex flex-col items-start gap-4 rounded-card border border-dashed border-border p-6">
       <ScanSearch size={22} className="text-accent" aria-hidden />
       <div>
-        <p className="font-medium text-fg">Never miss a paper on your topic</p>
+        <p className="font-medium text-fg">Get new papers on your topic every week</p>
         <p className="mt-1 max-w-[60ch] text-sm text-muted">
           Type a few keywords, or paste a PubMed search. Every week Atlas checks
           PubMed, bioRxiv, medRxiv and arXiv and lists the new papers here.
@@ -893,7 +893,7 @@ function SuggestionRow({
           {p.title}
         </a>
         <p className="mt-1 text-xs text-muted">
-          {meta || "—"}
+          {meta || "–"}
           {/* The source, unless the venue already says it (arXiv, bioRxiv). */}
           {p.venue !== PAPER_SOURCE_LABEL[p.source] && (
             <span className="ml-1.5 rounded-chip border border-border px-1.5 py-px text-[11px] text-faint">

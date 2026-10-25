@@ -205,11 +205,7 @@ export function Omnibar({
           aria-autocomplete="list"
           aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
           aria-label="Search papers, or paste a DOI or link to add"
-          placeholder={
-            mobile
-              ? "Search, or paste a DOI to add"
-              : "Search by title, author or tag, or paste a DOI or link to add"
-          }
+          placeholder="Search, or paste a DOI to add"
           // 16px on phones: anything smaller makes iOS zoom in on focus.
           className={cn(
             "h-full min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-faint",
@@ -266,7 +262,7 @@ export function Omnibar({
           ) : (
             <>
               <div className="border-b border-border px-4 py-2 text-eyebrow font-bold uppercase tracking-eyebrow text-faint">
-                {search.isLoading || !q ? "Searching…" : `${total ?? results.length} matches`}
+                {search.isLoading || !q ? "Searching…" : `${total ?? results.length} ${(total ?? results.length) === 1 ? "match" : "matches"}`}
               </div>
               {q && !search.isLoading && results.length === 0 && (
                 <div className="px-4 py-4 text-sm text-muted">No papers in {teamName} match that.</div>
@@ -304,7 +300,7 @@ export function Omnibar({
                     active === results.length && "bg-surface-2 text-fg",
                   )}
                 >
-                  See all in Papers →
+                  See all in the library →
                 </div>
               )}
             </>
@@ -363,7 +359,7 @@ function AddPanel({
     return (
       <PanelRow>
         <span className="inline-flex items-center gap-2 text-muted">
-          <Loader2 size={14} className="animate-spin" /> Looking it up…
+          <Loader2 size={14} className="animate-spin" /> Looking up…
         </span>
       </PanelRow>
     );
@@ -372,7 +368,7 @@ function AddPanel({
     return (
       <PanelRow>
         <span className="text-muted">
-          {lookup.error instanceof Error ? lookup.error.message : "That didn’t resolve."}
+          {lookup.error instanceof Error ? lookup.error.message : "We couldn’t find that paper."}
         </span>
         <PanelButton onClick={onManual}>Add it another way →</PanelButton>
       </PanelRow>

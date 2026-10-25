@@ -79,31 +79,39 @@ model can't guess: what your plots are supposed to look like.
 
 ## Connect Claude
 
-Atlas ships an MCP server (`atlas_mcp`) that runs **locally, on your machine**, against
-your own Atlas database. Claude sees exactly what your account sees — nothing from other
-labs. The app has a `/connect` page that walks through this with your `team_id`
-pre-filled:
+Atlas ships an MCP server (`atlas_mcp`) that lets Claude search and cite your lab's papers.
+Claude sees exactly what your account sees, and nothing from other labs.
+
+The usual way in is the **hosted connector**: in Atlas, open **Connect Claude** and add the
+connector URL (`https://mcp.labatlas.app/mcp`) to Claude. It works in the Claude apps (web,
+desktop and phone), Cowork and Claude Code, with nothing to install, and it only reads.
 
 ![Connect Claude page](docs/screenshots/connect.png)
 
-### 1. An owner turns Claude access on
+### Claude access is off until an owner turns it on
 
-Access is a **lab-wide setting**, not one member's call. Until an owner enables it in
-**Settings**, every MCP tool call for that lab is refused. Every call that does run is
-written to an activity log the whole lab can see.
+Access is a **lab-wide setting**, not one member's call. Until an owner turns it on (in
+**Connect Claude** or **Settings**), every MCP tool call for that lab is refused. Every call
+that does run is written to an activity log the whole lab can see.
 
-### 2. Check you have `uv`
+### Run the server locally
 
-The server runs through [uv](https://docs.astral.sh/uv/getting-started/installation/) — one
+For Claude Code or Claude Desktop, from a checkout of this repo. The local server adds what
+the hosted connector leaves out (posting papers into the lab, and the figure-gallery tools),
+and signs in with credentials kept in a local file.
+
+#### 1. Check you have `uv`
+
+The server runs through [uv](https://docs.astral.sh/uv/getting-started/installation/). One
 line to install, no admin rights needed.
 
 ```bash
 uv --version
 ```
 
-### 3. Register the server
+#### 2. Register the server
 
-**Claude Code** — `.mcp.json` in the repo root:
+**Claude Code**: `.mcp.json` in the repo root, alongside `paper-radar/`:
 
 ```json
 {
@@ -118,29 +126,43 @@ uv --version
 }
 ```
 
-**Claude Desktop** — Settings → Developer → Edit Config, same JSON but with an
-**absolute** path for `--directory` (Claude Desktop doesn't run from your repo).
+**Claude Desktop**: Settings → Developer → Edit Config, the same JSON but with an
+**absolute** path for `--directory` (for example `/absolute/path/to/paper-radar`), since
+Claude Desktop doesn't run from your repo.
 
-### 4. Add your lab credentials
+#### 3. Add your lab credentials
 
-Credentials go in `paper-radar/api/.env` — gitignored, and read by the server directly, so
-you never paste a secret into a Claude config file.
+Credentials go in `paper-radar/api/.env`. It's gitignored and read by the server directly,
+so you never paste a credential into a Claude config file. Your own login scopes the
+access: Claude sees exactly what you see, and nothing from other labs.
 
 ```bash
 ATLAS_EMAIL=you@your-lab.org
 ATLAS_PASSWORD=your-atlas-password
-ATLAS_TEAM_ID=<your team's uuid>          # from the /connect page
-ATLAS_WEB_URL=https://labatlas.app   # so cited links open your Atlas
+ATLAS_TEAM_ID=<your lab's id>        # shown on the Connect Claude page in Atlas
+ATLAS_WEB_URL=https://labatlas.app   # so the links Claude cites open your Atlas
 ```
 
-On a shared or managed machine, use a Supabase access token instead of a password —
-`ATLAS_TOKEN=...`, which the server prefers when set. It keeps your password off disk, but
-it expires and the stdio server has no refresh token, so you'll re-paste it periodically.
+A password is the simplest option and keeps working: the server signs in and renews its
+session itself. It does mean your account password sits in a file on disk. **On a shared or
+managed machine, use an access token instead:**
 
-### 5. Verify
+```bash
+ATLAS_TOKEN=your-supabase-access-token
+ATLAS_TEAM_ID=<your lab's id>
+ATLAS_WEB_URL=https://labatlas.app
+```
 
-Restart Claude, then run `/mcp` in Claude Code (or open the tools menu in Claude Desktop).
-You should see **atlas** with its tools listed. Ask it something your lab actually works on:
+A token is a Supabase access token (JWT), and the server prefers it when set. It keeps your
+password off disk, but it expires and the local server has no refresh token, so you'll
+re-paste it from time to time.
+
+#### 4. Restart Claude and check it worked
+
+In Claude Code, run `/mcp`: you should see **atlas** with its tools listed. In Claude
+Desktop, quit and reopen it; Atlas appears in the tools menu (the slider icon) in the
+composer. Then ask something your lab actually works on, like "What has our lab posted on
+[your topic]?":
 
 ```
 > Use the atlas tools to search our lab for fibroblast papers,
@@ -157,6 +179,17 @@ You should see **atlas** with its tools listed. Ask it something your lab actual
   ⎿ Whole-genome landscapes of 1,364 breast cancers — Nature · 2026
      … 4 more
 ```
+
+To disconnect, remove the `atlas` server from your Claude config.
+
+#### If it didn't work
+
+- **atlas isn't listed.** You're not in the directory that holds the config, or the JSON has
+  a trailing comma. In Claude Code, `claude --debug` prints the spawn error.
+- **"Couldn't sign in to your lab".** Wrong email or password in `api/.env`, or the file is
+  in the wrong place: it must be `paper-radar/api/.env`, not the repo root.
+- **Tools return nothing.** You're in more than one lab and `ATLAS_TEAM_ID` isn't set. Copy
+  it from the Connect Claude page.
 
 ### What Claude can do, once connected
 

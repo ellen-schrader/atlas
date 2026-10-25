@@ -160,22 +160,22 @@ export function BibtexImportPanel({
       {preflight && (
         <section className="rounded-card border border-border bg-surface-2 p-4">
           <h3 className="text-base font-semibold tracking-tight">
-            {fileName} — {preflight.entries.length} entries
+            {fileName} · {preflight.entries.length} {preflight.entries.length === 1 ? "entry" : "entries"}
           </h3>
           <p className="mb-3 mt-1 text-sm text-muted">Nothing has been imported yet.</p>
 
           <div className="flex flex-col gap-2">
             <Row kind="ok" n={preflight.new}>
-              new {preflight.new === 1 ? "paper" : "papers"}, metadata resolved
+              new {preflight.new === 1 ? "paper" : "papers"}, details found
             </Row>
             <Row kind="muted" n={preflight.duplicates}>
-              already here, or listed twice — will be skipped
+              already here or listed twice. These are skipped.
             </Row>
             <Row kind="warn" n={preflight.no_doi}>
-              missing a DOI — will be matched on their URL instead
+              missing a DOI. These are matched on their link instead.
             </Row>
             <Row kind="bad" n={preflight.rejected}>
-              unreadable — nothing to import from them
+              unreadable. Nothing to import from these.
             </Row>
           </div>
 
@@ -260,8 +260,7 @@ export function BibtexImportDone({
         {result.imported} {result.imported === 1 ? "paper" : "papers"} imported
       </h3>
       <p className="mt-1.5 text-sm text-muted">
-        Atlas is already learning {teamName}’s taste from them. Embeddings compute in the
-        background, so the map will fill in shortly.
+        They’ll appear in search within a few minutes.
         {result.skipped > 0 &&
           ` ${result.skipped} ${result.skipped === 1 ? "was" : "were"} already here and ${
             result.skipped === 1 ? "was" : "were"
@@ -341,10 +340,9 @@ function HowTo() {
         </Step>
       </dl>
       <p className="mt-4 border-t border-border pt-3 text-xs leading-relaxed text-faint">
-        Papers keep the date <b className="text-muted">your lab shared them</b> — today, for an
-        import — while their <b className="text-muted">publication date</b> is stored separately.
-        Sort Papers by “Recently published” to read an imported back-catalogue in the order it came
-        out.
+        Imported papers are dated <b className="text-muted">today</b>, the day your lab shared them.
+        Their <b className="text-muted">publication date</b> is kept too. Sort the library by
+        “Recently published” to read them in the order they came out.
       </p>
     </details>
   );

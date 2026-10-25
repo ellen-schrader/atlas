@@ -5,6 +5,7 @@ import { FigureCard } from "@/components/FigureCard";
 import { FigureUploadDialog } from "@/components/FigureUploadDialog";
 import { useFigureModal } from "@/components/FigureModal";
 import { Button } from "@/components/ui/button";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import {
   useFigureCategories,
   useFigureEngagementCounts,
@@ -18,6 +19,7 @@ const LINKED = "__linked__";
 
 export default function MoodBoard() {
   const { team, userId } = useAppContext();
+  useDocumentTitle("Figure gallery");
   const [filter, setFilter] = useState<string | null>(null); // category value, LINKED, or null (all)
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -68,8 +70,8 @@ export default function MoodBoard() {
         <div>
           <h1 className="text-display font-bold tracking-tight text-fg">Figure gallery</h1>
           <p className="mt-1.5 max-w-[52ch] text-sm text-muted">
-            Figures your lab admires — your own and others’. Atlas derives your palette from them,
-            and hands Claude a matplotlib style sheet so it plots in your lab’s style.
+            Figures your lab likes, from your own papers or others’. Claude uses them to match your
+            lab’s plotting style.
           </p>
         </div>
         <Button onClick={() => setUploadOpen(true)}>
@@ -109,11 +111,11 @@ export default function MoodBoard() {
           <p className="text-sm text-muted">
             {filter
               ? "No figures match this filter yet."
-              : "No figures yet. Add ones you admire — your own or others’ — and Atlas learns your lab’s palette from them."}
+              : "No figures yet."}
           </p>
           {!filter && (
             <Button variant="secondary" onClick={() => setUploadOpen(true)}>
-              <ImagePlus size={16} /> Add the first figure
+              <ImagePlus size={16} /> Upload figure
             </Button>
           )}
         </div>

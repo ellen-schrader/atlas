@@ -138,7 +138,7 @@ export function ExtractionView({
     try {
       await openSourceFile(doc, source.page);
     } catch {
-      toast({ message: "Couldn’t open the source." });
+      toast({ message: "Couldn’t open the source. Try again." });
     }
   };
   const reviewing = current !== null;
@@ -523,7 +523,7 @@ function EditableNumber({
       setEditing(false);
       ctx.onChange();
     },
-    onError: () => toast({ message: "Couldn’t save the correction." }),
+    onError: () => toast({ message: "Couldn’t save the correction. Try again." }),
   });
   if (!ctx.reviewing)
     return (
@@ -721,7 +721,7 @@ function AdverseEvents({ x, ctx }: { x: Extraction; ctx: Ctx }) {
                   <EditableNumber value={a.ctrl_pct} path={`adverse_events.${i}.ctrl_pct`} ctx={ctx} suffix="%" />
                 </td>
                 <td className="py-2 pl-2 text-right font-mono text-muted">
-                  {d == null ? "—" : `${d > 0 ? "+" : ""}${d} pp`}
+                  {d == null ? "–" : `${d > 0 ? "+" : ""}${d} pp`}
                 </td>
               </tr>
             );

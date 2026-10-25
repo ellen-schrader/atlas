@@ -65,7 +65,7 @@ function sourceLine(p: ExportPaper): string {
 // papers — no heading. (BibTeX has no heading either; its entries stand alone.)
 function toMarkdown(papers: ExportPaper[], opts: ExportOptions): string {
   const blocks = papers.map((p, i) => {
-    const lines = [`${i + 1}. **${p.title ?? p.url ?? "Untitled"}**`];
+    const lines = [`${i + 1}. **${p.title ?? p.url ?? "Untitled paper"}**`];
     const meta = [p.authors.length ? formatAuthorList(p.authors) : null, sourceLine(p) || null]
       .filter(Boolean)
       .join(" · ");
@@ -80,7 +80,7 @@ function toMarkdown(papers: ExportPaper[], opts: ExportOptions): string {
 
 function toText(papers: ExportPaper[], opts: ExportOptions): string {
   const blocks = papers.map((p, i) => {
-    const lines = [`${i + 1}. ${p.title ?? p.url ?? "Untitled"}`];
+    const lines = [`${i + 1}. ${p.title ?? p.url ?? "Untitled paper"}`];
     const meta = [p.authors.length ? formatAuthorList(p.authors) : null, sourceLine(p) || null]
       .filter(Boolean)
       .join(" — ");

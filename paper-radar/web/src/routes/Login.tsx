@@ -5,13 +5,14 @@ import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { RESET_PATH, useLinkError } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 export default function Login() {
   // The landing page's "Create your lab" CTA links to ?mode=signup. Without this it
-  // would promise sign-up and deliver the log-in form — a password the visitor
+  // would promise sign-up and deliver the sign-in form — a password the visitor
   // doesn't have yet.
   const [params] = useSearchParams();
   const [mode, setMode] = useState<"login" | "signup" | "reset">(() => {
@@ -29,6 +30,7 @@ export default function Login() {
   );
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useDocumentTitle(mode === "signup" ? "Sign up" : mode === "reset" ? "Reset password" : "Sign in");
 
   function switchMode(m: "login" | "signup" | "reset") {
     setMode(m);
@@ -49,7 +51,7 @@ export default function Login() {
           options: { data: { display_name: name } },
         });
         if (err) throw err;
-        if (!data.session) setNotice("Check your email to confirm your account, then log in.");
+        if (!data.session) setNotice("Check your email to confirm your account, then sign in.");
       } else if (mode === "reset") {
         const { error: err } = await supabase.auth.resetPasswordForEmail(email, {
           redirectTo: `${window.location.origin}${RESET_PATH}`,
@@ -69,8 +71,7 @@ export default function Login() {
   }
 
   return (
-    <AuthLayout>
-
+    <AuthLayout tagline={mode === "signup"}>
       <h2 className="text-xl font-bold tracking-tight">
         {mode === "login" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset your password"}
       </h2>
@@ -78,8 +79,8 @@ export default function Login() {
         {mode === "login"
           ? "Sign in to your lab."
           : mode === "signup"
-            ? "Create a lab and start your group’s shared library."
-            : "Enter your email and we'll send you a link to set a new password."}
+            ? "Create an account, then set up or join your lab."
+            : "Enter your email and we’ll send you a reset link."}
       </p>
 
       {mode !== "reset" && (
@@ -94,7 +95,7 @@ export default function Login() {
                 mode === m ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
               )}
             >
-              {m === "login" ? "Log in" : "Sign up"}
+              {m === "login" ? "Sign in" : "Sign up"}
             </button>
           ))}
         </div>
@@ -148,12 +149,16 @@ export default function Login() {
         {notice && <p className="text-xs text-accent">{notice}</p>}
 
         <Button type="submit" disabled={busy} className="mt-1">
-          {busy
-            ? "…"
-            : mode === "login"
-              ? "Log in"
-              : mode === "signup"
-                ? "Create account"
+          {mode === "login"
+            ? busy
+              ? "Signing in…"
+              : "Sign in"
+            : mode === "signup"
+              ? busy
+                ? "Creating account…"
+                : "Create account"
+              : busy
+                ? "Sending…"
                 : "Send reset link"}
         </Button>
 
@@ -177,7 +182,7 @@ export default function Login() {
             onClick={() => switchMode("login")}
             className="text-xs text-muted hover:text-fg"
           >
-            ← Back to log in
+            ← Back to sign in
           </button>
         )}
       </form>

@@ -34,7 +34,7 @@ export function HowItWorks() {
     <Container className="py-20 sm:py-24">
       <h2 className="text-3xl font-bold leading-[1.08] tracking-[-0.03em] sm:text-[2.75rem]">How it works</h2>
       <div className="mt-10 grid gap-x-6 gap-y-10 md:grid-cols-3">
-        <Step title="Add papers" body="However your group already shares them.">
+        <Step title="Add papers" body="However your lab already shares them.">
           <Row left="10.1038/s41587-026-03004-8" right="DOI" />
           <Row left="my-library.bib" right="BibTeX" />
           <Row left="Posted in the lab channel" right="Teams" />

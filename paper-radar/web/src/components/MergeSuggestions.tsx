@@ -56,9 +56,7 @@ export function SamePaperBanner({ paperId, teamId }: { paperId: string; teamId: 
             <span className="flex items-start gap-2">
               <Copy size={14} className="mt-px shrink-0" aria-hidden />
               <span>
-                {isPreprint
-                  ? "This looks like the preprint of "
-                  : `This looks like the published version of a preprint${s.preprint.venue ? ` on ${s.preprint.venue}` : ""} in your lab, `}
+                {isPreprint ? "Possible published version of this paper: " : "Possible preprint of this paper: "}
                 <strong className="font-semibold">“{other.title ?? other.url}”</strong>
                 {isPreprint && source(other) ? ` (${source(other)})` : ""}. Same paper?
               </span>
@@ -96,8 +94,8 @@ export function MergeSuggestionsButton({ teamId }: { teamId: string }) {
         <div className="border-b border-border px-6 py-5 pl-14">
           <h2 className="text-lg font-semibold tracking-tight text-fg">Possible duplicates</h2>
           <p className="mt-1 text-sm text-muted">
-            Preprints that look like a published paper your lab also holds. Atlas can’t be sure, so
-            it asks: compare each pair and merge it, or mark it as not the same.
+            Preprints that look like published papers in your lab. Compare each pair, then merge it
+            or mark it as not the same.
           </p>
         </div>
         <ul className="flex flex-col divide-y divide-border px-6 py-2">
@@ -153,7 +151,8 @@ function CompareDialog({
       onClose();
       if (merge) onMerged?.(suggestion);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.error("Merge decision failed:", err);
+      setError(merge ? "Couldn’t merge these papers. Try again." : "Couldn’t save your answer. Try again.");
     } finally {
       setBusy(null);
     }
@@ -174,9 +173,8 @@ function CompareDialog({
             <PaperColumn label="Published version" paper={suggestion.published} highlight />
           </div>
           <div className="px-6 pb-2 text-xs leading-relaxed text-muted">
-            Merging keeps the published version. Comments, reactions, reading status and lab tags
-            move to it, and the preprint stays linked from it. It changes the paper for every lab
-            that holds either version, and can’t be undone.
+            Merging keeps the published version and moves comments, reactions and tags to it. This
+            affects every lab with either version and can’t be undone.
           </div>
           {error && <p className="px-6 pt-2 text-sm text-danger">{error}</p>}
           <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-surface-2 px-6 py-4">

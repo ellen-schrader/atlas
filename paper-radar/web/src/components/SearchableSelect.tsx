@@ -186,7 +186,7 @@ export function SearchableSelect({
           ))}
           {more && (
             <div className="border-t border-border px-2.5 py-1.5 text-xs text-faint">
-              {q ? "More match — keep typing to narrow" : "More — type to search"}
+              {q ? "More matches. Keep typing to narrow." : "More options. Type to search."}
             </div>
           )}
         </div>

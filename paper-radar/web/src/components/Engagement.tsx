@@ -11,13 +11,12 @@ import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 const EMOJIS = ["👍", "❤️", "🎉", "💡", "🤔"];
 
-// What each reaction teaches the taste model (api/app.py `_taste_vector`). Surfaced
-// as a tooltip so engagement feels consequential — 🤔 is scepticism, not endorsement,
-// and weighs far less.
+// Names for reactions whose emoji alone is ambiguous, shown in the tooltip after
+// who reacted. 🤔 is scepticism, not endorsement (it also weighs far less in the
+// taste model, api/app.py `_taste_vector`).
 const REACTION_MEANING: Record<string, string> = {
-  "🤔": "Sceptical — counts less toward your lab’s taste",
+  "🤔": "Sceptical",
 };
-const REACTION_DEFAULT = "Counts toward your lab’s taste";
 
 interface ReactionRow {
   emoji: string;
@@ -241,12 +240,11 @@ function Reactions({ kind, subjectId, teamId, userId }: Ctx) {
             key={e}
             type="button"
             onClick={() => toggle(e)}
-            title={[
-              who.length > 0 ? who.join(", ") : null,
-              REACTION_MEANING[e] ?? REACTION_DEFAULT,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+            title={
+              [REACTION_MEANING[e], who.length > 0 ? who.join(", ") : null]
+                .filter(Boolean)
+                .join(": ") || undefined
+            }
             className={cn(
               "rounded-full border px-2.5 py-1 text-sm transition",
               mine ? "border-accent bg-accent/10 text-accent" : "border-border text-muted hover:border-accent",
@@ -370,12 +368,9 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
       .update({ body: editBody.trim() })
       .eq("id", id)
       .select("id");
-    if (err) {
-      setError(err.message);
-      return;
-    }
-    if (!data || data.length === 0) {
-      setError("Couldn’t save — the comment-edit permission isn’t applied. Run `supabase db push`.");
+    if (err || !data || data.length === 0) {
+      console.error("Saving comment edit failed:", err ?? "no rows updated (comment-edit RLS policy missing?)");
+      setError("Couldn’t save your edit. Try again.");
       return;
     }
     setEditingId(null);
@@ -417,7 +412,8 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
       await qc.invalidateQueries({ queryKey: [cfg.countsKey] });
       if (cfg.supportsMentions) await qc.invalidateQueries({ queryKey: ["mentions"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.error("Posting comment failed:", err);
+      setError("Couldn’t post your comment. Try again.");
     } finally {
       setBusy(false);
     }
@@ -478,7 +474,8 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
                       if (!window.confirm("Remove this comment by a former member?")) return;
                       const { error: err } = await supabase.from(cfg.commentsTable).delete().eq("id", c.id);
                       if (err) {
-                        setError(err.message);
+                        console.error("Removing comment failed:", err);
+                        setError("Couldn’t remove this comment. Try again.");
                         return;
                       }
                       await qc.invalidateQueries({ queryKey: commentsKey });
@@ -511,8 +508,8 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
             onBlur={() => setTimeout(() => setMention(null), 120)} // let a click land first
             placeholder={
               cfg.supportsMentions
-                ? "Add a comment… type @ to tag a teammate"
-                : "Add a comment for your team…"
+                ? "Add a comment. Type @ to mention someone."
+                : "Add a comment for your lab…"
             }
           />
 
@@ -547,7 +544,7 @@ function Comments({ kind, subjectId, teamId, userId }: Ctx) {
         {error && <p className="text-xs text-danger">{error}</p>}
         <div>
           <Button type="submit" size="sm" disabled={busy || !body.trim()}>
-            {busy ? "…" : "Post comment"}
+            {busy ? "Posting…" : "Post comment"}
           </Button>
         </div>
       </form>

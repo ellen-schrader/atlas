@@ -214,7 +214,7 @@ export function PaperDetail({
           <span className="flex items-center gap-2">
             {posterName && <Avatar name={posterName} size={22} />}
             <span title={formatDate(post.posted_at)}>
-              Posted {posterName ? `by ${posterName} ` : ""}· {formatRelative(post.posted_at)}
+              Posted {posterName ? `by ${posterName} · ` : ""}{formatRelative(post.posted_at)}
             </span>
           </span>
         </div>
@@ -299,7 +299,7 @@ function SharePost({ paper }: { paper: Paper }) {
           <MenuItem
             icon={copied === "paper" ? <Check size={14} className="text-accent" /> : <ExternalLink size={14} />}
             label={copied === "paper" ? "Copied" : "Copy link to paper"}
-            hint={paper.doi ? "Resolves via doi.org" : "The publisher page"}
+            hint={paper.doi ? "Opens through doi.org" : "The publisher page"}
             disabled={!paperUrl}
             onClick={() => paperUrl && void copy("paper", paperUrl)}
           />
@@ -612,12 +612,13 @@ function MetadataEditor({
         </p>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <p className="mr-auto text-xs text-muted">Fixes apply in every lab that has this paper.</p>
         <Button type="button" variant="secondary" onClick={onDone} disabled={busy}>
           Cancel
         </Button>
         <Button type="submit" disabled={busy || !title.trim()}>
-          {busy ? "Saving…" : "Save for every lab"}
+          {busy ? "Saving…" : "Save"}
         </Button>
       </div>
     </form>
@@ -761,7 +762,8 @@ function DeleteConfirm({
     // messages below are rendered rather than set on an unmounted component.
     markBusy(false);
     if (err) {
-      setError(err.message);
+      console.error("Removing paper failed:", err);
+      setError("Couldn’t remove this paper. Try again.");
       return;
     }
     if (!data || data.length === 0) {
@@ -1068,7 +1070,7 @@ function SimilarPapers({
               }
               className="w-full rounded-control px-2 py-1.5 text-left text-sm transition hover:bg-surface-2"
             >
-              <span className="text-fg">{s.title ?? "Untitled"}</span>
+              <span className="text-fg">{s.title ?? "Untitled paper"}</span>
               {[s.venue, s.year].filter(Boolean).length > 0 && (
                 <span className="ml-2 font-mono text-xs text-faint">
                   {[s.venue, s.year].filter(Boolean).join(" · ")}
@@ -1141,7 +1143,7 @@ function MarkReadButton({
     >
       {/* State, not instruction — the same way the bookmark beside it reads
           "Save" then "Saved". The action lives in the title and aria-pressed. */}
-      <Check size={14} /> {isRead ? "Read" : "Mark read"}
+      <Check size={14} /> {isRead ? "Read" : "Mark as read"}
     </button>
   );
 }

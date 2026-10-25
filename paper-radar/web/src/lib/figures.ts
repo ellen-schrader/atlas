@@ -79,7 +79,7 @@ export async function readImageSize(file: File): Promise<{ width: number; height
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error("Could not read image dimensions"));
+      reject(new Error("Couldn’t read that image. Try another file."));
     };
     img.src = url;
   });

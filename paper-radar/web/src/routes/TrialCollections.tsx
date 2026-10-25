@@ -8,6 +8,7 @@ import { TrialsFeed } from "@/components/trials/TrialsFeed";
 import { RequireTrials, TherapySwatch, TrialsDisclaimer } from "@/components/trials/parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import {
   type Collection,
   type Suggestion,
@@ -37,6 +38,7 @@ import { cn, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 export default function TrialCollections() {
+  useDocumentTitle("Collections");
   return (
     <RequireTrials>
       <Collections />
@@ -207,9 +209,9 @@ function Collections() {
         <div className="flex flex-col items-start gap-3 rounded-card border border-dashed border-border-strong p-6">
           <Layers size={20} className="text-muted" aria-hidden />
           <p className="max-w-[60ch] text-sm text-muted">
-            No collections yet. Start one for a question the lab keeps coming back to, or select
-            trials in <Link to="/trials" className="text-accent hover:underline">All trials</Link>{" "}
-            and save them as a collection.
+            No collections yet. Tick trials in{" "}
+            <Link to="/trials" className="text-accent hover:underline">All trials</Link> and save
+            them as a collection.
           </p>
         </div>
       )}

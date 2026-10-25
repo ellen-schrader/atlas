@@ -5,6 +5,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { PaperDetail } from "@/components/PaperDetail";
 import { Button } from "@/components/ui/button";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useMergedInto } from "@/hooks/usePreprintLinks";
 import { useReadingList } from "@/hooks/useReadingList";
 import { supabase } from "@/lib/supabase";
@@ -61,6 +62,7 @@ export default function PaperPage() {
       return (data as unknown as PaperPost) ?? null;
     },
   });
+  useDocumentTitle(post ? (post.papers.title ?? "Untitled paper") : null);
 
   // A preprint merged into its published version keeps its old links working:
   // Teams cards and bookmarks point at the id that no longer exists.
@@ -106,7 +108,7 @@ export default function PaperPage() {
           // Distinct from the not-in-your-lab case below: a failed fetch must not
           // be reported as an access answer we never actually got.
           <div className="flex flex-col items-center gap-3 p-12 text-center">
-            <p className="text-sm text-muted">Couldn’t load this paper.</p>
+            <p className="text-sm text-muted">Couldn’t load this paper. Try again.</p>
             <Button variant="secondary" size="sm" onClick={() => void refetch()}>
               Retry
             </Button>

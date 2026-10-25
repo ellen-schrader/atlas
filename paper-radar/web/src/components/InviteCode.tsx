@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-/** A lab's join code with a copy-to-clipboard button. */
+/** A lab’s invite code with a copy-to-clipboard button. */
 export function InviteCode({ code, className }: { code: string; className?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -28,7 +28,7 @@ export function InviteCode({ code, className }: { code: string; className?: stri
       <button
         type="button"
         onClick={copy}
-        aria-label="Copy join code"
+        aria-label="Copy invite code"
         className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted transition hover:bg-surface-3 hover:text-fg"
       >
         {copied ? (

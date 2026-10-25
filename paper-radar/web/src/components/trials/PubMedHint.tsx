@@ -43,7 +43,7 @@ export function PubMedHint({ trialId, onAdded }: { trialId: string; onAdded: () 
       toast({ message: "Added to the library and linked to this trial." });
       onAdded();
     },
-    onError: (e) => toast({ message: e instanceof ApiError ? e.message : "Couldn’t add that paper." }),
+    onError: (e) => toast({ message: e instanceof ApiError ? e.message : "Couldn’t add that paper. Try again." }),
   });
 
   if (!asked)
@@ -61,7 +61,7 @@ export function PubMedHint({ trialId, onAdded }: { trialId: string; onAdded: () 
   if (hint.error || !hint.data)
     return (
       <p className="text-sm text-muted">
-        {hint.error instanceof ApiError ? hint.error.message : "Couldn’t reach PubMed."}
+        {hint.error instanceof ApiError ? hint.error.message : "Couldn’t reach PubMed. Try again."}
       </p>
     );
   const h = hint.data;

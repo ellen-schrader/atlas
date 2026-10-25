@@ -18,9 +18,9 @@ export function SameQuestion() {
     <section className="dark bg-surface text-fg">
       <Container className="py-20 sm:py-24">
         <h2 className="max-w-[16em] text-balance text-3xl font-bold leading-[1.08] tracking-[-0.03em] sm:text-[2.75rem]">
-          Same model, same answer.
+          Ask Claude the same question twice.
         </h2>
-        <p className="mt-3.5 text-lg text-muted">Unless Claude starts from your lab’s reading.</p>
+        <p className="mt-3.5 text-lg text-muted">Once on its own, once with your lab’s library.</p>
         <p className="mt-10 text-xl leading-snug sm:text-[22px]">
           “Which spatial transcriptomics platform should we use for our tumour samples?”
         </p>

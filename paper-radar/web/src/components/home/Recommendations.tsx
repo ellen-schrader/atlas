@@ -131,17 +131,17 @@ export function RecommendationsRow({
           <span className="inline-flex items-center gap-2 text-sm font-medium">
             <Sparkles size={15} className="text-accent" />
             {recs.waking
-              ? "Waking the paper service…"
+              ? "Loading recommendations…"
               : recs.isError
-                ? "Recommendations are unavailable right now."
+                ? "Couldn’t load recommendations."
                 : "No new papers to recommend yet."}
           </span>
           <p className="text-xs text-muted">
             {recs.waking
-              ? "It sleeps when nobody’s around — recommendations will appear here shortly."
+              ? "This can take up to a minute after a quiet spell."
               : recs.isError
-                ? "The recommendation service isn’t reachable — try again shortly."
-                : "Describe your research in Settings and engage with papers, and we’ll surface the ones worth your time."}
+                ? "Try again in a minute."
+                : "Add a short research profile in Settings to get recommendations."}
           </p>
           {!recs.isError && (
             <button
@@ -303,7 +303,7 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
     }
     case "engagement":
       // The taste can come from reactions or comments too, not only saves.
-      return <>In line with your activity in Atlas</>;
+      return <>Based on what you’ve read</>;
     case "new":
       return (
         <>

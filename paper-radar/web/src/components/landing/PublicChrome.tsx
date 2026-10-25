@@ -7,10 +7,10 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 export const REPO_URL = "https://github.com/ellen-schrader/atlas";
 export const ISSUES_URL = `${REPO_URL}/issues`;
 
-/** The product in one sentence, shared by the landing hero and the sign-in panel
- *  (index.html's description carries the same words for link previews). */
-export const HEADLINE = "A shared paper library that gives Claude your lab’s judgment.";
-export const TAGLINE = "Keep your group’s papers in one place. Let Claude answer from them.";
+/** The product in one sentence, shared by the landing hero and the sign-up panel
+ *  (index.html's og tags carry the same words for link previews). */
+export const HEADLINE = "Your lab’s papers, in one place. Ready for Claude.";
+export const TAGLINE = "Add papers however your lab shares them. Claude answers from them, with citations.";
 
 /** The page width every public section shares. */
 export function Container({ className = "", children }: { className?: string; children: ReactNode }) {

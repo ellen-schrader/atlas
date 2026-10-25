@@ -98,7 +98,7 @@ export function SourcePanel({
     try {
       await openSourceFile(doc, source.page);
     } catch {
-      toast({ message: "Couldn’t open the source." });
+      toast({ message: "Couldn’t open the source. Try again." });
     }
   };
 

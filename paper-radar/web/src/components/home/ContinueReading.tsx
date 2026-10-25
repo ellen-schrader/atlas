@@ -42,7 +42,7 @@ export function ContinueReadingCard({
   if (!next) {
     return (
       <div className={cn("flex items-center px-1 text-meta text-muted", height)}>
-        Nothing queued. Bookmark papers to build your list.
+        Nothing saved to read yet.
       </div>
     );
   }
@@ -68,7 +68,7 @@ export function ContinueReadingCard({
         onClick={onOpen}
         className="min-w-0 flex-1 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        <span className="block truncate text-sm font-semibold">{p?.title ?? "A paper"}</span>
+        <span className="block truncate text-sm font-semibold">{p?.title ?? "Untitled paper"}</span>
         <span className="mt-0.5 block truncate text-meta text-muted">{meta}</span>
       </button>
       <button

@@ -68,7 +68,7 @@ export function Trending({
             ))}
           </div>
         ) : state === "error" ? (
-          <Empty>Trends are unavailable right now.</Empty>
+          <Empty>Couldn’t load trends. Try again later.</Empty>
         ) : tab === "tags" ? (
           tags.length === 0 ? (
             <Empty>No tagged papers in the last 30 days.</Empty>

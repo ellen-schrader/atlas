@@ -71,7 +71,7 @@ export function FigureFields({
       <Field label="Image origin">
         {origin === "style_card" ? (
           <span className="text-sm text-muted">
-            Style card — a synthetic recreation; the origin can't change.
+            Style card: a recreation with made-up data. The origin can’t change.
           </span>
         ) : (
           <OriginToggle value={origin} onChange={onOrigin} />
@@ -167,18 +167,18 @@ function CitationFields({
     try {
       const doi = await resolveDoi(sourceUrl, paperId);
       if (!doi) {
-        setNote("No DOI found — link a paper or paste a DOI/URL first.");
+        setNote("No DOI found. Link a paper or paste a DOI or URL first.");
         return;
       }
       const found = await lookupLicense(doi);
       if (found) {
         onLicense(found);
-        setNote(`Found “${found}” for the article — confirm it covers this figure.`);
+        setNote(`Article licence: ${found}. Check it covers this figure.`);
       } else {
-        setNote("No licence recorded for that DOI. Enter it manually.");
+        setNote("No licence recorded for that DOI. Enter it yourself.");
       }
     } catch {
-      setNote("Couldn’t reach the licence service.");
+      setNote("Couldn’t look up the licence. Try again.");
     } finally {
       setLooking(false);
     }
@@ -188,8 +188,8 @@ function CitationFields({
     <div className="flex flex-col gap-4 rounded-card border border-border bg-surface-2 p-4">
       <p className="text-xs text-muted">
         {isStyleCard
-          ? "Recreated with synthetic data — credit the figure whose look it borrows."
-          : "Style inspiration only — record where it came from. We derive style, not reproductions."}
+          ? "Recreated with made-up data. Credit the figure whose look it borrows."
+          : "For style reference only. Add where it came from."}
       </p>
       <Field label="Source URL / DOI">
         <Input
@@ -214,7 +214,7 @@ function CitationFields({
               onClick={look}
               disabled={looking}
             >
-              {looking ? "…" : "Look up"}
+              {looking ? "Looking up…" : "Look up"}
             </Button>
           </div>
         </Field>

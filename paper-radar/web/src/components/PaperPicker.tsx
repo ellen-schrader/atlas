@@ -54,7 +54,7 @@ export function PaperPicker({
       return ((data ?? []) as unknown as PaperPost[]).map((post) => {
         const p = post.papers;
         const meta = [formatAuthors(p.authors, 2), p.venue, p.year]
-          .filter((x) => x !== null && x !== "" && x !== "—")
+          .filter((x) => x !== null && x !== "" && x !== "–")
           .join(" · ");
         return { id: p.id, title: p.title ?? p.url, meta };
       });
@@ -90,8 +90,8 @@ export function PaperPicker({
         autoFocus={autoFocus}
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
-        placeholder="Search your lab's papers by title, author or words…"
-        aria-label="Search your lab's papers"
+        placeholder="Search your lab’s papers by title, author or words…"
+        aria-label="Search your lab’s papers"
       />
       {raw.trim() && (isFetching || raw.trim() !== q) && (
         <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted">

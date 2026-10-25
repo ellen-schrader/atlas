@@ -5,6 +5,7 @@ import { Loader2, Map as MapIcon, Plus, Trash2, X } from "lucide-react";
 
 import { createMap, deleteMap, fetchMaps } from "@/lib/api";
 import type { MapDoc } from "@/lib/types";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useAppContext } from "@/routes/Layout";
 
@@ -16,6 +17,7 @@ import { useAppContext } from "@/routes/Layout";
 export default function MapsLibrary() {
   const { team, userId } = useAppContext();
   const { data: role } = useMyRole(team.id, userId);
+  useDocumentTitle("Topic maps");
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { data: maps, isLoading } = useQuery({
@@ -46,11 +48,10 @@ export default function MapsLibrary() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6 p-8">
       <header>
-        <h1 className="text-display font-bold tracking-tight text-fg">Topic map</h1>
+        <h1 className="text-display font-bold tracking-tight text-fg">Topic maps</h1>
         <p className="mt-1.5 max-w-[64ch] text-sm text-muted">
-          A topic map tracks a subject your lab cares about — a live t-SNE of its papers, the labs
-          and sub-themes driving it, and an AI digest of what’s new. Start from the whole-lab
-          overview, or make a focused one.
+          Follow a topic your lab cares about: its papers, the groups publishing on it, and what’s
+          new.
         </p>
       </header>
 
@@ -64,7 +65,7 @@ export default function MapsLibrary() {
             <span className="text-base font-semibold">Lab overview</span>
           </div>
           <p className="mt-1 text-sm text-muted">
-            Every paper in {team.name}, mapped — the pinned whole-corpus view.
+            All of {team.name}’s papers on one map.
           </p>
         </Link>
 
@@ -97,7 +98,7 @@ export default function MapsLibrary() {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Name — e.g. Ovarian Cancer"
+              placeholder="Name, e.g. Ovarian cancer"
               className="mb-2 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
             />
             <input
@@ -130,13 +131,13 @@ export default function MapsLibrary() {
       </div>
 
       <p className="text-xs text-faint">
-        Membership is a live semantic match on each seed, so a map stays current as papers are
-        posted. Maps are shared with {team.name} by default.
+        Maps update as your lab adds papers. They’re shared with {team.name} unless you make them
+        private.
       </p>
 
       {del.isError && (
         <p className="text-sm text-danger">
-          Couldn’t delete that map — {(del.error as Error).message}
+          Couldn’t delete that map. {(del.error as Error).message}
         </p>
       )}
     </div>
@@ -155,12 +156,8 @@ function MapCard({
   onDelete: () => void;
 }) {
   const count = m.paper_count ?? 0;
-  const owner =
-    m.visibility === "lab"
-      ? m.owner_name
-        ? `Shared · by ${m.owner_name}`
-        : `Shared with ${teamName}`
-      : "Only you";
+  const shared = m.visibility === "lab";
+  const visibility = shared ? `Shared with ${teamName}` : "Only you";
   return (
     <Link
       to={`/maps/${m.id}`}
@@ -173,8 +170,11 @@ function MapCard({
           {count} paper{count === 1 ? "" : "s"}
         </span>
         <span>·</span>
-        <span className="truncate">{owner}</span>
+        <span className="truncate">{visibility}</span>
       </div>
+      {shared && m.owner_name && (
+        <p className="mt-0.5 truncate text-xs text-faint">by {m.owner_name}</p>
+      )}
       {canDelete && (
         <button
           type="button"

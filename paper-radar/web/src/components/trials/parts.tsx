@@ -47,7 +47,7 @@ export function TherapySwatch({ therapy, className }: { therapy: TherapyClass; c
 /** Therapy classes as swatch + label: the label is always there, so colour is
  *  never the only carrier. */
 export function TherapyList({ therapies }: { therapies: TherapyClass[] }) {
-  if (therapies.length === 0) return <span className="text-faint">—</span>;
+  if (therapies.length === 0) return <span className="text-faint">–</span>;
   return (
     <span className="flex flex-wrap gap-x-3 gap-y-1">
       {therapies.map((t) => (

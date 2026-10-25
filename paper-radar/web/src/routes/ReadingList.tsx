@@ -4,6 +4,7 @@ import { BookMarked, Check, CheckSquare, Loader2, Search, X } from "lucide-react
 
 import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
 import { usePaperModal } from "@/components/PaperModal";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { type Selection, useSelection } from "@/hooks/useSelection";
@@ -22,7 +23,7 @@ type View = "queue" | "read" | "all";
 
 const VIEWS: { key: View; label: string; blurb: string }[] = [
   { key: "queue", label: "To read", blurb: "Saved and not started." },
-  { key: "read", label: "Read", blurb: "Read and kept — still yours, still counting." },
+  { key: "read", label: "Read", blurb: "Papers you’ve read." },
   { key: "all", label: "All", blurb: "Everything you have saved." },
 ];
 
@@ -82,6 +83,7 @@ const BANDS: { key: "today" | "week" | "earlier"; label: string }[] = [
  *  "Recommended" ranks the same papers via the API. */
 export default function ReadingList() {
   const { team, userId } = useAppContext();
+  useDocumentTitle("Reading list");
   const { openPaper } = usePaperModal();
   const qc = useQueryClient();
   const [view, setView] = useState<View>("queue");
@@ -236,7 +238,7 @@ export default function ReadingList() {
               ) : (
                 <span className="font-medium text-accent">Queue clear</span>
               )}
-              {readCount > 0 && <> · {readCount} read and kept</>}
+              {readCount > 0 && <> · {readCount} read</>}
               {readWk > 0 && (
                 <>
                   {" · "}
@@ -246,7 +248,7 @@ export default function ReadingList() {
             </p>
           ) : (
             <p className="mt-1.5 text-sm text-muted">
-              Papers you save in {team.name} land here — to read, and to keep.
+              Papers you save appear here.
             </p>
           )}
         </div>
@@ -374,13 +376,13 @@ export default function ReadingList() {
       {recError && (
         <div className="rounded-card border border-dashed border-border bg-surface-2 p-5 text-sm">
           <p className="font-medium">
-            {recWaking ? "Waking the paper service…" : "Couldn’t rank by recommendation right now."}
+            {recWaking ? "Loading the ranking…" : "Couldn’t rank your reading list."}
           </p>
           <p className="mt-1 text-xs text-muted">
             {recWaking ? (
-              <>The ranking will appear here shortly, or </>
+              <>This can take up to a minute after a quiet spell. Or </>
             ) : (
-              <>The recommendation service isn’t reachable — </>
+              <>Try again later, or </>
             )}
             <button onClick={() => setSort("added")} className="font-medium text-accent hover:underline">
               sort by date added
@@ -395,7 +397,7 @@ export default function ReadingList() {
           <BookMarked size={22} className="text-muted" />
           <p className="text-sm font-medium">Your reading list is empty</p>
           <p className="max-w-sm text-xs text-muted">
-            Bookmark papers from the Library or a paper’s detail view and they’ll collect here.
+            Save papers from the library and they’ll appear here.
           </p>
         </div>
       )}
@@ -415,10 +417,10 @@ export default function ReadingList() {
                     onClick={() => setView("read")}
                     className="font-medium text-accent hover:underline"
                   >
-                    {readCount} kept {readCount === 1 ? "paper" : "papers"}
+                    {readCount} read {readCount === 1 ? "paper" : "papers"}
                   </button>
                 )}{" "}
-                {readCount > 0 && "are still here."}
+                {readCount > 0 && (readCount === 1 ? "is still saved." : "are still saved.")}
               </p>
             </>
           ) : (
@@ -574,7 +576,7 @@ function Row({
         <span className="block text-sm font-semibold leading-snug text-fg line-clamp-2">
           {item.title ?? "Untitled paper"}
         </span>
-        <span className="mt-1 block truncate text-xs text-muted">{meta || "—"}</span>
+        <span className="mt-1 block truncate text-xs text-muted">{meta || "–"}</span>
       </button>
 
       {item.similarity != null && item.similarity > 0 && (
@@ -601,8 +603,8 @@ function Row({
           </button>
           <button
             onClick={() => onRemove(item.paperId)}
-            title="Un-save — removes it from your list entirely"
-            aria-label="Un-save this paper"
+            title="Remove from reading list"
+            aria-label="Remove from reading list"
             className="grid h-7 w-7 place-items-center rounded-md text-faint transition hover:bg-surface-3 hover:text-danger"
           >
             <X size={15} />

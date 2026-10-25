@@ -77,7 +77,7 @@ export function describe(i: FeedItem): string {
     case "paper_linked":
       return i.count > 1 ? `${i.count} papers linked` : "New paper linked";
     case "extraction_done":
-      return "Claude read the papers: the trial’s data is in";
+      return "Trial data extracted";
     case "values_verified":
       return `${i.who ?? "Someone"} checked ${i.count === 1 ? "a part" : `${i.count} parts`} of the data against the papers`;
   }
