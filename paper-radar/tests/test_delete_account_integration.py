@@ -27,10 +27,10 @@ if os.environ.get("ATLAS_INTEGRATION") != "1":
     pytest.skip("set ATLAS_INTEGRATION=1 to run (needs local Supabase)", allow_module_level=True)
 
 from fastapi.testclient import TestClient  # noqa: E402
-from supabase import create_client  # noqa: E402
 
 from api.config import get_api_settings  # noqa: E402
 from api.supa import _anon_client, service_client  # noqa: E402
+from supabase import create_client  # noqa: E402
 from tests.local_supabase import (  # noqa: E402
     ANON,
     LOCAL_URL,
@@ -92,17 +92,29 @@ class World:
         tid = str(uuid.uuid4())
         self.teams.append(tid)
         self.admin.table("teams").insert(
-            {"id": tid, "name": f"Delete test {tid[:8]}", "slug": f"del-{tid[:8]}", "created_by": members[0][0]}
+            {
+                "id": tid,
+                "name": f"Delete test {tid[:8]}",
+                "slug": f"del-{tid[:8]}",
+                "created_by": members[0][0],
+            }
         ).execute()
         for uid, role in members:
-            self.admin.table("team_members").insert({"team_id": tid, "user_id": uid, "role": role}).execute()
+            self.admin.table("team_members").insert(
+                {"team_id": tid, "user_id": uid, "role": role}
+            ).execute()
         return tid
 
     def paper(self, team_id: str, posted_by: str) -> str:
         pid = str(uuid.uuid4())
         self.papers.append(pid)
         self.admin.table("papers").insert(
-            {"id": pid, "url": f"https://example.test/{pid}", "url_norm": pid, "title": f"Paper {pid[:8]}"}
+            {
+                "id": pid,
+                "url": f"https://example.test/{pid}",
+                "url_norm": pid,
+                "title": f"Paper {pid[:8]}",
+            }
         ).execute()
         self.admin.table("paper_posts").insert(
             {"paper_id": pid, "team_id": team_id, "posted_by": posted_by, "source": "web"}
@@ -116,8 +128,15 @@ class World:
         self.admin.storage.from_("figures").upload(path, PNG, {"content-type": "image/png"})
         self.files.append(path)
         self.admin.table("figures").insert(
-            {"id": fid, "team_id": team_id, "uploaded_by": uploaded_by, "storage_path": path,
-             "width": 1, "height": 1, "mime_type": "image/png"}
+            {
+                "id": fid,
+                "team_id": team_id,
+                "uploaded_by": uploaded_by,
+                "storage_path": path,
+                "width": 1,
+                "height": 1,
+                "mime_type": "image/png",
+            }
         ).execute()
         return path
 
@@ -168,14 +187,28 @@ def test_shared_lab_keeps_contributions_and_drops_personal_data(admin, world):
     b, _, _ = world.user("b")
     lab = world.lab((a, "member"), (b, "owner"))
     paper = world.paper(lab, a)
-    admin.table("comments").insert({"paper_id": paper, "team_id": lab, "author_id": a, "body": "keep me"}).execute()
-    admin.table("reactions").insert({"paper_id": paper, "team_id": lab, "user_id": a, "emoji": "👍"}).execute()
-    lab_map = admin.table("maps").insert(
-        {"team_id": lab, "created_by": a, "name": "Lab map", "seed": "x", "visibility": "lab"}
-    ).execute().data[0]["id"]
-    private_map = admin.table("maps").insert(
-        {"team_id": lab, "created_by": a, "name": "Mine", "seed": "y", "visibility": "private"}
-    ).execute().data[0]["id"]
+    admin.table("comments").insert(
+        {"paper_id": paper, "team_id": lab, "author_id": a, "body": "keep me"}
+    ).execute()
+    admin.table("reactions").insert(
+        {"paper_id": paper, "team_id": lab, "user_id": a, "emoji": "👍"}
+    ).execute()
+    lab_map = (
+        admin.table("maps")
+        .insert(
+            {"team_id": lab, "created_by": a, "name": "Lab map", "seed": "x", "visibility": "lab"}
+        )
+        .execute()
+        .data[0]["id"]
+    )
+    private_map = (
+        admin.table("maps")
+        .insert(
+            {"team_id": lab, "created_by": a, "name": "Mine", "seed": "y", "visibility": "private"}
+        )
+        .execute()
+        .data[0]["id"]
+    )
 
     r = _rpc(a, f" {a_email.upper()} ")  # case and spacing don't matter
     assert r.status_code == 200, r.text
@@ -261,7 +294,9 @@ def test_undo_still_works_for_a_removed_post_by_a_deleted_member(admin, world):
     assert _rpc(a, a_email).status_code == 200
     assert _rows(admin, "removed_posts", id=post_id)[0]["posted_by"] is None
 
-    restored = httpx.post(f"{REST}/rpc/restore_post", headers=bearer(b_token), json={"p_post": post_id})
+    restored = httpx.post(
+        f"{REST}/rpc/restore_post", headers=bearer(b_token), json={"p_post": post_id}
+    )
     assert restored.status_code == 200, restored.text
     assert _rows(admin, "paper_posts", id=post_id)[0]["posted_by"] is None
 
@@ -274,7 +309,9 @@ def test_owner_may_remove_what_a_former_member_left_and_nothing_more(admin, worl
     paper = world.paper(lab, b)
     a_file, c_file = world.figure(lab, a), world.figure(lab, c)
     for who in (a, c):
-        admin.table("comments").insert({"paper_id": paper, "team_id": lab, "author_id": who, "body": who}).execute()
+        admin.table("comments").insert(
+            {"paper_id": paper, "team_id": lab, "author_id": who, "body": who}
+        ).execute()
     assert _rpc(a, a_email).status_code == 200
 
     as_owner = httpx.Client(headers=bearer(b_token))
@@ -307,7 +344,9 @@ def test_api_route_deletes_and_removes_solo_lab_files(admin, world):
 
     client = TestClient(app)
     auth = {"Authorization": f"Bearer {a_token}"}
-    refused = client.post("/account/delete", json={"confirm_email": "nope@example.test"}, headers=auth)
+    refused = client.post(
+        "/account/delete", json={"confirm_email": "nope@example.test"}, headers=auth
+    )
     assert refused.status_code == 409
 
     ok = client.post("/account/delete", json={"confirm_email": a_email}, headers=auth)
@@ -319,7 +358,9 @@ def test_api_route_deletes_and_removes_solo_lab_files(admin, world):
     assert after.status_code == 401
 
 
-@pytest.mark.skipif(not oauth_server_on(), reason="local OAuth server is off (supabase/config.toml)")
+@pytest.mark.skipif(
+    not oauth_server_on(), reason="local OAuth server is off (supabase/config.toml)"
+)
 def test_connector_token_cannot_delete_and_is_revoked_after(admin, world):
     a, a_email, a_token = world.user("a")
     world.lab((a, "owner"))

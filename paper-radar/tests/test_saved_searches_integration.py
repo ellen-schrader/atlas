@@ -436,10 +436,56 @@ def test_a_paper_two_searches_find_shows_under_both_and_one_answer_clears_it(wor
     assert out.json() == {"count": 1}
     assert [s["pending"] for s in _searches(client, lab, a_auth)] == [1, 0]
 
-    # Deleting the first search leaves its paper waiting, under no search.
+    # Deleting the first search takes its waiting paper with it.
     client.delete(f"/saved-searches/{first['id']}", params={"team_id": lab}, headers=a_auth)
+    assert _suggestions(client, lab, a_auth) == []
+
+
+def test_deleting_a_search_clears_only_what_no_other_search_found(world, monkeypatch):
+    a, a_auth = world.user()
+    b, b_auth = world.user()
+    lab = world.lab(a, b)
+    shared, only_first, answered = world.hit(1), world.hit(2), world.hit(3)
+    client = TestClient(app)
+
+    _stub_pubmed(monkeypatch, [shared, only_first, answered])
+    first = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "One", "query": "tls", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+    _stub_pubmed(monkeypatch, [shared])
+    second = client.post(
+        "/saved-searches",
+        json={"team_id": lab, "name": "Two", "query": "b cells", "sources": ["pubmed"]},
+        headers=a_auth,
+    ).json()
+    mine = {s["paper"]["title"]: s for s in _suggestions(client, lab, a_auth)}
+    client.post(
+        "/saved-searches/suggestions/dismiss",
+        json={"team_id": lab, "ids": [mine[answered.title]["id"]]},
+        headers=a_auth,
+    )
+
+    # Someone else cannot delete it, and nothing of it goes.
+    out = client.delete(f"/saved-searches/{first['id']}", params={"team_id": lab}, headers=b_auth)
+    assert out.status_code == 404
+    assert len(_suggestions(client, lab, a_auth)) == 2
+
+    out = client.delete(f"/saved-searches/{first['id']}", params={"team_id": lab}, headers=a_auth)
+    assert out.status_code == 204
     (left,) = _suggestions(client, lab, a_auth)
-    assert left["search_ids"] == []
+    assert left["paper"]["title"] == shared.title
+    assert left["search_ids"] == [second["id"]]
+    # The dismissal is kept, so the paper is not suggested again.
+    status = (
+        world.admin.table("search_suggestions")
+        .select("status")
+        .eq("id", mine[answered.title]["id"])
+        .execute()
+        .data
+    )
+    assert status == [{"status": "dismissed"}]
 
 
 def test_the_page_lists_the_newest_few_of_every_search(world, monkeypatch):

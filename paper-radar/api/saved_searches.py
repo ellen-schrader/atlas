@@ -1121,10 +1121,20 @@ def order_searches(req: SearchOrder, token: str = Depends(require_token)) -> Non
 
 @router.delete("/{search_id}", status_code=204)
 def delete_search(search_id: UUID, team_id: UUID, token: str = Depends(require_token)) -> None:
+    """Delete the caller's search and its waiting suggestions, except papers
+    another of their searches also found (those stay under that one)."""
     user_id = _require_feature(token, str(team_id))
-    svc = service_client()
-    _own_search(svc, str(search_id), user_id, str(team_id))
-    svc.table("saved_searches").delete().eq("id", str(search_id)).eq("user_id", user_id).execute()
+    done = (
+        service_client()
+        .rpc(
+            "delete_saved_search",
+            {"p_user": user_id, "p_team": str(team_id), "p_id": str(search_id)},
+        )
+        .execute()
+        .data
+    )
+    if not done:
+        raise HTTPException(status_code=404, detail="That search is not one of yours.")
 
 
 @router.post("/preview", response_model=list[SourceResult])
