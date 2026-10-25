@@ -77,7 +77,7 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
       )}
       {setAccess.isError && (
         <p className="mt-3 text-xs text-danger">
-          Couldn’t change Claude access. Try again.
+          Couldn’t change Claude access: {setAccess.error.message}
         </p>
       )}
     </div>

@@ -3,6 +3,7 @@ import { CircleCheck, PenLine } from "lucide-react";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
+import { REPO_URL } from "@/components/landing/PublicChrome";
 import { Button } from "@/components/ui/button";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useClaudeConnection, useMcpAccess } from "@/hooks/useMcpAccess";
@@ -24,7 +25,7 @@ import { useAppContext } from "@/routes/Layout";
 const MCP_URL = import.meta.env.VITE_MCP_URL || "https://mcp.labatlas.app/mcp";
 
 /** The README section on running the MCP server on your own computer. */
-const LOCAL_SETUP_URL = "https://github.com/ellen-schrader/atlas/blob/main/README.md#run-the-server-locally";
+const LOCAL_SETUP_URL = `${REPO_URL}/blob/main/README.md#run-the-server-locally`;
 
 type App = "claude" | "code";
 
@@ -97,8 +98,9 @@ export default function Connect() {
         >
           See the setup guide
         </a>
-        . Your lab ID is <Code>{team.id}</Code>.
+        . These two lines go in its <Code>.env</Code>:
       </p>
+      <CopyBlock value={`ATLAS_TEAM_ID=${team.id}\nATLAS_WEB_URL=${window.location.origin}`} />
     </div>
   );
 }

@@ -34,6 +34,10 @@ export interface ExportOptions {
   heading?: string;
 }
 
+/** Every format, in the order the Cite and Export menus offer them. An array
+ *  literal is not exhaustiveness-checked, so this is the one list to extend. */
+export const EXPORT_FORMATS: ExportFormat[] = ["bibtex", "ris", "markdown", "text", "csv"];
+
 export const FORMAT_META: Record<ExportFormat, { label: string; ext: string; mime: string }> = {
   markdown: { label: "Markdown", ext: "md", mime: "text/markdown" },
   text: { label: "Plain text", ext: "txt", mime: "text/plain" },

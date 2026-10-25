@@ -139,8 +139,8 @@ access: Claude sees exactly what you see, and nothing from other labs.
 ```bash
 ATLAS_EMAIL=you@your-lab.org
 ATLAS_PASSWORD=your-atlas-password
-ATLAS_TEAM_ID=<your lab's id>        # shown on the Connect Claude page in Atlas
-ATLAS_WEB_URL=https://labatlas.app   # so the links Claude cites open your Atlas
+ATLAS_TEAM_ID=<your lab's id>        # copy both lines from the Connect Claude page in Atlas
+ATLAS_WEB_URL=https://labatlas.app   # your Atlas's address, so the links Claude cites open it
 ```
 
 A password is the simplest option and keeps working: the server signs in and renews its

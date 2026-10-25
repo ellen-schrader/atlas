@@ -58,7 +58,7 @@ export function SamePaperBanner({ paperId, teamId }: { paperId: string; teamId: 
               <span>
                 {isPreprint ? "Possible published version of this paper: " : "Possible preprint of this paper: "}
                 <strong className="font-semibold">“{other.title ?? other.url}”</strong>
-                {isPreprint && source(other) ? ` (${source(other)})` : ""}. Same paper?
+                {source(other) ? ` (${source(other)})` : ""}. Same paper?
               </span>
             </span>
             <Button size="sm" variant="secondary" className="shrink-0" onClick={() => setComparing(s)}>

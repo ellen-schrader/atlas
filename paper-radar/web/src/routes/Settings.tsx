@@ -92,8 +92,8 @@ function ClaudePrivacyPanel({
             What Claude can see
           </h3>
           <p className="mt-2.5 text-sm leading-relaxed text-fg">
-            Claude can read papers, notes and tags. It can’t read comments, see other labs, or
-            change anything.{" "}
+            Claude can read papers, notes and tags. It can’t read comments or see other labs.
+            With the local setup, it can also add papers.{" "}
             <Link to="/connect" className="font-medium text-accent hover:underline">
               See details →
             </Link>

@@ -14,6 +14,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   type ExportFormat,
   type ExportPaper,
+  EXPORT_FORMATS,
   FORMAT_META,
   bareDoi,
   downloadText,
@@ -909,7 +910,7 @@ function PaperIdentifier({ doi, url }: { doi: string | null; url: string | null 
   );
 }
 
-const CITE_FORMATS: ExportFormat[] = ["bibtex", "ris", "markdown", "text", "csv"];
+const CITE_FORMATS = EXPORT_FORMATS;
 
 /** Copy or download a single paper as a citation, in any export format. Grabbing
  *  one BibTeX entry otherwise means entering the multi-select bar and selecting a

@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 
 import { AboutStrip, Close, LabControls } from "@/components/landing/Closing";
 import { FindAgain } from "@/components/landing/FindAgain";
@@ -7,7 +6,7 @@ import { HowItWorks } from "@/components/landing/HowItWorks";
 import { PublicFooter, PublicHeader } from "@/components/landing/PublicChrome";
 import { PubMedChart } from "@/components/landing/PubMedChart";
 import { SameQuestion } from "@/components/landing/SameQuestion";
-import { DEFAULT_TITLE } from "@/hooks/useDocumentTitle";
+import { DEFAULT_TITLE, useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 /**
  * The public landing page (docs/LANDING_PAGE_PLAN.md, design G). It says what
@@ -17,9 +16,7 @@ import { DEFAULT_TITLE } from "@/hooks/useDocumentTitle";
  * Every paper on it is real; the lab they come from is never named.
  */
 export default function Landing() {
-  useEffect(() => {
-    document.title = DEFAULT_TITLE;
-  }, []);
+  useDocumentTitle(DEFAULT_TITLE, { raw: true });
   return (
     <div className="min-h-full bg-bg text-fg">
       <PublicHeader />
