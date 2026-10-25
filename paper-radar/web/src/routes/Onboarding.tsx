@@ -5,6 +5,7 @@ import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { supabase } from "@/lib/supabase";
 import { cn, slugify } from "@/lib/utils";
 
@@ -15,6 +16,7 @@ export default function Onboarding() {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useDocumentTitle("Set up your lab");
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -44,9 +46,8 @@ export default function Onboarding() {
 
   return (
     <AuthLayout>
-
       <h2 className="text-xl font-bold tracking-tight">Set up your lab</h2>
-      <p className="mb-5 mt-1 text-sm text-muted">Create a new lab, or join one with its code.</p>
+      <p className="mb-5 mt-1 text-sm text-muted">Create a new lab, or join one with its invite code.</p>
 
       <div className="mb-5 flex rounded-control bg-surface-2 p-1 text-sm">
         {(["create", "join"] as const).map((t) => (
@@ -76,32 +77,30 @@ export default function Onboarding() {
               required
             />
             {name.trim() && (
-              <p className="text-xs text-muted">
-                You’ll get a private invite code to share once the lab is created.
-              </p>
+              <p className="text-xs text-muted">You’ll get an invite code to share with your lab.</p>
             )}
           </div>
           {error && <p className="text-xs text-danger">{error}</p>}
           <Button type="submit" disabled={busy || !name.trim()}>
-            {busy ? "…" : "Create lab"}
+            {busy ? "Creating lab…" : "Create lab"}
           </Button>
         </form>
       ) : (
         <form onSubmit={onJoin} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="lab-code">Join code</Label>
+            <Label htmlFor="lab-code">Invite code</Label>
             <Input
               id="lab-code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="Paste your lab’s invite code"
+              placeholder="Paste the code from your lab"
               className="font-mono"
               required
             />
           </div>
           {error && <p className="text-xs text-danger">{error}</p>}
           <Button type="submit" disabled={busy || !code.trim()}>
-            {busy ? "…" : "Join lab"}
+            {busy ? "Joining…" : "Join lab"}
           </Button>
         </form>
       )}

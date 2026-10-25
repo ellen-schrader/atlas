@@ -170,8 +170,8 @@ export function FigureDetail({
                 </span>
                 <div className="mt-1.5 flex flex-col gap-0.5 text-xs text-fg/90">
                   <span className="text-muted">
-                    This image is a synthetic render of a stored style spec — the original figure
-                    was never copied. Borrow the look; cite the inspiration.
+                    A recreation with made-up data. The original figure isn’t stored. Credit it if
+                    you borrow the style.
                   </span>
                   {figure.attribution && <span>Style of {figure.attribution}</span>}
                   {figure.source_url && (
@@ -308,7 +308,7 @@ function FigureEditForm({
     if (!f) return;
     setError(null);
     if (!ACCEPTED_MIME.includes(f.type as (typeof ACCEPTED_MIME)[number])) {
-      setError("Unsupported format — use PNG, JPEG, WebP or GIF.");
+      setError("Use a PNG, JPEG, WebP or GIF image.");
       return;
     }
     if (f.size > MAX_FILE_BYTES) {
@@ -359,7 +359,7 @@ function FigureEditForm({
           // A style card's image is a render of its spec — replacing it by hand
           // would break the spec↔image contract.
           <span className="text-xs text-muted">
-            Synthetic render of the stored spec — the image can't be replaced.
+            A recreation with made-up data. The image can’t be replaced.
           </span>
         ) : (
           <div>

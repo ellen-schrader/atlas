@@ -38,6 +38,7 @@ import {
   statusLabel,
 } from "@/lib/trials";
 import { cn } from "@/lib/utils";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useTrialCountries } from "@/hooks/useTrialCountries";
 import { useAppContext } from "@/routes/Layout";
 
@@ -75,7 +76,7 @@ function labelOf(key: FilterKey, value: string): string {
 }
 
 const list = (t: LabTrial, key: "settings" | "patient_groups", labels: Record<string, string>) =>
-  (t.facts?.[key] ?? []).map((v) => labels[v]).join(", ") || "—";
+  (t.facts?.[key] ?? []).map((v) => labels[v]).join(", ") || "–";
 
 /** Whether Claude has the trial's data yet: what Compare needs. */
 function DataState({ t }: { t: LabTrial }) {
@@ -95,7 +96,7 @@ type InCollections = Map<string, Collection[]>;
 
 function CollectionNames({ t, inCollections }: { t: LabTrial; inCollections: InCollections }) {
   const cs = inCollections.get(t.id) ?? [];
-  if (cs.length === 0) return <span className="text-faint">—</span>;
+  if (cs.length === 0) return <span className="text-faint">–</span>;
   return (
     <span className="flex flex-col gap-0.5">
       {cs.map((c) => (
@@ -108,6 +109,7 @@ function CollectionNames({ t, inCollections }: { t: LabTrial; inCollections: InC
 }
 
 export default function Trials() {
+  useDocumentTitle("Trials");
   return (
     <RequireTrials>
       <AllTrials />
@@ -243,8 +245,7 @@ function AllTrials() {
         <div>
           <h1 className="text-display font-bold tracking-tight text-fg">All trials</h1>
           <p className="mt-1.5 max-w-[64ch] text-sm text-muted">
-            The breast cancer trials {team.name} follows. Atlas adds the ones your papers name and
-            links the papers that report them.
+            Breast cancer trials {team.name} follows, with the papers that report them.
           </p>
         </div>
         <Button onClick={() => setAdding(true)}>
@@ -274,8 +275,7 @@ function AllTrials() {
         <div className="flex flex-col items-start gap-3 rounded-card border border-dashed border-border-strong p-6">
           <FlaskConical size={20} className="text-muted" aria-hidden />
           <p className="max-w-[60ch] text-sm text-muted">
-            No trials yet. Add one by NCT ID or name. Papers you share that name a trial’s NCT ID
-            in their abstract add it here by themselves.
+            No trials yet. Add one by NCT ID or name, or share a paper that mentions one.
           </p>
           <Button variant="secondary" onClick={() => setAdding(true)}>
             <Plus size={16} aria-hidden /> Add trial

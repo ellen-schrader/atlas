@@ -1,9 +1,11 @@
 import { type ReactNode, useState } from "react";
-import { CircleCheck, Laptop, PenLine, ShieldAlert } from "lucide-react";
+import { CircleCheck, PenLine } from "lucide-react";
 
 import { ClaudeAccessToggle, ClaudeActivity, ClaudeScope } from "@/components/ClaudeAccess";
 import { CopyBlock } from "@/components/CopyBlock";
+import { REPO_URL } from "@/components/landing/PublicChrome";
 import { Button } from "@/components/ui/button";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useClaudeConnection, useMcpAccess } from "@/hooks/useMcpAccess";
 import { useOAuthGrants, useRevokeGrant } from "@/hooks/useOAuthGrants";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
@@ -12,17 +14,18 @@ import { useAppContext } from "@/routes/Layout";
 /**
  * How to point Claude at this lab.
  *
- * The connector (a hosted MCP server, docs/CLAUDE_CONNECTOR_PLAN.md) leads: one URL
- * that works in every Claude app, with nothing to install. The original local setup
- * — a config file and a login on your own machine — stays below as "Advanced", for
- * the tools the connector doesn't offer (posting papers, the figure gallery).
- *
- * The `team_id` in the local setup is pre-filled from the session, because it's the
- * one value in that flow a user cannot look up or guess.
+ * The connector (a hosted MCP server, docs/CLAUDE_CONNECTOR_PLAN.md) is the whole
+ * page: one URL that works in every Claude app, with nothing to install. The local
+ * setup (a config file and a login on your own machine, for the tools the connector
+ * doesn't offer) lives in the README; this page links to it and shows the lab id,
+ * the one value in that flow a user cannot look up or guess.
  */
 
-/** The hosted connector's address — what users paste into Claude. */
+/** The hosted connector's address: what users paste into Claude. */
 const MCP_URL = import.meta.env.VITE_MCP_URL || "https://mcp.labatlas.app/mcp";
+
+/** The README section on running the MCP server on your own computer. */
+const LOCAL_SETUP_URL = `${REPO_URL}/blob/main/README.md#run-the-server-locally`;
 
 type App = "claude" | "code";
 
@@ -31,68 +34,23 @@ const APPS: { id: App; label: string }[] = [
   { id: "code", label: "Claude Code" },
 ];
 
-type Client = "code" | "desktop";
-
-const CLIENTS: { id: Client; label: string }[] = [
-  { id: "code", label: "Claude Code" },
-  { id: "desktop", label: "Claude Desktop" },
-];
-
-type Auth = "password" | "token";
-
 export default function Connect() {
   const { team } = useAppContext();
-  const [client, setClient] = useState<Client>("code");
-  const [auth, setAuth] = useState<Auth>("password");
-
-  // Claude Code runs from the repo, so a relative --directory resolves. Claude
-  // Desktop does not, so it needs an absolute path or the server won't spawn.
-  const dir = client === "code" ? "paper-radar" : "/absolute/path/to/paper-radar";
-  const mcpJson = `{
-  "mcpServers": {
-    "atlas": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--directory", "${dir}",
-               "--extra", "mcp", "python", "-m", "atlas_mcp"]
-    }
-  }
-}`;
-
-  // Two credential paths, and lab.py checks ATLAS_TOKEN *first*. A token is a
-  // scoped Supabase JWT and keeps your password off disk, but it expires and the
-  // stdio server has no refresh token to renew it with — so it's the safer choice
-  // for a shared machine and the password is the one that keeps working. Offer both
-  // and say which trade-off you're taking, rather than quietly emitting a password.
-  // Deep links in tool results default to the Vite dev server; a connected user's
-  // Atlas is wherever this page is served, so pre-fill it so citations are clickable.
-  const webUrl = typeof window !== "undefined" ? window.location.origin : "";
-  const webLine = `ATLAS_WEB_URL=${webUrl}`;
-  const envPassword = `ATLAS_EMAIL=you@your-lab.org
-ATLAS_PASSWORD=your-atlas-password
-ATLAS_TEAM_ID=${team.id}
-${webLine}`;
-  const envToken = `ATLAS_TOKEN=your-supabase-access-token
-ATLAS_TEAM_ID=${team.id}
-${webLine}`;
-  const envFile = auth === "password" ? envPassword : envToken;
+  useDocumentTitle("Connect Claude");
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <header>
-        <h1 className="text-display font-bold tracking-tight text-fg">
-          Give Claude your lab’s context
-        </h1>
+        <h1 className="text-display font-bold tracking-tight text-fg">Connect Claude</h1>
         <p className="mt-1.5 max-w-[62ch] text-sm text-muted">
-          Connect {team.name} to Claude and it can search your papers, cite them and rank them
-          against your lab’s taste — in the Claude app on the web, desktop and phone, in Cowork, and
-          in Claude Code. Nothing to install: add one URL and sign in.
+          Claude can then search and cite {team.name}’s papers. Add one URL and sign in. Nothing to
+          install.
         </p>
       </header>
 
       <ConnectionStatus />
 
-      {/* Prerequisite, first — nothing below works until an owner turns access on. */}
+      {/* Prerequisite, first: nothing below works until an owner turns access on. */}
       <AccessPanel />
 
       <ConnectorSetup />
@@ -100,27 +58,14 @@ ${webLine}`;
       <ConnectedApps />
 
       {/* the payoff: what you can actually ask for, once connected */}
-      <Capabilities teamName={team.name} />
+      <Capabilities />
 
-      {/* what it can actually touch — permissions, distinct from the capabilities above */}
+      {/* what it can actually touch: permissions, distinct from the capabilities above */}
       <section className="rounded-card border border-border bg-surface p-5">
-        <h2 className="mb-1 text-lg font-semibold tracking-tight">
+        <h2 className="mb-3 text-lg font-semibold tracking-tight">
           What Claude can and can’t see
         </h2>
-        <p className="mb-3 text-sm text-muted">
-          The capabilities above run entirely within these limits — scoped to {team.name} by your
-          own login.
-        </p>
         <ClaudeScope teamName={team.name} />
-
-        <div className="mt-4 flex gap-2.5 rounded-control border border-danger/40 bg-danger/5 p-3">
-          <ShieldAlert size={16} className="mt-0.5 shrink-0 text-danger" />
-          <p className="text-xs leading-relaxed text-muted">
-            <b className="text-fg">This is not one member’s decision.</b> Claude reads the lab’s
-            shared corpus, so access is a <b className="text-fg">lab-wide setting an owner
-            controls</b> — and every call it makes is logged below, where the whole lab can see it.
-          </p>
-        </div>
       </section>
 
       <ActivityLog />
@@ -143,162 +88,19 @@ ${webLine}`;
         </dl>
       </details>
 
-      <details className="rounded-card border border-border bg-surface p-4">
-        <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-fg">
-          <Laptop size={15} className="text-muted" aria-hidden />
-          Advanced: run Atlas’s server on your own computer
-        </summary>
-        <p className="mb-4 mt-2 max-w-[62ch] text-sm text-muted">
-          For Claude Code or Claude Desktop, from a checkout of the Atlas code. It adds what the
-          connector leaves out — posting papers into the lab and the figure-gallery tools — and
-          signs in with credentials kept in a local file.
-        </p>
-        <div className="flex flex-col gap-6">
-      {/* client picker — the config differs per surface */}
-      <Segmented options={CLIENTS} value={client} onChange={setClient} />
-
-      <Step n={1} title="Check you have uv">
-        <p className="mb-2.5 text-sm text-muted">
-          The server runs through{" "}
-          <a
-            href="https://docs.astral.sh/uv/getting-started/installation/"
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-accent hover:underline"
-          >
-            uv
-          </a>
-          . One line to install, no admin rights needed.
-        </p>
-        <CopyBlock value="uv --version" />
-      </Step>
-
-      <Step
-        n={2}
-        title={client === "code" ? "Add Atlas to .mcp.json" : "Add Atlas to claude_desktop_config.json"}
-      >
-        <p className="mb-2.5 text-sm text-muted">
-          {client === "code" ? (
-            <>
-              In the repo root, alongside <Code>paper-radar/</Code>.
-            </>
-          ) : (
-            <>
-              Settings → Developer → Edit Config. Use an <b className="text-fg">absolute</b> path for{" "}
-              <Code>--directory</Code>, since Claude Desktop doesn’t run from your repo.
-            </>
-          )}
-        </p>
-        <CopyBlock value={mcpJson} label="Copy config" />
-      </Step>
-
-      <Step n={3} title="Add your lab credentials">
-        <p className="mb-2.5 text-sm text-muted">
-          In <Code>paper-radar/api/.env</Code> — gitignored, and read by the server directly, so you
-          never paste a credential into a Claude config file. <b className="text-fg">Your own login
-          scopes the access</b>: Claude sees exactly what you see, and nothing from other labs.
-        </p>
-
-        <div className="mb-2.5 flex gap-1.5">
-          {(
-            [
-              { id: "password", label: "Password" },
-              { id: "token", label: "Access token" },
-            ] as const
-          ).map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              aria-pressed={auth === a.id}
-              onClick={() => setAuth(a.id)}
-              className={cn(
-                "rounded-control border px-2.5 py-1 text-xs font-medium transition",
-                auth === a.id
-                  ? "border-accent bg-accent-weak text-accent"
-                  : "border-border text-muted hover:text-fg",
-              )}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-
-        <p className="mb-2.5 text-xs leading-relaxed text-faint">
-          {auth === "password" ? (
-            <>
-              Simplest, and it keeps working — the server signs in and renews itself. It does mean
-              your account password sits in a file on disk.{" "}
-              <b className="text-muted">On a shared or managed machine, use an access token instead.</b>
-            </>
-          ) : (
-            <>
-              Keeps your password off disk. A token is a Supabase access token (JWT) — the server
-              prefers it when set.{" "}
-              <b className="text-muted">
-                It expires, and the local server has no refresh token, so you’ll re-paste it
-                periodically.
-              </b>
-            </>
-          )}
-        </p>
-
-        <CopyBlock value={envFile} label="Copy .env">
-          {auth === "password" ? (
-            <>
-              <span className="text-muted">ATLAS_EMAIL=</span>you@your-lab.org{"\n"}
-              <span className="text-muted">ATLAS_PASSWORD=</span>your-atlas-password{"\n"}
-            </>
-          ) : (
-            <>
-              <span className="text-muted">ATLAS_TOKEN=</span>your-supabase-access-token{"\n"}
-            </>
-          )}
-          <span className="text-muted">ATLAS_TEAM_ID=</span>
-          <span className="text-accent">{team.id}</span>{" "}
-          <span className="text-faint"># {team.name} — filled in for you</span>
-          {"\n"}
-          <span className="text-muted">ATLAS_WEB_URL=</span>
-          <span className="text-accent">{webUrl}</span>{" "}
-          <span className="text-faint"># so the links Claude cites open your Atlas</span>
-        </CopyBlock>
-      </Step>
-
-      <Step n={4} title="Restart Claude and check it worked" last>
-        <p className="mb-2.5 text-sm text-muted">
-          {client === "code" ? (
-            <>
-              Run <Code>/mcp</Code> — you should see <b className="text-fg">atlas</b> with its tools
-              listed.
-            </>
-          ) : (
-            <>
-              Quit and reopen Claude Desktop. Atlas appears in the tools menu (the slider icon) in
-              the composer.
-            </>
-          )}{" "}
-          Then try a question about something your lab actually works on:
-        </p>
-        <div className="rounded-control border border-border bg-surface-2 px-3 py-2 text-sm italic text-fg">
-          “What has our lab posted on <span className="text-muted">[your topic]</span>?”
-        </div>
-      </Step>
-
-          <dl className="flex flex-col gap-3 text-sm">
-            <Trouble q="atlas isn’t listed">
-              You’re not in the directory that holds the config, or the JSON has a trailing comma.
-              In Claude Code, <Code>claude --debug</Code> prints the spawn error.
-            </Trouble>
-            <Trouble q="“Couldn’t sign in to your lab”">
-              Wrong email or password in <Code>api/.env</Code>, or the file is in the wrong place —
-              it must be <Code>paper-radar/api/.env</Code>, not the repo root.
-            </Trouble>
-            <Trouble q="Tools return nothing">
-              You’re in more than one lab and <Code>ATLAS_TEAM_ID</Code> isn’t set. Copy it from
-              step 3.
-            </Trouble>
-          </dl>
-        </div>
-      </details>
+      <p className="text-xs text-muted">
+        Running Atlas’s server on your own computer?{" "}
+        <a
+          href={LOCAL_SETUP_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-accent hover:underline"
+        >
+          See the setup guide
+        </a>
+        . These two lines go in its <Code>.env</Code>:
+      </p>
+      <CopyBlock value={`ATLAS_TEAM_ID=${team.id}\nATLAS_WEB_URL=${window.location.origin}`} />
     </div>
   );
 }
@@ -309,7 +111,7 @@ function ConnectorSetup() {
   return (
     <section className="rounded-card border border-border bg-surface p-5">
       <h2 className="text-lg font-semibold tracking-tight">Add Atlas to Claude</h2>
-      <p className="mb-3 mt-1 text-sm text-muted">This is the connector’s address:</p>
+      <p className="mb-1.5 mt-3 text-xs font-semibold text-muted">Connector URL</p>
       <CopyBlock value={MCP_URL} label="Copy URL" />
 
       <div className="mb-3 mt-4">
@@ -330,9 +132,7 @@ function ConnectorSetup() {
             choose <b className="text-fg">Allow</b>.
           </li>
           <li>
-            In a chat, ask something your lab works on, like “What has our lab posted on
-            <span className="text-faint"> [your topic]</span>?”. It works in the phone app and
-            Cowork too, with the same connection.
+            Try it: ask “What has our lab posted on <span className="text-faint">[topic]</span>?”
           </li>
         </ol>
       ) : (
@@ -421,7 +221,7 @@ function ConnectionStatus() {
         <p className="mt-1 text-sm text-muted">
           Connected since {formatDate(connection.connectedAt)}, last used{" "}
           {formatRelative(connection.lastUsedAt)}. The setup steps are below if you need them on
-          another machine.
+          another computer.
         </p>
         <p className="mt-2 text-xs text-muted">
           {viaConnector ? (
@@ -461,25 +261,18 @@ function AccessPanel() {
         userId={userId}
         headingLevel="h2"
       />
-      {!enabled && (
-        <p className="mt-3 text-xs text-faint">
-          Turn this on first — until it’s on, every Claude tool call for {team.name} is refused, so
-          the setup below can’t be tested. Only a lab owner can flip it.
-        </p>
-      )}
     </section>
   );
 }
 
-/** The tool-call log. Visible to the whole lab — a log only the connector can read is not a check. */
+/** The tool-call log. Visible to the whole lab: a log only the connector can read is not a check. */
 function ActivityLog() {
   const { team } = useAppContext();
   return (
     <section className="rounded-card border border-border bg-surface p-5">
       <h2 className="text-lg font-semibold tracking-tight">Recent Claude activity</h2>
       <p className="mb-3 mt-1 text-sm text-muted">
-        Every tool call Claude makes against {team.name}, visible to everyone in the lab. Blocked
-        attempts show up here too.
+        Everything Claude has looked up in {team.name}. Everyone in the lab can see this.
       </p>
       <ClaudeActivity teamId={team.id} teamName={team.name} />
     </section>
@@ -487,79 +280,67 @@ function ActivityLog() {
 }
 
 /**
- * The capability catalogue — "what can I actually ask?" — grouped by the job a
- * scientist is doing, each with a copy-ready example prompt in the lab's own voice.
+ * What you can ask, grouped by the job a scientist is doing, as copy-ready
+ * prompts in the lab's own voice.
  *
  * This is deliberately separate from ClaudeScope: that answers "what can Claude
  * *see*?" (permissions), this answers "what can Claude *do for me*?" (the payoff).
- * Conflating the two is what made the old page read like a privacy notice with no
- * reason to opt in.
+ * `local`: only through the local server (the README's setup); the connector reads.
  */
 const CAPABILITIES: {
   group: string;
-  items: { can: string; ask: string; write?: boolean; local?: boolean }[];
+  items: { ask: string; write?: boolean; local?: boolean }[];
 }[] = [
   {
-    group: "Find & cite papers",
+    group: "Find and cite papers",
     items: [
-      { can: "Search the lab by keyword or meaning", ask: "What has our lab posted on myeloid cells?" },
-      { can: "Pull one paper’s full details + a deep link", ask: "Show me the abstract and DOI for that Nature paper" },
-      { can: "Find more papers like a given one", ask: "Find papers similar to the Wu et al. spatial atlas" },
+      { ask: "What has our lab posted on myeloid cells?" },
+      { ask: "Show me the abstract and DOI for that Nature paper" },
+      { ask: "Find papers similar to the Wu et al. spatial atlas" },
     ],
   },
   {
     group: "Decide what to read",
     items: [
-      { can: "Recommend what to read next, from your history", ask: "What should I read next?" },
-      { can: "Digest recent lab activity", ask: "Summarise what happened in the lab this week" },
+      { ask: "What should I read next?" },
+      { ask: "Summarise what happened in the lab this week" },
     ],
   },
   {
-    group: "Write & get unstuck",
+    group: "Write and get unstuck",
     items: [
-      { can: "Check whether the lab has already covered an idea", ask: "Have we already looked at CRISPR screens in exhausted T cells?" },
-      { can: "Draft a cited related-work section from lab papers", ask: "Draft a related-work paragraph on spatial transcriptomics from our papers" },
-      { can: "Post a paper to the lab, optionally tagging a teammate", ask: "Add this arXiv paper and tag Maya to read it", write: true, local: true },
+      { ask: "Have we already looked at CRISPR screens in exhausted T cells?" },
+      { ask: "Draft a related-work paragraph on spatial transcriptomics from our papers" },
+      { ask: "Add this arXiv paper and tag Maya to read it", write: true, local: true },
     ],
   },
   {
     group: "Plot in your lab’s style",
     items: [
-      { can: "Derive your palette + a matplotlib style sheet", ask: "Give me a matplotlib style that matches our lab’s figures", local: true },
-      { can: "Check a palette is colourblind-safe", ask: "Is this figure’s colour palette safe for colourblind readers?", local: true },
+      { ask: "Give me a matplotlib style that matches our lab’s figures", local: true },
+      { ask: "Is this figure’s colour palette safe for colourblind readers?", local: true },
     ],
   },
 ];
 
-function Capabilities({ teamName }: { teamName: string }) {
+function Capabilities() {
   return (
     <section className="rounded-card border border-border bg-surface p-5">
-      <h2 className="text-lg font-semibold tracking-tight">
-        What you can ask Claude to do
-      </h2>
-      <p className="mb-4 mt-1 max-w-[60ch] text-sm text-muted">
-        Once connected, ask in plain language — Claude picks the right tool and answers from
-        {" "}{teamName}’s own papers, with citable deep links. A few things to try:
-      </p>
+      <h2 className="mb-4 text-lg font-semibold tracking-tight">Things to ask</h2>
       <div className="flex flex-col gap-5">
         {CAPABILITIES.map((section) => (
           <div key={section.group}>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
               {section.group}
             </h3>
-            <ul className="flex flex-col gap-2.5">
+            <ul className="flex flex-col gap-2">
               {section.items.map((item) => (
-                <li key={item.can} className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
-                  <span className="flex items-baseline gap-1.5 text-sm text-fg sm:w-[46%] sm:shrink-0">
-                    {item.write && (
-                      <PenLine size={13} className="translate-y-0.5 shrink-0 text-danger" aria-label="writes to the lab" />
-                    )}
-                    {item.can}
-                    {item.local && <span className="text-xs text-faint"> (local setup)</span>}
-                  </span>
-                  <span className="min-w-0 flex-1 text-sm italic text-muted">
-                    “{item.ask}”
-                  </span>
+                <li key={item.ask} className="flex items-baseline gap-1.5 text-sm">
+                  {item.write && (
+                    <PenLine size={13} className="translate-y-0.5 shrink-0 text-danger" aria-label="Adds to the lab" />
+                  )}
+                  <span className="italic text-fg">“{item.ask}”</span>
+                  {item.local && <span className="shrink-0 text-xs text-faint">(local setup)</span>}
                 </li>
               ))}
             </ul>
@@ -567,12 +348,11 @@ function Capabilities({ teamName }: { teamName: string }) {
         ))}
       </div>
       <p className="mt-4 flex items-center gap-1.5 text-xs text-faint">
-        <PenLine size={12} className="shrink-0 text-danger" />
-        writes to the shared lab — previews first, and only posts when you confirm.
+        <PenLine size={12} className="shrink-0 text-danger" aria-hidden />
+        Adds to the shared lab. Claude shows a preview and only adds it when you confirm.
       </p>
       <p className="mt-1 text-xs text-faint">
-        (local setup) — only with Atlas’s server on your own computer (Advanced, below). The
-        connector reads; it never writes.
+        (local setup): needs Atlas’s server on your own computer. The connector only reads.
       </p>
     </section>
   );
@@ -607,35 +387,6 @@ function Segmented<T extends string>({
         </button>
       ))}
     </div>
-  );
-}
-
-function Step({
-  n,
-  title,
-  children,
-  last,
-}: {
-  n: number;
-  title: string;
-  children: ReactNode;
-  last?: boolean;
-}) {
-  return (
-    <section className="flex gap-3.5">
-      {/* the rail makes the sequence legible at a glance — this is a recipe, and the
-          order genuinely matters */}
-      <div className="flex flex-col items-center">
-        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent font-mono text-xs font-bold text-accent-fg">
-          {n}
-        </span>
-        {!last && <span className="mt-1 w-px flex-1 bg-border" aria-hidden />}
-      </div>
-      <div className={cn("min-w-0 flex-1", !last && "pb-5")}>
-        <h2 className="mb-1.5 text-sm font-semibold text-fg">{title}</h2>
-        {children}
-      </div>
-    </section>
   );
 }
 

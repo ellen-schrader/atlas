@@ -55,12 +55,7 @@ export function SearchDialog({
       className="max-w-[720px]"
     >
       <div className="flex flex-col gap-4 overflow-y-auto p-6 pt-14">
-        <div>
-          <h2 className="text-heading font-semibold text-fg">{title}</h2>
-          <p className="mt-1 text-sm text-muted">
-            Atlas runs it every week and lists the new papers on this page.
-          </p>
-        </div>
+        <h2 className="text-heading font-semibold text-fg">{title}</h2>
         {open && (
           <SearchForm
             key={search?.id ?? `new:${initial?.query ?? ""}`}
@@ -251,7 +246,7 @@ function SearchForm({
         </div>
         {preview.isPending && (
           <p className="text-sm text-muted" role="status">
-            Searching… arXiv asks for a few seconds between requests.
+            Searching… arXiv can take a few seconds.
           </p>
         )}
         {preview.error && !preview.isPending && (

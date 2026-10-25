@@ -20,7 +20,7 @@ import { formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
 
 const MODEL_NAMES: Record<string, string> = {
-  "claude (your account)": "a lab member’s Claude (no cost to Atlas)",
+  "claude (your account)": "a lab member’s Claude",
   "claude-opus-5-5": "Claude Opus 5.5",
   "claude-opus-4-8": "Claude Opus 4.8",
 };
@@ -32,7 +32,7 @@ export function extractionSummary(facts: TrialFacts | null, documents: number): 
     case "queued":
       return `${docs} · queued for the next batch`;
     case "batched":
-      return `${docs} · with Claude in a batch`;
+      return `${docs} · processing (a few hours)`;
     case "running":
       return `${docs} · Claude is reading them`;
     case "stalled":
@@ -89,7 +89,7 @@ export function TrialSources({
       setFile(null);
       refresh();
     },
-    onError: (e) => toast({ message: e instanceof Error ? e.message : "Upload failed." }),
+    onError: (e) => toast({ message: e instanceof Error ? e.message : "Couldn’t upload that file. Try again." }),
   });
   const remove = useMutation({
     mutationFn: (s: TrialSource) => removeSource(s),
@@ -113,7 +113,7 @@ export function TrialSources({
       toast({ message: parts.join(" ") });
     },
     onError: (e) =>
-      toast({ message: e instanceof ApiError ? e.message : "Couldn’t reach Europe PMC." }),
+      toast({ message: e instanceof ApiError ? e.message : "Couldn’t reach Europe PMC. Try again." }),
   });
   const extract = useMutation({
     mutationFn: (mode: "batch" | "now") => startExtraction(team.id, trialId, mode),
@@ -122,7 +122,7 @@ export function TrialSources({
       qc.invalidateQueries({ queryKey: ["extraction-budget", team.id] });
     },
     onError: (e) =>
-      toast({ message: e instanceof ApiError ? e.message : "Couldn’t start the extraction." }),
+      toast({ message: e instanceof ApiError ? e.message : "Couldn’t start the extraction. Try again." }),
   });
   // The lab's spend is the owners' business (it's on their card): members
   // aren't asked to weigh it on every trial. Owners see it in Settings too.
@@ -139,7 +139,7 @@ export function TrialSources({
       // A Europe PMC full text opens on PMC: the stored XML isn't readable.
       await openSourceFile(s);
     } catch {
-      toast({ message: "Couldn’t open that file." });
+      toast({ message: "Couldn’t open that file. Try again." });
     }
   };
 
@@ -319,7 +319,7 @@ export function TrialSources({
             ? `Queued · ${facts.extraction_error}`
             : `Queued for the next batch (half price): results usually within a few hours.`
           : batched
-            ? `With Claude in a batch: results usually within the hour of it being sent.`
+            ? `Processing: results usually within the hour.`
             : running
           ? `Claude is reading ${list.length} ${list.length === 1 ? "document" : "documents"}… (started ${formatRelative(facts?.extraction_started_at ?? null)}; usually 1–3 minutes)`
           : stalled

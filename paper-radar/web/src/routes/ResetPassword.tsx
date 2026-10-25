@@ -6,6 +6,7 @@ import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { RESET_PATH } from "@/lib/authLinks";
 import { supabase } from "@/lib/supabase";
 
@@ -38,6 +39,7 @@ export default function ResetPassword({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useDocumentTitle("Reset password");
 
   async function onContinue() {
     if (!tokenHash) return;
@@ -95,14 +97,13 @@ export default function ResetPassword({
 
   return (
     <AuthLayout homeLink={false}>
-
       {step === "dead" ? (
         <>
           <h2 className="text-xl font-bold tracking-tight">This link has expired</h2>
           <p className="mb-5 mt-1 text-sm text-muted">
             Reset links work once and only for an hour.{" "}
             {signedInAs
-              ? `You're signed in as ${signedInAs}, so if that's the account, you can change its password in Settings instead.`
+              ? `You’re signed in as ${signedInAs}, so you can change your password in Settings.`
               : "Request a new one and use the latest email."}
           </p>
           <Button onClick={leaveDeadLink}>{signedInAs ? "Go to Settings" : "Send a new link"}</Button>
@@ -113,15 +114,13 @@ export default function ResetPassword({
           <p className="mb-5 mt-1 text-sm text-muted">Continue to choose a new password.</p>
           {error && <p className="mb-3 text-xs text-danger">{error}</p>}
           <Button onClick={onContinue} disabled={busy} autoFocus>
-            {busy ? "…" : error ? "Try again" : "Continue"}
+            {busy ? "Checking link…" : error ? "Try again" : "Continue"}
           </Button>
         </>
       ) : step === "done" ? (
         <>
           <h2 className="text-xl font-bold tracking-tight">Password updated</h2>
-          <p className="mb-5 mt-1 text-sm text-muted">
-            Your password has been changed and you're signed in.
-          </p>
+          <p className="mb-5 mt-1 text-sm text-muted">Password changed. You’re signed in.</p>
           <Button onClick={onDone}>Continue to Atlas</Button>
         </>
       ) : (
@@ -147,7 +146,7 @@ export default function ResetPassword({
             {error && <p className="text-xs text-danger">{error}</p>}
 
             <Button type="submit" disabled={busy} className="mt-1">
-              {busy ? "…" : "Update password"}
+              {busy ? "Updating…" : "Update password"}
             </Button>
           </form>
         </>

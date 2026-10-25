@@ -88,13 +88,17 @@ export function LabFeed({
             <div className="font-semibold">No papers in {teamName} yet</div>
             <p className="text-sm text-muted">Paste a DOI or link above to add the first one.</p>
             <div className="mt-3 flex w-full max-w-xs flex-col items-center gap-2 border-t border-border pt-5">
-              <span className="text-xs text-muted">Or invite your lab with this join code</span>
+              <span className="text-xs text-muted">Or share this invite code with your lab</span>
               <InviteCode code={joinCode} />
             </div>
           </div>
         ) : shown.length === 0 ? (
           <div className="grid flex-1 place-items-center px-6 py-12 text-center text-sm text-muted">
-            {filter === "unread" ? "You’re all caught up." : "No discussions on recent papers yet."}
+            {filter === "unread"
+              ? "You’re all caught up."
+              : filter === "comments"
+                ? "No discussions on recent papers yet."
+                : "No papers yet."}
           </div>
         ) : (
           <div role="list">
@@ -132,7 +136,7 @@ export function LabFeed({
           >
             {/* Opens Papers rather than expanding in place (plan, decision 2), so
                 the label says where it goes. */}
-            {moreThisWeek > 0 ? `${moreThisWeek} more from this week in Papers →` : "Browse all papers →"}
+            {moreThisWeek > 0 ? `${moreThisWeek} more from this week in the library →` : "Open the library →"}
           </button>
         )}
       </div>
@@ -216,7 +220,7 @@ function FeedRow({
         </div>
         <div className="flex items-center gap-3 text-meta text-muted">
           {!mobile && comments > 0 && (
-            <span className="inline-flex items-center gap-1 tabular-nums" title={`${comments} comments`}>
+            <span className="inline-flex items-center gap-1 tabular-nums" title={`${comments} ${comments === 1 ? "comment" : "comments"}`}>
               <MessageSquare size={13} aria-hidden /> {comments}
               <span className="sr-only">comments</span>
             </span>

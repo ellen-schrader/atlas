@@ -76,7 +76,7 @@ export function AddTrialDialog({
         )}
         {results.error && (
           <p role="alert" className="text-sm text-danger">
-            {results.error instanceof ApiError ? results.error.message : "Search failed."}
+            {results.error instanceof ApiError ? results.error.message : "Couldn’t search ClinicalTrials.gov. Try again."}
           </p>
         )}
         {results.data && !results.isFetching && results.data.length === 0 && (
@@ -84,7 +84,7 @@ export function AddTrialDialog({
         )}
         {add.error && (
           <p role="alert" className="text-sm text-danger">
-            {add.error instanceof ApiError ? add.error.message : "Couldn’t add that trial."}
+            {add.error instanceof ApiError ? add.error.message : "Couldn’t add that trial. Try again."}
           </p>
         )}
 

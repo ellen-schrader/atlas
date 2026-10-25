@@ -54,7 +54,7 @@ export function initials(name: string): string {
 
 /** "A. Author, B. Author +3" style author summary. */
 export function formatAuthors(authors: string[], max = 3): string {
-  if (!authors || authors.length === 0) return "—";
+  if (!authors || authors.length === 0) return "–";
   const shown = authors.slice(0, max).join(", ");
   const extra = authors.length - max;
   return extra > 0 ? `${shown} +${extra}` : shown;

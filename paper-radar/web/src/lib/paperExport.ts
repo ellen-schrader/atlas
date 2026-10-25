@@ -34,6 +34,10 @@ export interface ExportOptions {
   heading?: string;
 }
 
+/** Every format, in the order the Cite and Export menus offer them. An array
+ *  literal is not exhaustiveness-checked, so this is the one list to extend. */
+export const EXPORT_FORMATS: ExportFormat[] = ["bibtex", "ris", "markdown", "text", "csv"];
+
 export const FORMAT_META: Record<ExportFormat, { label: string; ext: string; mime: string }> = {
   markdown: { label: "Markdown", ext: "md", mime: "text/markdown" },
   text: { label: "Plain text", ext: "txt", mime: "text/plain" },
@@ -65,7 +69,7 @@ function sourceLine(p: ExportPaper): string {
 // papers — no heading. (BibTeX has no heading either; its entries stand alone.)
 function toMarkdown(papers: ExportPaper[], opts: ExportOptions): string {
   const blocks = papers.map((p, i) => {
-    const lines = [`${i + 1}. **${p.title ?? p.url ?? "Untitled"}**`];
+    const lines = [`${i + 1}. **${p.title ?? p.url ?? "Untitled paper"}**`];
     const meta = [p.authors.length ? formatAuthorList(p.authors) : null, sourceLine(p) || null]
       .filter(Boolean)
       .join(" · ");
@@ -80,7 +84,7 @@ function toMarkdown(papers: ExportPaper[], opts: ExportOptions): string {
 
 function toText(papers: ExportPaper[], opts: ExportOptions): string {
   const blocks = papers.map((p, i) => {
-    const lines = [`${i + 1}. ${p.title ?? p.url ?? "Untitled"}`];
+    const lines = [`${i + 1}. ${p.title ?? p.url ?? "Untitled paper"}`];
     const meta = [p.authors.length ? formatAuthorList(p.authors) : null, sourceLine(p) || null]
       .filter(Boolean)
       .join(" — ");

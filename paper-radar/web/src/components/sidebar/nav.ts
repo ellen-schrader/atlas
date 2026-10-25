@@ -60,7 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: "/suggestions",
-        label: "Suggestions",
+        label: "Suggested papers",
         icon: ScanSearch,
         beta: true,
         feature: SAVED_SEARCHES_FEATURE,
@@ -80,7 +80,7 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: "/maps",
-        label: "Topic map",
+        label: "Topic maps",
         icon: MapIcon,
         beta: true,
         description: () => "See how the lab’s papers connect by subject",
@@ -116,7 +116,7 @@ export function visible(items: NavItem[], features: readonly string[]): NavItem[
   return items.filter((item) => !item.feature || features.includes(item.feature));
 }
 
-/** The label an icon-only control carries: "Topic map (Beta)". */
+/** The label an icon-only control carries: "Topic maps (Beta)". */
 export function navTitle(item: NavItem): string {
   return item.beta ? `${item.label} (Beta)` : item.label;
 }

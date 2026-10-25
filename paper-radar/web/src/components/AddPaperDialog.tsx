@@ -231,7 +231,7 @@ export function AddPaperDialog({
     const target = doiUrl(doi) ?? pubmedUrl(doi);
     if (!target) {
       setError(
-        "That doesn’t look like a DOI or a PubMed link. A DOI starts with “10.” — for example 10.1016/j.cell.2023.01.001 — and a PubMed link looks like pubmed.ncbi.nlm.nih.gov/38278431",
+        "That isn’t a DOI or PubMed link. A DOI starts with 10.",
       );
       return;
     }
@@ -241,7 +241,7 @@ export function AddPaperDialog({
       const resolved = await resolvePaper(target);
       if (!resolved.title) {
         setError(
-          "That didn’t resolve either. Searching the title on pubmed.ncbi.nlm.nih.gov and pasting the paper’s PubMed link here often works — or add it by hand below.",
+          "Couldn’t find that one either. Search the title on PubMed and paste its link, or add it by hand below.",
         );
         return;
       }
@@ -310,7 +310,7 @@ export function AddPaperDialog({
     // the file with no confirmation and no counts, and re-importing is then the
     // obvious next move. The standalone /import page had no way to abandon it;
     // moving the flow into a dialog is what introduced one.
-    <Modal open={open} onClose={importing ? () => {} : onClose} label="Add a paper">
+    <Modal open={open} onClose={importing ? () => {} : onClose} label="Add paper">
       <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5 pl-14">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-fg">
@@ -321,7 +321,7 @@ export function AddPaperDialog({
               : step === "recover"
                 ? "Try the DOI or PubMed instead"
                 : step !== "done"
-                  ? "Add a paper"
+                  ? "Add paper"
                   : added?.already
                     ? "Already in your lab"
                     : "Added to your lab"}
@@ -329,23 +329,20 @@ export function AddPaperDialog({
           <p className="mt-1 text-sm text-muted">
             {imported &&
               (imported.imported > 0
-                ? "Your lab’s back-catalogue is in."
+                ? "Import done."
                 : "Everything in that file was already here.")}
             {!imported &&
               step === "url" &&
               (mode === "link"
-                ? "Paste a link — we’ll fill in the details for you."
-                : "Upload a .bib and we’ll show you what it would add, before it adds it.")}
+                ? "Paste a link or DOI."
+                : "Upload a .bib file. You’ll see what’s new before anything is added.")}
             {step === "recover" &&
-              "That publisher blocks automated lookups — the paper’s DOI or PubMed page won’t be."}
+              "Atlas couldn’t read that page."}
             {step === "review" &&
               (autofilled
                 ? "Check what we found, and fix anything that’s off."
-                : "Fill in what you know. A link and a title are all it needs.")}
-            {step === "done" &&
-              (added?.already
-                ? "Someone got there first — nothing was duplicated."
-                : "Every paper your lab shares teaches Atlas its taste.")}
+                : "Fill in what you know.")}
+            {step === "done" && added?.already && "Someone got there first. Nothing was duplicated."}
           </p>
         </div>
       </div>
@@ -410,7 +407,7 @@ export function AddPaperDialog({
               </button>
               <Button type="submit" disabled={looking || !url.trim()}>
                 {looking ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-                {looking ? "Looking it up…" : "Look up"}
+                {looking ? "Looking up…" : "Look up"}
               </Button>
             </div>
           </form>
@@ -419,9 +416,7 @@ export function AddPaperDialog({
         {step === "recover" && (
           <form onSubmit={lookUpDoi} className="flex flex-col gap-4">
             <Banner tone="warn" icon={<AlertTriangle size={15} />}>
-              We couldn’t read <span className="break-all font-medium">{url.trim()}</span>. Cell,
-              ScienceDirect and Wiley block automated lookups of their article pages — but the
-              paper’s DOI resolves through Crossref, and its{" "}
+              This publisher blocks lookups. Paste the paper’s DOI or{" "}
               <a
                 href="https://pubmed.ncbi.nlm.nih.gov/"
                 target="_blank"
@@ -430,7 +425,7 @@ export function AddPaperDialog({
               >
                 PubMed
               </a>{" "}
-              page usually works too.
+              link instead.
             </Banner>
 
             <div className="flex flex-col gap-1.5">
@@ -446,13 +441,11 @@ export function AddPaperDialog({
                 />
                 <Button type="submit" disabled={looking || !doi.trim()} className="shrink-0">
                   {looking ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-                  {looking ? "Looking…" : "Look up"}
+                  {looking ? "Looking up…" : "Look up"}
                 </Button>
               </div>
               <p className="text-xs text-faint">
-                The DOI is usually printed under the title, or in the “Cite this article” panel —
-                it starts with <span className="font-mono">10.</span> Or search the title on
-                PubMed and paste the article’s link.
+                Find the DOI under the title. It starts with <span className="font-mono">10.</span>
               </p>
             </div>
 
@@ -484,10 +477,10 @@ export function AddPaperDialog({
           <form id="add-paper-form" onSubmit={save} className="flex flex-col gap-4">
             {replacedPreprint && (
               <Banner tone="ok" icon={<BookOpenCheck size={15} />}>
-                <strong className="font-semibold">This preprint has been published</strong>
+                <strong className="font-semibold">This preprint is now published</strong>
                 {fields.venue ? <> in {fields.venue}</> : null}
-                {fields.year ? <> ({fields.year})</> : null}. Atlas adds the published version —
-                that’s the one to read. The{" "}
+                {fields.year ? <> ({fields.year})</> : null}. Atlas adds the published version and
+                links the{" "}
                 {safeHref(replacedPreprint.url) ? (
                   <a
                     href={safeHref(replacedPreprint.url)}
@@ -499,8 +492,8 @@ export function AddPaperDialog({
                   </a>
                 ) : (
                   <>{replacedPreprint.venue ?? ""} preprint</>
-                )}{" "}
-                stays linked from it, for anything the journal version left out.
+                )}
+                .
               </Banner>
             )}
             {autofilled ? (
@@ -513,9 +506,7 @@ export function AddPaperDialog({
               </Banner>
             ) : (
               <Banner tone="warn" icon={<AlertTriangle size={15} />}>
-                You’re adding this one by hand. A link and a title are all it needs — the abstract
-                is what Atlas reads to place the paper on the map, so it’s worth pasting if you
-                have it.
+                A link and a title are enough. Add the abstract if you have it; it helps search.
               </Banner>
             )}
 
@@ -602,7 +593,7 @@ export function AddPaperDialog({
                 rows={4}
                 value={fields.abstract ?? ""}
                 onChange={(e) => setFields((f) => ({ ...f, abstract: e.target.value }))}
-                placeholder="Optional — but it’s what Atlas reads to place the paper on the map."
+                placeholder="Optional"
               />
             </div>
 
@@ -613,7 +604,7 @@ export function AddPaperDialog({
                 rows={2}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Optional — why should they read it?"
+                placeholder="Optional. Why should they read it?"
               />
             </div>
 
@@ -668,7 +659,7 @@ export function AddPaperDialog({
             </button>
             <Button type="submit" form="add-paper-form" disabled={saving || !canSave}>
               {saving ? <Loader2 size={15} className="animate-spin" /> : null}
-              {saving ? "Adding…" : "Add to lab"}
+              {saving ? "Adding…" : `Add to ${teamName}`}
             </Button>
           </>
         ) : (

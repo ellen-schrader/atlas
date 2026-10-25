@@ -18,6 +18,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { usePaperModal } from "@/components/PaperModal";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { Modal } from "@/components/ui/modal";
 import {
   deleteMap,
@@ -61,6 +62,7 @@ export default function MapDashboard() {
     enabled: !!mapId,
     retry: (n, e) => isTransientApiError(e) && n < 5,
   });
+  useDocumentTitle(overview.data?.name ?? null);
   const papers = useQuery({
     queryKey: ["map-papers", mapId, sort],
     queryFn: () => fetchMapPapers(mapId!, sort),
@@ -89,7 +91,7 @@ export default function MapDashboard() {
   const delMap = useMutation({
     mutationFn: () => deleteMap(mapId!),
     onSuccess: () => navigate("/maps"),
-    onError: (e) => window.alert(`Couldn’t delete the map — ${(e as Error).message}`),
+    onError: (e) => window.alert(`Couldn’t delete the map. ${(e as Error).message}`),
   });
   // Quick read toggle from a row. Writes the progress axis only: clearing used
   // to delete the whole paper_status row, which also threw away `saved` — so
@@ -146,7 +148,7 @@ export default function MapDashboard() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-8">
       <Link to="/maps" className="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
-        <ArrowLeft size={14} /> Topic map
+        <ArrowLeft size={14} /> Topic maps
       </Link>
 
       {overview.isLoading && (
@@ -178,7 +180,7 @@ export default function MapDashboard() {
               )}
             </div>
             <p className="mt-1 text-sm text-muted">
-              papers near <span className="italic text-fg">{data.seed}</span>
+              Papers about <span className="italic text-fg">{data.seed}</span>
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               <Chip>
@@ -213,6 +215,7 @@ export default function MapDashboard() {
           {editing && data && (
             <MapEditPanel
               data={data}
+              teamName={team.name}
               onClose={() => setEditing(false)}
               onSave={(patch) => {
                 curate.mutate(patch);
@@ -243,9 +246,9 @@ export default function MapDashboard() {
                         The map
                       </h2>
                       <p className="mb-3 text-xs text-faint">
-                        {data.embedded} papers · {data.clusters.length} sub-theme
-                        {data.clusters.length === 1 ? "" : "s"} · hover a point to preview, click to
-                        open
+                        {data.embedded} paper{data.embedded === 1 ? "" : "s"} ·{" "}
+                        {data.clusters.length} sub-theme
+                        {data.clusters.length === 1 ? "" : "s"}
                       </p>
                       <Scatter
                         points={data.points}
@@ -264,8 +267,7 @@ export default function MapDashboard() {
                     </section>
                   ) : (
                     <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-faint">
-                      Only a paper or two here so far — too few to map. Broaden the seed, or add more
-                      papers to the lab.
+                      Too few papers to map yet. Try a broader topic.
                     </div>
                   )}
                 </div>
@@ -285,7 +287,7 @@ export default function MapDashboard() {
                     />
                   </RankPanel>
                   {(papers.data?.labs.length ?? 0) > 0 && (
-                    <RankPanel title="Labs driving this topic">
+                    <RankPanel title="Labs publishing on this topic">
                       <RankBars
                         items={(papers.data?.labs ?? []).map((l) => ({
                           label: l.lab,
@@ -405,7 +407,7 @@ export default function MapDashboard() {
                   </>
                 ) : (
                   <p className="py-6 text-center text-sm text-faint">
-                    {unreadOnly ? "Nothing unread here — you’re caught up." : "No papers match."}
+                    {unreadOnly ? "Nothing unread here. You’re caught up." : "No papers match."}
                   </p>
                 )}
               </section>
@@ -421,12 +423,14 @@ const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}
 
 function MapEditPanel({
   data,
+  teamName,
   onClose,
   onSave,
   onDelete,
   saving,
 }: {
   data: MapOverviewData;
+  teamName: string;
   onClose: () => void;
   onSave: (patch: MapPatch) => void;
   onDelete: () => void;
@@ -459,16 +463,17 @@ function MapEditPanel({
           onChange={(e) => setName(e.target.value)}
           className="mb-3 mt-1 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
         />
-        <label className="block text-xs font-medium text-muted">
-          What it’s about (re-seeds membership)
-        </label>
+        <label className="block text-xs font-medium text-muted">What it’s about</label>
         <input
           value={seed}
           onChange={(e) => setSeed(e.target.value)}
-          className="mb-3 mt-1 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+          className="mt-1 w-full rounded-control border border-border bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-accent"
         />
+        <p className="mb-3 mt-1 text-xs text-faint">
+          Changing this changes which papers are on the map.
+        </p>
         <label className="block text-xs font-medium text-muted">
-          Match threshold — a paper joins at ≥ {Math.round(minSim * 100)}% similarity
+          How closely papers must match: {Math.round(minSim * 100)}%
         </label>
         <input
           type="range"
@@ -492,7 +497,7 @@ function MapEditPanel({
                   : "border-border text-muted hover:text-fg",
               )}
             >
-              {v === "lab" ? "Shared with lab" : "Only me"}
+              {v === "lab" ? `Shared with ${teamName}` : "Only you"}
             </button>
           ))}
         </div>
@@ -604,11 +609,9 @@ function WhatsNew({
           <div className="lg:max-w-[68ch] lg:flex-1">
             <p className="text-sm leading-relaxed text-fg">{summary.text}</p>
             <p className="mt-2.5 text-xs text-faint">
-              {summary.ai ? "Synthesized from" : "Based on"} {summary.n_papers} of the lab’s papers
-              {summary.ai
-                ? " · grounded in them, nothing invented"
-                : " · add an Anthropic key for an AI synthesis"}
-              {summary.generated_at ? ` · ${formatRelative(summary.generated_at)}` : ""}.
+              {summary.ai ? "Summary of" : "Based on"} {summary.n_papers} lab paper
+              {summary.n_papers === 1 ? "" : "s"}
+              {summary.generated_at ? ` · ${formatRelative(summary.generated_at)}` : ""}
             </p>
           </div>
           {sources.length > 0 && (
@@ -632,8 +635,7 @@ function WhatsNew({
       ) : (
         <div className="flex flex-col items-start gap-2.5">
           <p className="text-sm text-muted">
-            Get a short, cited brief of what’s moved in this topic recently — built only from the
-            lab’s own papers.
+            A short summary of recent papers on this topic, with citations.
           </p>
           <button
             type="button"
@@ -642,7 +644,7 @@ function WhatsNew({
             className="inline-flex items-center gap-1.5 rounded-control bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg transition hover:brightness-110 disabled:opacity-50"
           >
             {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            Summarize what’s new
+            Summarise what’s new
           </button>
         </div>
       )}
@@ -688,7 +690,7 @@ function PaperRow({
           {p.pinned && (
             <Pin size={11} className="-rotate-45 shrink-0 text-accent" aria-label="pinned" />
           )}
-          <span className="truncate text-sm font-semibold text-fg">{p.title ?? "(untitled)"}</span>
+          <span className="truncate text-sm font-semibold text-fg">{p.title ?? "Untitled paper"}</span>
         </div>
         <div className="truncate text-xs text-muted">
           {meta}
@@ -698,7 +700,7 @@ function PaperRow({
       <div className="flex shrink-0 items-center gap-2 pt-0.5 text-xs text-faint">
         <button
           type="button"
-          title={p.read_status === "read" ? "Mark unread" : "Mark read"}
+          title={p.read_status === "read" ? "Mark as unread" : "Mark as read"}
           onClick={() => onToggleRead(p.read_status !== "read")}
           className={cn(
             "opacity-0 transition hover:text-accent group-hover:opacity-100",
@@ -721,7 +723,7 @@ function PaperRow({
             <button
               type="button"
               disabled={busy}
-              title="Not relevant — remove from this map"
+              title="Remove from this map"
               onClick={() => onCurate({ exclude: p.paper_id })}
               className="hover:text-danger disabled:opacity-40"
             >

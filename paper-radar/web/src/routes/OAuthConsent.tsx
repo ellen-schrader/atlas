@@ -5,6 +5,7 @@ import { Check, ShieldAlert, X } from "lucide-react";
 
 import { AuthLayout } from "@/components/AuthLayout";
 import { Button } from "@/components/ui/button";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useSetMcpAccess } from "@/hooks/useMcpAccess";
 import { redirectTarget } from "@/lib/oauthRedirects";
 import { supabase } from "@/lib/supabase";
@@ -30,6 +31,7 @@ export default function OAuthConsent({
   userId: string;
   email: string;
 }) {
+  useDocumentTitle("Connect Claude");
   const [params] = useSearchParams();
   const authorizationId = params.get("authorization_id");
   const [outcome, setOutcome] = useState<
@@ -131,9 +133,9 @@ export default function OAuthConsent({
     body = (
       <Problem title="Connected, but not sent back" danger>
         <p>
-          Atlas recorded your approval, but the address it was to return you to isn’t Claude’s, so
-          Atlas didn’t go there. To be safe, remove this connection in Atlas → Connect Claude →
-          Your connected apps.
+          Atlas saved your approval but didn’t send you back, because the return address wasn’t
+          Claude’s. To be safe, remove this connection in Atlas → Connect Claude → Your connected
+          apps.
         </p>
       </Problem>
     );
@@ -269,16 +271,16 @@ function LabRow({
         <div className="truncate font-medium text-fg">{name}</div>
         <div className="text-xs text-muted">
           {loading
-            ? "…"
+            ? "Checking…"
             : on
               ? "Claude access is on"
               : owner
-                ? "Claude access is off — it’s a lab-wide setting"
-                : "Claude access is off — ask a lab owner to turn it on"}
+                ? "Claude access is off for this lab."
+                : "Claude access is off. Ask a lab owner to turn it on."}
         </div>
         {enable.error && (
           <div className="mt-1 text-xs text-danger">
-            Couldn’t turn it on —{" "}
+            Couldn’t turn it on:{" "}
             {enable.error instanceof Error ? enable.error.message : String(enable.error)}
           </div>
         )}

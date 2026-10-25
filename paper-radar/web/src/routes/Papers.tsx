@@ -25,6 +25,7 @@ import { usePaperModal } from "@/components/PaperModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { usePreprintLinks } from "@/hooks/usePreprintLinks";
 import type { PreprintLink } from "@/lib/preprint";
@@ -85,6 +86,7 @@ const SORT_LABEL: Record<PaperSort, string> = {
 
 export default function Papers() {
   const { team, userId } = useAppContext();
+  useDocumentTitle("Library");
   const [mode, setMode] = useState<SearchMode>("keyword");
   // ?q=, ?tag=, ?author= and ?venue= seed the page, so Home's "See all in
   // Papers" and its Trending tags land here already filtered. Read once: after
@@ -255,7 +257,7 @@ export default function Papers() {
         <div>
           <h1 className="text-display font-bold tracking-tight text-fg">Library</h1>
           <p className="mt-1.5 text-sm text-muted">
-            Everything shared in {team.name} — search, filter, and open to discuss.
+            Every paper shared in {team.name}.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
@@ -390,7 +392,7 @@ export default function Papers() {
         {mode === "semantic" && (
           <ActiveChip onRemove={backToKeyword} tone="accent">
             <Sparkles size={11} className="mr-1 inline" />
-            Ranked by meaning
+            Showing related papers
           </ActiveChip>
         )}
 
@@ -403,7 +405,7 @@ export default function Papers() {
             onClick={searchByMeaning}
             className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
           >
-            <Sparkles size={12} /> Search by meaning instead
+            <Sparkles size={12} /> Find related papers instead
           </button>
         )}
 
@@ -502,7 +504,7 @@ export default function Papers() {
   );
 }
 
-/** "55 papers" / "12 of 55" / "18 by relevance" — one line that always says what
+/** "55 papers" / "12 matches" / "18 by relevance" — one line that always says what
  *  the list below actually is. */
 function ResultCount({
   mode,
@@ -528,8 +530,9 @@ function ResultCount({
   if (typeof total !== "number") return null;
   return (
     <span className="text-xs text-faint tabular-nums">
-      {total} {total === 1 ? "paper" : "papers"}
-      {narrowed && " match"}
+      {narrowed
+        ? `${total} ${total === 1 ? "match" : "matches"}`
+        : `${total} ${total === 1 ? "paper" : "papers"}`}
     </span>
   );
 }
@@ -998,10 +1001,10 @@ function EmptyState({
         : "No papers yet";
   const body =
     mode === "semantic"
-      ? "Try describing the topic differently, or go back to keyword search."
+      ? "Try describing the topic differently, or search by keyword."
       : narrowed
         ? "Try a different search term, or clear the filters."
-        : "Add the first one — every paper your lab shares teaches Atlas its taste.";
+        : "Add your lab’s first paper.";
 
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
@@ -1013,7 +1016,7 @@ function EmptyState({
         </Button>
       ) : (
         <Button size="sm" onClick={onAdd}>
-          <Plus size={14} /> Add a paper
+          <Plus size={14} /> Add paper
         </Button>
       )}
     </div>
@@ -1023,8 +1026,7 @@ function EmptyState({
 function ErrorState({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-card border border-dashed border-border-strong px-6 py-16 text-center">
-      <div className="font-semibold text-fg">Couldn’t load papers</div>
-      <p className="text-sm text-muted">Something went wrong fetching this lab’s papers.</p>
+      <div className="font-semibold text-fg">Couldn’t load papers. Try again.</div>
       <Button variant="secondary" size="sm" onClick={onRetry}>
         Retry
       </Button>

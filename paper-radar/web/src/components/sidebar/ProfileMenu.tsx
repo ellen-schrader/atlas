@@ -313,7 +313,7 @@ export function ProfileMenu({
                 <MenuIcon>
                   <LogOut size={15} />
                 </MenuIcon>
-                Log out
+                Sign out
               </button>
             </>
           ) : view === "notifications" ? (

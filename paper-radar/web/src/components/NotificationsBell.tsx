@@ -34,7 +34,7 @@ export function useUnseenNotifications(userId: string): Unseen[] {
         kind: "mention" as const,
         paperId: m.paper_id,
         createdAt: m.created_at,
-        title: m.papers?.title ?? "A paper",
+        title: m.papers?.title ?? "Untitled paper",
         seenId: m.paper_id,
       })),
     ...(notices ?? [])
@@ -100,7 +100,7 @@ export function NotificationsList({
             }}
             className="rounded text-xs font-medium text-muted transition hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            Mark all read
+            Mark all as read
           </button>
         )}
       </div>

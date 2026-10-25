@@ -13,6 +13,7 @@ import { ChipGroup, RequireTrials, TherapyList, TrialsDisclaimer } from "@/compo
 import { extractionRunning, extractionState, fetchSources } from "@/lib/extraction";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useJustAdded } from "@/hooks/useJustAdded";
 import { Input } from "@/components/ui/input";
 import {
@@ -74,6 +75,7 @@ function Trial() {
       return false;
     },
   });
+  useDocumentTitle(data ? trialName(data.trial, data.facts) : data === null ? nct : null);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 sm:p-8">

@@ -12,6 +12,7 @@ import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
 import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useFollowedTags } from "@/hooks/useFollowedTags";
 import { useNewSinceLastVisit } from "@/hooks/useLastVisit";
 import { useProfile } from "@/hooks/useProfile";
@@ -47,6 +48,7 @@ export default function Dashboard() {
   const { cols, tier } = frame;
   const mobile = tier === "mobile";
   const wide = cols >= 3;
+  useDocumentTitle("Home");
 
   const search = usePaperSearch(team.id, "");
   const posts = (search.data?.pages ?? []).flat();
@@ -112,7 +114,7 @@ export default function Dashboard() {
       </h1>
       <p className="mt-1.5 text-sm text-muted">
         {newCount == null ? (
-          <>What’s moving in {team.name}.</>
+          <>Here’s what’s new in {team.name}.</>
         ) : newCount === 0 ? (
           <>Nothing new in {team.name} since your last visit.</>
         ) : (

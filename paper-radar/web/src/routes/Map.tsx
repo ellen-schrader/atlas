@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Search, X } from "lucide-react";
 
 import { usePaperModal } from "@/components/PaperModal";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { Input } from "@/components/ui/input";
 import { fetchOverview, fetchSimilarity, isTransientApiError } from "@/lib/api";
 import { markFor, markPath, usePalette } from "@/lib/palette";
@@ -28,15 +29,14 @@ const LOADING_DOTS = [
 // first request after an idle spell also pays the machine's cold boot
 // (~half a minute). Advance the message so a long wait reads as progress.
 const LOADING_STAGES = [
-  "Computing the map of your lab’s papers…",
-  "Waking the paper service — it sleeps when nobody’s around…",
-  "Still working. The first load after a quiet spell can take up to a minute.",
+  "Drawing the map of your lab’s papers…",
+  "Loading. This can take up to a minute after a quiet spell.",
 ];
 
 function MapLoadingSkeleton() {
   const [stage, setStage] = useState(0);
   useEffect(() => {
-    const timers = [setTimeout(() => setStage(1), 6_000), setTimeout(() => setStage(2), 20_000)];
+    const timers = [setTimeout(() => setStage(1), 6_000)];
     return () => timers.forEach(clearTimeout);
   }, []);
 
@@ -75,6 +75,7 @@ function MapLoadingSkeleton() {
 
 export default function MapView() {
   const { team } = useAppContext();
+  useDocumentTitle("Lab overview");
   const { data, isLoading, error } = useQuery({
     queryKey: ["overview", team.id],
     queryFn: () => fetchOverview(team.id),
@@ -114,10 +115,10 @@ export default function MapView() {
       // instead of a silently un-spinning search box.
       setSearchError(
         isTransientApiError(err)
-          ? "The paper service is waking up — try the search again in a few seconds."
+          ? "Search is still starting up. Try again in a few seconds."
           : err instanceof Error
             ? err.message
-            : "Search failed.",
+            : "Couldn’t search. Try again.",
       );
     } finally {
       setSearching(false);
@@ -148,9 +149,9 @@ export default function MapView() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-8">
       <div>
-        <h1 className="text-display font-bold tracking-tight text-fg">Overview</h1>
+        <h1 className="text-display font-bold tracking-tight text-fg">Lab overview</h1>
         <p className="mt-1.5 text-sm text-muted">
-          Your lab’s papers by meaning, plus themes and trends across what you’ve shared.
+          Your lab’s papers grouped by topic, with trends over time.
         </p>
       </div>
 
@@ -158,8 +159,8 @@ export default function MapView() {
       {error && !data && (
         <p className="text-sm text-danger">
           {isTransientApiError(error)
-            ? "Couldn’t load the overview — give it a moment and reload the page."
-            : "Couldn’t load the overview."}{" "}
+            ? "Couldn’t load the lab overview. Give it a moment and reload the page."
+            : "Couldn’t load the lab overview."}{" "}
           {error instanceof Error && !isTransientApiError(error) ? error.message : null}
         </p>
       )}
@@ -167,8 +168,8 @@ export default function MapView() {
       {data && points.length === 0 && (
         <p className="text-sm text-muted">
           {data.total === 0
-            ? "No papers yet — post some first."
-            : "No papers are embedded yet — embeddings compute shortly after posting."}
+            ? "No papers yet. Add some first."
+            : "New papers appear on the map a few minutes after they’re added."}
         </p>
       )}
 
@@ -180,7 +181,7 @@ export default function MapView() {
           {/* controls */}
           <div className="flex flex-wrap items-center gap-3">
             <Segmented
-              label="Color"
+              label="Colour"
               value={colorBy}
               onChange={(v) => setColorBy(v as ColorMode)}
               options={[
@@ -289,7 +290,7 @@ export default function MapView() {
           />
           {data.embedded < data.total && (
             <p className="-mt-2 text-xs text-faint">
-              Showing {data.embedded} of {data.total} papers — the rest are awaiting embedding.
+              {data.embedded} of {data.total} papers shown. The rest are still being added.
             </p>
           )}
 
@@ -608,7 +609,7 @@ export function Scatter({
           viewBox={`0 0 ${W} ${H}`}
           className="block h-auto w-full"
           role="img"
-          aria-label="Semantic map of the lab's papers"
+          aria-label="Map of the lab’s papers"
           onMouseLeave={() => setHover(null)}
         >
           {showHulls &&
@@ -666,7 +667,7 @@ export function Scatter({
               transform: `translate(${hovered.px > W / 2 ? "calc(-100% - 10px)" : "10px"}, -50%)`,
             }}
           >
-            <div className="font-medium text-fg">{hovered.title ?? "Untitled"}</div>
+            <div className="font-medium text-fg">{hovered.title ?? "Untitled paper"}</div>
             {(hovered.venue || hovered.year) && (
               <div className="mt-0.5 font-mono text-faint">
                 {[hovered.venue, hovered.year].filter(Boolean).join(" · ")}
@@ -706,7 +707,7 @@ function LabPapers({
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm">
           <span className="font-semibold text-fg">{lab}</span>{" "}
-          <span className="text-muted">— {papers.length} paper{papers.length === 1 ? "" : "s"} (last author)</span>
+          <span className="text-muted">· {papers.length} paper{papers.length === 1 ? "" : "s"} (last author)</span>
         </div>
         <button
           type="button"
@@ -725,7 +726,7 @@ function LabPapers({
               onClick={() => openPaper(p.paper_id)}
               className="w-full rounded-control px-2 py-1.5 text-left text-sm transition hover:bg-surface-2"
             >
-              <span className="text-fg">{p.title ?? "Untitled"}</span>
+              <span className="text-fg">{p.title ?? "Untitled paper"}</span>
               {(p.venue || p.year) && (
                 <span className="ml-2 font-mono text-xs text-faint">
                   {[p.venue, p.year].filter(Boolean).join(" · ")}
@@ -901,15 +902,15 @@ function ThemeBars({
 function KpiStrip({ data }: { data: OverviewData }) {
   const ot = data.stats.over_time;
   const busiest = ot.length ? ot.reduce((a, b) => (b.count > a.count ? b : a)) : null;
-  const range = ot.length ? `${fmtMonth(ot[0].month)} – ${fmtMonth(ot[ot.length - 1].month)}` : "—";
+  const range = ot.length ? `${fmtMonth(ot[0].month)} – ${fmtMonth(ot[ot.length - 1].month)}` : "–";
   const topVenue = data.stats.by_venue[0];
   const tiles: { label: string; value: string; sub?: string }[] = [
     { label: "Papers", value: String(data.total) },
-    { label: "Embedded", value: `${data.embedded}` },
+    { label: "On the map", value: `${data.embedded}` },
     { label: "Themes", value: String(data.clusters.length) },
     { label: "Shared", value: range },
-    { label: "Busiest month", value: busiest ? fmtMonth(busiest.month) : "—", sub: busiest ? `${busiest.count}` : undefined },
-    { label: "Top venue", value: topVenue?.venue ?? "—", sub: topVenue ? `${topVenue.count}` : undefined },
+    { label: "Busiest month", value: busiest ? fmtMonth(busiest.month) : "–", sub: busiest ? `${busiest.count}` : undefined },
+    { label: "Top venue", value: topVenue?.venue ?? "–", sub: topVenue ? `${topVenue.count}` : undefined },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

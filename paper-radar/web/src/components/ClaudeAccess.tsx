@@ -11,7 +11,7 @@ import { cn, formatRelative } from "@/lib/utils";
  *
  * All three live here rather than inside Connect because they belong in two places:
  * Connect, where you set the integration up, and Settings, where anyone asking "what
- * can Claude see of my lab?" will actually go. One source of truth — the app must
+ * can Claude see of my lab?" will actually go. One source of truth: the app must
  * never make two different privacy promises about the same server, which is exactly
  * what happens when the capabilities change (as they did when `post_paper` landed and
  * made the old "read-only" copy false) and only one copy of the list gets updated.
@@ -48,8 +48,8 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
           </Heading>
           <p className="mt-1 max-w-[54ch] text-sm text-muted">
             {enabled
-              ? `Claude can read ${teamName}'s papers (and, with the local setup, post into it). Every call is logged.`
-              : `Atlas refuses every Claude tool call for ${teamName} while this is off.`}
+              ? `Claude can read ${teamName}’s papers. Everything it reads is logged below.`
+              : `Claude can’t read ${teamName} until a lab owner turns this on.`}
           </p>
         </div>
 
@@ -66,18 +66,18 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
               : "bg-accent text-accent-fg hover:brightness-110",
           )}
         >
-          {setAccess.isPending ? "…" : enabled ? "Turn off" : "Turn on for the lab"}
+          {setAccess.isPending ? "Saving…" : enabled ? "Turn off" : "Turn on for the lab"}
         </button>
       </div>
 
       {!isOwner && (
         <p className="mt-3 text-xs text-faint">
-          Only an owner of {teamName} can change this. Ask one to turn it on.
+          Only an owner of {teamName} can change this.
         </p>
       )}
       {setAccess.isError && (
         <p className="mt-3 text-xs text-danger">
-          Couldn’t change access — {(setAccess.error as Error).message}
+          Couldn’t change Claude access: {setAccess.error.message}
         </p>
       )}
     </div>
@@ -85,53 +85,50 @@ export function ClaudeAccessToggle({ teamId, teamName, userId, headingLevel = "p
 }
 
 /**
- * What Claude can and cannot do with the lab. THE statement of scope — Connect and
- * Settings both render this, so the app cannot promise two different things.
+ * What Claude can and cannot do with the lab. THE statement of scope: Connect
+ * renders it in full and Settings links to it, so the app cannot promise two
+ * different things.
  */
 export function ClaudeScope({ teamName }: { teamName: string }) {
   return (
     <ul className="flex flex-col gap-2">
       <Line kind="allow">
-        Read papers your lab has posted — titles, abstracts, authors, venues, DOIs, tags
+        Read your lab’s papers: titles, abstracts, authors, venues, DOIs and tags
       </Line>
-      <Line kind="allow">Read the note attached to a post, and who posted it</Line>
+      <Line kind="allow">Read the note on each paper, and who added it</Line>
+      <Line kind="allow">Recommend what to read next, and find similar papers</Line>
       <Line kind="allow">
-        Recommend what to read next and surface similar papers, from the embeddings of your posts
-      </Line>
-      <Line kind="allow">
-        Tailor recommendations and your digest from <strong className="font-semibold text-fg">your
+        Tailor recommendations and your digest to <strong className="font-semibold text-fg">your
         own</strong> reads, reactions and @-mentions
       </Line>
       <Line kind="allow">
-        Summarise recent activity — new posts, the <em>number</em> of new comments, and papers you
+        Summarise recent activity: new papers, the <em>number</em> of new comments, and papers you
         were tagged on
       </Line>
       <Line kind="allow">
-        Check whether an idea is novel to the lab, and draft a cited related-work section from its
+        Check whether an idea is new to the lab, and draft a cited related-work section from its
         papers
       </Line>
       <Line kind="allow">
-        Read the figure gallery, derive your palette + a matplotlib style sheet, and check it for
-        colourblind-safety — <em>local setup only</em>
+        Read the figure gallery, match your lab’s plotting style, and check colours for colourblind
+        readers. <em>Local setup only.</em>
       </Line>
       <Line kind="write">
-        <strong className="font-semibold text-fg">Post a paper</strong> into {teamName}, optionally
-        with a comment that @-mentions a teammate. This{" "}
-        <strong className="font-semibold text-fg">writes to the shared lab</strong> — it previews by
-        default and only writes when you confirm. <em>Local setup only</em>: the Claude connector
-        can only read.
+        <strong className="font-semibold text-fg">Add a paper</strong> to {teamName}, optionally
+        tagging a teammate. This <strong className="font-semibold text-fg">writes to the shared
+        lab</strong>, so Claude shows a preview and adds it only when you confirm.{" "}
+        <em>Local setup only</em>: the connector only reads.
       </Line>
       <Line kind="deny">
-        Read the <strong className="font-semibold">text of comments</strong>, or who reacted with
-        what — the discussion itself stays between people
+        Read <strong className="font-semibold">comments</strong>, or who reacted with what
       </Line>
       <Line kind="deny">Anything in another lab</Line>
-      <Line kind="deny">Delete or edit existing papers, comments, or reactions</Line>
+      <Line kind="deny">Edit or delete papers, comments or reactions</Line>
     </ul>
   );
 }
 
-/** The tool-call log — visible to every member, not just whoever connected. */
+/** The tool-call log: visible to every member, not just whoever connected. */
 export function ClaudeActivity({ teamId, teamName, limit = 8 }: { teamId: string; teamName: string; limit?: number }) {
   const { data: calls, isLoading } = useMcpToolCalls(teamId, limit);
 

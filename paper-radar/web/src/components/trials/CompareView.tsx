@@ -414,7 +414,7 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
             {trials.map((t, k) => {
               const e = pcrs[k];
               const i = indexOf(t.id);
-              if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "—");
+              if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "–");
               const [c, x] = [e.ctrl_value!, e.exp_value!];
               const dashed = notComparable.has(k);
               const d = pcrDelta(e);
@@ -479,7 +479,7 @@ function Results({ trials, indexOf }: { trials: CompareTrial[]; indexOf: (id: st
               {trials.map((t, k) => {
                 const e = hrs[k];
                 const i = indexOf(t.id);
-                if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "—");
+                if (!e) return row(t, <span className="text-meta text-faint">Not reported</span>, "–");
                 const ci = e.hr_ci_low != null && e.hr_ci_high != null;
                 const medians = mediansText(e);
                 const tip = `${t.name}: ${hrLabel(hrPick)} HR ${e.hr}${ci ? ` (${e.hr_ci_low}–${e.hr_ci_high})` : ""}${medians ? ` · ${medians}` : ""} · ${e.role.replace("_", "-")}`;
@@ -619,7 +619,7 @@ function Differences({
       )}
       {notable.length > 3 && (
         <button type="button" onClick={() => setAll((a) => !a)} className="w-fit text-sm text-accent hover:underline">
-          {all ? "Show fewer" : `+${notable.length - 3} more differences`}
+          {all ? "Show fewer" : `+${notable.length - 3} more ${notable.length - 3 === 1 ? "difference" : "differences"}`}
         </button>
       )}
       {same.length > 0 && (

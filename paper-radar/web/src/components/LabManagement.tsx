@@ -56,7 +56,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
       void qc.invalidateQueries({ queryKey: ["teams-integration", teamId] });
       return true;
     } catch (e) {
-      setNotice({ ok: false, text: e instanceof Error ? e.message : "Something went wrong." });
+      setNotice({ ok: false, text: e instanceof Error ? e.message : "Something went wrong. Try again." });
       return false;
     } finally {
       setBusy(null);
@@ -107,10 +107,10 @@ function TeamsPanel({ teamId }: { teamId: string }) {
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => run("test", () => testTeamsIntegration(teamId), "Test card sent — check the channel.")}
+            onClick={() => run("test", () => testTeamsIntegration(teamId), "Test card sent. Check the channel.")}
             disabled={busy !== null || !teams.enabled}
           >
-            {busy === "test" ? "…" : "Send test card"}
+            {busy === "test" ? "Sending…" : "Send test card"}
           </Button>
           <Button
             size="sm"
@@ -118,7 +118,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
             onClick={() => run("toggle", () => setTeamsEnabled(teamId, !teams.enabled))}
             disabled={busy !== null}
           >
-            {busy === "toggle" ? "…" : teams.enabled ? "Pause" : "Resume"}
+            {busy === "toggle" ? (teams.enabled ? "Pausing…" : "Resuming…") : teams.enabled ? "Pause" : "Resume"}
           </Button>
           <Button
             size="sm"
@@ -127,7 +127,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
             onClick={() => run("rm", () => deleteTeamsIntegration(teamId), "Disconnected.")}
             disabled={busy !== null}
           >
-            {busy === "rm" ? "…" : "Disconnect"}
+            {busy === "rm" ? "Disconnecting…" : "Disconnect"}
           </Button>
         </div>
 
@@ -136,7 +136,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
           {teams.inbound_configured ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-2 text-muted">
               <span>
-                On — post <span className="font-mono text-foreground">@Atlas &lt;link&gt;</span> in the
+                On. Post <span className="font-mono text-foreground">@Atlas &lt;link&gt;</span> in the
                 channel to add a paper.
               </span>
               <Button
@@ -144,11 +144,11 @@ function TeamsPanel({ teamId }: { teamId: string }) {
                 variant="ghost"
                 className="text-danger hover:text-danger"
                 onClick={() =>
-                  run("inbound-rm", () => deleteTeamsInboundSecret(teamId), "Inbound turned off.")
+                  run("inbound-rm", () => deleteTeamsInboundSecret(teamId), "Adding from Teams is off.")
                 }
                 disabled={busy !== null}
               >
-                {busy === "inbound-rm" ? "…" : "Turn off"}
+                {busy === "inbound-rm" ? "Turning off…" : "Turn off"}
               </Button>
             </div>
           ) : (
@@ -172,10 +172,10 @@ function TeamsPanel({ teamId }: { teamId: string }) {
                   id="teams-token"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  placeholder="base64 token from Teams"
+                  placeholder="Token from Teams"
                 />
                 <Button type="submit" size="sm" disabled={busy === "inbound-save" || !token.trim()}>
-                  {busy === "inbound-save" ? "…" : "Enable"}
+                  {busy === "inbound-save" ? "Turning on…" : "Turn on"}
                 </Button>
               </div>
             </form>
@@ -203,7 +203,7 @@ function TeamsPanel({ teamId }: { teamId: string }) {
             placeholder="https://…logic.azure.com/workflows/…"
           />
           <Button type="submit" size="sm" disabled={busy === "save" || !url.trim()}>
-            {busy === "save" ? "…" : "Connect"}
+            {busy === "save" ? "Connecting…" : "Connect"}
           </Button>
         </div>
       </form>
@@ -292,14 +292,14 @@ export function LabManagement({
 
   return (
     <>
-      <Panel title="Lab" desc="Your lab’s name and join code.">
+      <Panel title="Lab" desc="Your lab’s name and invite code.">
         {isOwner ? (
           <form onSubmit={rename} className="flex flex-col gap-1.5">
             <Label htmlFor="lab-name">Lab name</Label>
             <div className="flex gap-2">
               <Input id="lab-name" value={name} onChange={(e) => setName(e.target.value)} />
               <Button type="submit" size="sm" disabled={busy === "rename" || !name.trim() || name.trim() === teamName}>
-                {busy === "rename" ? "…" : "Save"}
+                {busy === "rename" ? "Saving…" : "Save"}
               </Button>
             </div>
           </form>
@@ -308,17 +308,17 @@ export function LabManagement({
         )}
 
         <div className="mt-4">
-          <Label>Join code</Label>
+          <Label>Invite code</Label>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <InviteCode code={teamCode} />
             {isOwner && (
               <Button variant="secondary" size="sm" onClick={regenerate} disabled={busy === "regen"}>
-                {busy === "regen" ? "…" : "Regenerate"}
+                {busy === "regen" ? "Regenerating…" : "Regenerate"}
               </Button>
             )}
           </div>
           {isOwner && (
-            <p className="mt-1.5 text-xs text-muted">Regenerating invalidates the current code.</p>
+            <p className="mt-1.5 text-xs text-muted">The old code will stop working.</p>
           )}
         </div>
       </Panel>
@@ -371,7 +371,7 @@ export function LabManagement({
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span>Leave {teamName}?</span>
             <Button size="sm" variant="danger" onClick={leave} disabled={busy === "leave"}>
-              {busy === "leave" ? "…" : "Leave"}
+              {busy === "leave" ? "Leaving…" : "Leave"}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setLeaving(false)}>
               Cancel

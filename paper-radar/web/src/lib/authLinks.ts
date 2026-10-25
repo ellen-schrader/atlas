@@ -23,7 +23,7 @@ export function readLinkError(hash: string, pathname: string): LinkError | null 
   const message =
     code === "otp_expired" || h.get("error") === "access_denied"
       ? "That email link has expired or was already used."
-      : sentence(h.get("error_description") || "That email link didn't work.");
+      : sentence(h.get("error_description") || "That email link didn’t work.");
   return { message, reset: pathname === RESET_PATH };
 }
 

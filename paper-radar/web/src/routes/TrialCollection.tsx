@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Textarea } from "@/components/ui/textarea";
 import { useDismissable } from "@/hooks/useDismissable";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useJustAdded } from "@/hooks/useJustAdded";
 import { useMyRole } from "@/hooks/useMyRole";
 import { useTrialCountries } from "@/hooks/useTrialCountries";
@@ -69,6 +70,7 @@ function CollectionPage() {
     queryKey: ["lab-trials", team.id],
     queryFn: () => fetchLabTrials(team.id),
   });
+  useDocumentTitle(detail.data?.title ?? null);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-6 sm:p-8">
@@ -135,7 +137,7 @@ function Body({ c, labTrials }: { c: CollectionDetail; labTrials: LabTrial[] }) 
       toast({ message: `“${c.title}” deleted.` });
       navigate("/trials/collections");
     },
-    onError: (e) => toast({ message: e instanceof Error ? e.message : "Couldn’t delete it." }),
+    onError: (e) => toast({ message: e instanceof Error ? e.message : "Couldn’t delete the collection. Try again." }),
   });
   const canDelete = c.created_by === userId || role === "owner";
 
@@ -470,7 +472,7 @@ function TrialRows({
               const status = verification(e.extraction, e.reviewed);
               return (
                 <>
-                  <div className="font-mono text-fg">{headline(e.extraction) || "—"}</div>
+                  <div className="font-mono text-fg">{headline(e.extraction) || "–"}</div>
                   <span
                     className={cn(
                       "mt-0.5 inline-block rounded-full px-2 text-[11px]",
@@ -514,7 +516,7 @@ function dataState(t: LabTrial): string {
     case "queued":
       return "Queued for data";
     case "batched":
-      return "With Claude, in a batch";
+      return "Processing (a few hours)";
     case "running":
       return "Claude is reading it";
     case "stalled":
@@ -614,7 +616,7 @@ function ReadyBar({
           </div>
           <p className="text-sm text-muted">
             {todo.length > 0
-              ? `Atlas can fetch the open-access papers for the other ${todo.length === 1 ? "one" : todo.length} and have Claude read them${role === "owner" ? `: about $${(todo.length * EST_BATCH_USD).toFixed(2)},` : ","} ready within a few hours.`
+              ? `Get data for the other ${todo.length === 1 ? "one" : todo.length}${role === "owner" ? `: about $${(todo.length * EST_BATCH_USD).toFixed(2)},` : ","} ready in a few hours.`
               : waiting.length > 0
                 ? `${waiting.length === 1 ? "The other one is" : `The other ${waiting.length} are`} on the way: usually ready within a few hours.`
                 : "Every trial has data."}
@@ -628,7 +630,7 @@ function ReadyBar({
             ) : (
               <Sparkles size={16} aria-hidden />
             )}
-            {run.isPending ? "Getting data…" : `Get data for ${todo.length === 1 ? "it" : `the ${todo.length}`}`}
+            {run.isPending ? "Queuing…" : `Queue data for ${todo.length === 1 ? "it" : todo.length}`}
           </Button>
         )}
       </div>
@@ -1008,7 +1010,7 @@ function Papers({ c, onChange }: { c: CollectionDetail; onChange: () => void }) 
                   size="icon"
                   aria-label={`Remove ${p.papers?.title ?? "this paper"} from this collection`}
                   disabled={remove.isPending}
-                  onClick={() => remove.mutate({ id: p.paper_id, title: p.papers?.title ?? "Paper" })}
+                  onClick={() => remove.mutate({ id: p.paper_id, title: p.papers?.title ?? "Untitled paper" })}
                 >
                   <X size={14} aria-hidden />
                 </Button>

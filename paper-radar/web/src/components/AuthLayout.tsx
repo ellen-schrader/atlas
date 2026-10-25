@@ -8,10 +8,19 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 /** Split-screen shell for the signed-out screens: the product in one sentence
  *  on the left (the landing page's words, on its imaging ground), the form on
  *  the right. Collapses to just the form, with a compact brand, below md.
+ *  `tagline` only on sign-up: returning users don't need the pitch twice.
  *  `homeLink={false}` for ResetPassword: App renders it from state, not the
  *  route, so a link home would change the URL, drop the reset token, and leave
  *  the form on screen. */
-export function AuthLayout({ children, homeLink = true }: { children: ReactNode; homeLink?: boolean }) {
+export function AuthLayout({
+  children,
+  homeLink = true,
+  tagline = false,
+}: {
+  children: ReactNode;
+  homeLink?: boolean;
+  tagline?: boolean;
+}) {
   const brand = (size: number, className: string) =>
     homeLink ? (
       <Link to="/" aria-label="Atlas home" className={className}>
@@ -32,7 +41,7 @@ export function AuthLayout({ children, homeLink = true }: { children: ReactNode;
             <h1 className="text-balance text-3xl font-bold leading-tight tracking-tight">
               {HEADLINE}
             </h1>
-            <p className="mt-4 text-sm leading-relaxed text-muted">{TAGLINE}</p>
+            {tagline && <p className="mt-4 text-sm leading-relaxed text-muted">{TAGLINE}</p>}
           </div>
         </div>
       </div>

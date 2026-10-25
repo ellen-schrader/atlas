@@ -32,10 +32,10 @@ export function Hero() {
           full PaperPost and an onOpen, and these rows are a picture, not links. */}
       <figure
         className="overflow-hidden rounded-card border border-border bg-surface shadow-[0_30px_60px_-30px_rgba(18,24,26,0.25)] dark:shadow-[0_30px_60px_-30px_rgba(0,0,0,0.8)]"
-        aria-label="An example of a lab's paper library"
+        aria-label="An example of a lab’s paper library"
       >
         <div className="flex items-center gap-3 border-b border-border px-4 py-3.5">
-          <span className="text-[15px] font-bold">Papers</span>
+          <span className="text-[15px] font-bold">Library</span>
           <span className="ml-auto w-56 max-w-[50%] rounded-control bg-surface-2 px-3 py-2 text-sm text-muted">
             Search
           </span>
