@@ -9,6 +9,9 @@ feature is on for anyone:
 3. Run each active search last run a week ago or more, for an owner who is
    still in the lab and has the feature, and file the papers the lab does not
    have as suggestions for them (api/saved_searches.py).
+4. Embed the papers people are waiting on, newest first, for up to
+   EMBED_BUDGET, so the page can sort them by fit (Voyage's free tier allows
+   ~12 a minute; what is left waits for tomorrow).
 
 A run that fails on a source records it on the search (shown in settings),
 files what the other sources found, and leaves the search due, so the next
@@ -37,6 +40,7 @@ log = logging.getLogger(__name__)
 DUE_AFTER = timedelta(days=6, hours=12)  # weekly, whatever time yesterday's run took
 FEED_KEEP_DAYS = 35
 TIME_BUDGET = 15 * 60  # seconds; the rest wait for tomorrow
+EMBED_BUDGET = 10 * 60  # seconds of embedding a day
 
 
 def _feature_owners(svc) -> tuple[set[str], set[str]]:
@@ -132,6 +136,13 @@ def run(*, dry_run: bool = False) -> tuple[int, int, int]:
     print(f"bioRxiv/medRxiv: {copied} new preprints copied")
     if not dry_run and (retried := ss.retry_stuck_imports(svc, now)):
         print(f"  {retried} interrupted imports retried")
+    ran, new, failed = _run_due(svc, now, dry_run=dry_run)
+    if not dry_run:
+        print(f"  {ss.embed_candidates(svc, EMBED_BUDGET)} suggested papers embedded")
+    return ran, new, failed
+
+
+def _run_due(svc, now: datetime, *, dry_run: bool) -> tuple[int, int, int]:
     searches = due_searches(svc, now)
     if not searches:
         return 0, 0, 0
@@ -148,7 +159,12 @@ def run(*, dry_run: bool = False) -> tuple[int, int, int]:
             if dry_run:
                 since, until = ss.window(search["last_run_at"], now.date())
                 found, errors = ss.run_query(
-                    search["query"], search["sources"], since, until, feed=feed
+                    search["query"],
+                    search["sources"],
+                    since,
+                    until,
+                    feed=feed,
+                    arxiv_categories=search.get("arxiv_categories") or (),
                 )
                 counts = ", ".join(f"{s}={len(h)}" for s, h in found.items())
                 print(f"  {search['id']}: would file from {counts}; errors: {errors or 'none'}")

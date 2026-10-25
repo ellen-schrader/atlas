@@ -60,6 +60,10 @@ export interface Suggestion {
   saved_search_id: string | null;
   /** Every remaining search that found it; empty if they were all deleted. */
   search_ids: string[];
+  /** How well it fits the person's taste (cosine similarity, -1..1); null
+   *  until the daily job has embedded the paper, for someone Atlas knows
+   *  nothing about yet, or when the list was asked for newest first. */
+  score: number | null;
   created_at: string;
   paper: FoundPaper;
 }

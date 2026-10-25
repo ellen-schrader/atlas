@@ -667,8 +667,12 @@ export async function listSearchIdeas(teamId: string): Promise<SearchIdea[]> {
   return authedRequest(`/saved-searches/ideas?${new URLSearchParams({ team_id: teamId })}`);
 }
 
-export async function listSuggestions(teamId: string): Promise<Suggestion[]> {
-  return authedRequest(`/saved-searches/suggestions?${new URLSearchParams({ team_id: teamId })}`);
+/** Each search's best-fitting hundred, scored ("relevant"), or its newest. */
+export async function listSuggestions(
+  teamId: string,
+  order: "relevant" | "newest",
+): Promise<Suggestion[]> {
+  return authedRequest(`/saved-searches/suggestions?${new URLSearchParams({ team_id: teamId, order })}`);
 }
 
 /** The API takes at most this many ids per call. */

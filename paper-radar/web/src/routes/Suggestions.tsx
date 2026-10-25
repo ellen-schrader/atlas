@@ -55,6 +55,20 @@ const LIBRARY_REFRESH_MS = [15_000, 60_000];
 const EARLIER = "earlier";
 /** A person's saved searches per lab (the API's MAX_SEARCHES). */
 const MAX_SEARCHES = 10;
+/** Sorted by fit, a group of at least this many folds its lowest-scoring
+ *  third away as "less likely matches". */
+const FOLD_UNLIKELY_FROM = 6;
+const ORDER_KEY = "atlas.suggestions.order";
+
+type Order = "relevant" | "newest";
+
+function savedOrder(): Order {
+  try {
+    return localStorage.getItem(ORDER_KEY) === "newest" ? "newest" : "relevant";
+  } catch {
+    return "relevant";
+  }
+}
 
 export default function Suggestions() {
   return (
@@ -70,6 +84,7 @@ function SuggestionsPage() {
   const toast = useToast();
   const [confirm, confirmDialog] = useConfirm();
   const [editing, setEditing] = useState<SavedSearch | "new" | null>(null);
+  const [order, setOrder] = useState<Order>(savedOrder);
   // What a new search starts from (a suggested search), if anything.
   const [initial, setInitial] = useState<Partial<SearchFields>>();
   // The search running in the background since it was saved, if any.
@@ -81,6 +96,8 @@ function SuggestionsPage() {
   const [open, setOpen] = useState<Set<string>>(new Set());
   // Search groups folded away.
   const [folded, setFolded] = useState<Set<string>>(new Set());
+  // Groups whose less likely matches are shown.
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
   const timers = useRef<number[]>([]);
 
   const searches = useQuery({
@@ -88,9 +105,12 @@ function SuggestionsPage() {
     queryFn: () => listSearches(team.id),
     refetchInterval: watching ? 5000 : false,
   });
+  // Keyed under ["suggestions", team.id] like before, so the mutations'
+  // updates and invalidations reach whichever order is on screen.
   const suggestions = useQuery({
-    queryKey: ["suggestions", team.id],
-    queryFn: () => listSuggestions(team.id),
+    queryKey: ["suggestions", team.id, order],
+    queryFn: () => listSuggestions(team.id, order),
+    placeholderData: (previous) => previous,
     refetchInterval: watching ? 5000 : false,
   });
   // Recomputed when the queries change: a search that covers an idea retires it.
@@ -127,8 +147,13 @@ function SuggestionsPage() {
   const list = searches.data ?? [];
   const byId = useMemo(() => new Map(list.map((x) => [x.id, x])), [list]);
   const all = suggestions.data ?? [];
+  // Scores arrive once the daily job has embedded the papers.
+  const scored = all.some((x) => x.score !== null);
+  const byFit = order === "relevant" && scored;
   // One group per search that has something waiting, in the order of "Your
   // searches", then deleted searches'. A paper two searches found is in both.
+  // Within a group: newest first, or by fit -- the lowest-scoring third of a
+  // big group folded away as less likely ("unlikely").
   const groups = useMemo(() => {
     const items = new Map<string, Suggestion[]>();
     for (const x of all) {
@@ -144,7 +169,7 @@ function SuggestionsPage() {
       .map((x) => ({
         id: x.id,
         name: x.name,
-        items: items.get(x.id)!,
+        ...split(items.get(x.id)!, byFit),
         // All it has waiting; the list holds its newest hundred (the API's PER_SEARCH).
         count: Math.max(x.pending, items.get(x.id)!.length),
       }));
@@ -155,15 +180,23 @@ function SuggestionsPage() {
           {
             id: EARLIER,
             name: "Deleted searches",
-            items: earlier,
+            ...split(earlier, byFit),
             count: earlier.length,
           },
         ]
       : named;
-  }, [all, list, byId]);
+  }, [all, list, byId, byFit]);
   const pickedIds = all.filter((x) => picked.has(x.id)).map((x) => x.id);
   // Some search has more waiting than the page lists.
-  const cut = groups.some((g) => g.count > g.items.length);
+  const cut = groups.some((g) => g.count > g.size);
+  const pickOrder = (o: Order) => {
+    setOrder(o);
+    try {
+      localStorage.setItem(ORDER_KEY, o);
+    } catch {
+      // A private window: the choice lasts for this visit.
+    }
+  };
 
   const decide = useMutation({
     mutationFn: ({
@@ -178,8 +211,9 @@ function SuggestionsPage() {
       // flight would put them back, so it is cancelled first.
       await qc.cancelQueries({ queryKey: ["suggestions", team.id] });
       const gone = new Set(ids);
-      qc.setQueryData<Suggestion[]>(["suggestions", team.id], (cur) =>
-        (cur ?? []).filter((x) => !gone.has(x.id)),
+      qc.setQueriesData<Suggestion[]>(
+        { queryKey: ["suggestions", team.id] },
+        (cur) => (cur ?? []).filter((x) => !gone.has(x.id)),
       );
       setPicked((cur) => new Set([...cur].filter((id) => !gone.has(id))));
     },
@@ -263,18 +297,43 @@ function SuggestionsPage() {
 
   const togglePick = (id: string) => setPicked((cur) => toggled(cur, id));
   const toggleOpen = (id: string) => setOpen((cur) => toggled(cur, id));
-  // Folding a group unpicks it, so Add / Dismiss never act on hidden rows.
-  const toggleFolded = (g: { id: string; items: Suggestion[] }) => {
-    if (!folded.has(g.id)) {
-      const hidden = new Set(g.items.map((x) => x.id));
-      setPicked((cur) => new Set([...cur].filter((id) => !hidden.has(id))));
-    }
+  // Folding rows away unpicks them, so Add / Dismiss never act on hidden rows.
+  const unpick = (rows: Suggestion[]) => {
+    const hidden = new Set(rows.map((x) => x.id));
+    setPicked((cur) => new Set([...cur].filter((id) => !hidden.has(id))));
+  };
+  const toggleFolded = (g: Group) => {
+    if (!folded.has(g.id)) unpick([...g.items, ...g.unlikely]);
     setFolded((cur) => toggled(cur, g.id));
   };
-  // Pick a whole group, or unpick it when it is all picked already. A folded
-  // group opens, so what is picked is in view.
-  const pickGroup = (g: { id: string; items: Suggestion[] }) => {
-    const items = g.items;
+  const toggleUnlikely = (g: Group) => {
+    if (unfolded.has(g.id)) unpick(g.unlikely);
+    setUnfolded((cur) => toggled(cur, g.id));
+  };
+  // The rows of a group in view.
+  const visible = (g: Group) =>
+    unfolded.has(g.id) ? [...g.items, ...g.unlikely] : g.items;
+  // Rows can leave the view without a click: re-sorting, a refetch moving the
+  // "less likely" cut, scores arriving. Unpick them, so Add / Dismiss only
+  // ever act on what is on screen.
+  useEffect(() => {
+    const inView = new Set(
+      groups
+        .flatMap((g) => (folded.has(g.id) ? [] : visible(g)))
+        .map((x) => x.id),
+    );
+    setPicked((cur) =>
+      [...cur].every((id) => inView.has(id))
+        ? cur
+        : new Set([...cur].filter((id) => inView.has(id))),
+    );
+    // visible() reads unfolded; folded and groups are the rest of its inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, folded, unfolded]);
+  // Pick a whole group (what is in view), or unpick it when it is all picked
+  // already. A folded group opens, so what is picked is in view.
+  const pickGroup = (g: Group) => {
+    const items = visible(g);
     setFolded((cur) => {
       const next = new Set(cur);
       next.delete(g.id);
@@ -396,8 +455,46 @@ function SuggestionsPage() {
                 ? "No new papers"
                 : `${all.length}${cut ? "+" : ""} new ${all.length === 1 ? "paper" : "papers"}`}
             </h2>
+            {all.length > 1 && (
+              <div
+                role="radiogroup"
+                aria-label="Sort papers"
+                className="flex items-center gap-1 text-xs"
+                title="Most relevant: how well each paper fits your profile and the papers you have shared, saved and reacted to."
+              >
+                {(
+                  [
+                    ["relevant", "Most relevant"],
+                    ["newest", "Newest"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={order === key}
+                    onClick={() => pickOrder(key)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 font-medium transition",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      order === key
+                        ? "border-accent/50 bg-accent-weak text-fg"
+                        : "border-transparent text-muted hover:text-fg",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
+          {order === "relevant" && !scored && all.length > 1 && (
+            <p className="text-xs text-faint">
+              Newest first for now: sorting by fit starts once Atlas has read
+              these papers, within a day of a search finding them.
+            </p>
+          )}
           {all.length === 0 ? (
             <p className="rounded-card border border-dashed border-border p-6 text-sm text-muted">
               You’re all caught up. New papers the lab doesn’t have yet show up
@@ -407,7 +504,8 @@ function SuggestionsPage() {
             <>
               {groups.map((g) => {
                 const isFolded = folded.has(g.id);
-                const every = g.items.every((x) => picked.has(x.id));
+                const shown = visible(g);
+                const every = shown.every((x) => picked.has(x.id));
                 const listId = `group-${g.id}`;
                 return (
                   <section
@@ -440,7 +538,7 @@ function SuggestionsPage() {
                         type="button"
                         onClick={() => pickGroup(g)}
                         aria-pressed={every}
-                        aria-label={`Select all ${g.items.length} from “${g.name}”`}
+                        aria-label={`Select all ${shown.length} from “${g.name}”`}
                         className="ml-auto shrink-0 text-xs font-medium text-muted hover:text-fg"
                       >
                         {every ? "Deselect all" : "Select all"}
@@ -451,7 +549,7 @@ function SuggestionsPage() {
                         id={listId}
                         className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm"
                       >
-                        {g.items.map((s) => (
+                        {shown.map((s) => (
                           <SuggestionRow
                             key={s.id}
                             suggestion={s}
@@ -473,10 +571,31 @@ function SuggestionsPage() {
                         ))}
                       </ul>
                     )}
-                    {!isFolded && g.count > g.items.length && (
+                    {!isFolded && g.unlikely.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => toggleUnlikely(g)}
+                        aria-expanded={unfolded.has(g.id)}
+                        aria-controls={listId}
+                        className="inline-flex items-center gap-1 self-start text-xs font-medium text-muted hover:text-fg"
+                      >
+                        <ChevronDown
+                          size={13}
+                          className={cn(
+                            "transition-transform",
+                            unfolded.has(g.id) && "rotate-180",
+                          )}
+                          aria-hidden
+                        />
+                        {unfolded.has(g.id)
+                          ? "Hide the less likely matches"
+                          : `${g.unlikely.length} less likely ${g.unlikely.length === 1 ? "match" : "matches"}`}
+                      </button>
+                    )}
+                    {!isFolded && g.count > g.size && (
                       <p className="text-xs text-faint">
-                        Showing the newest {g.items.length} of {g.count}. Add or
-                        dismiss these to see the rest.
+                        Showing the {byFit ? "best-fitting" : "newest"} {g.size}{" "}
+                        of {g.count}. Add or dismiss these to see the rest.
                       </p>
                     )}
                   </section>
@@ -856,6 +975,40 @@ function IconButton({
       {children}
     </button>
   );
+}
+
+interface Group {
+  id: string;
+  name: string;
+  /** In view (by fit, or newest first). */
+  items: Suggestion[];
+  /** The lowest-scoring third of a big group, folded away by default. */
+  unlikely: Suggestion[];
+  /** How many the page holds for it. */
+  size: number;
+  /** How many it has waiting in all. */
+  count: number;
+}
+
+/** A group's rows: newest first as listed, or by fit (best first; papers not
+ *  scored yet after the scored ones) with the lowest-scoring third of a big
+ *  group set apart. */
+function split(
+  rows: Suggestion[],
+  byFit: boolean,
+): Pick<Group, "items" | "unlikely" | "size"> {
+  if (!byFit) return { items: rows, unlikely: [], size: rows.length };
+  const ranked = rows
+    .filter((x) => x.score !== null)
+    .sort((a, b) => b.score! - a.score!);
+  const unscored = rows.filter((x) => x.score === null);
+  const folds =
+    ranked.length >= FOLD_UNLIKELY_FROM ? Math.floor(ranked.length / 3) : 0;
+  return {
+    items: [...ranked.slice(0, ranked.length - folds), ...unscored],
+    unlikely: ranked.slice(ranked.length - folds),
+    size: rows.length,
+  };
 }
 
 /** `cur` with `id` added, or taken out if it was there. */

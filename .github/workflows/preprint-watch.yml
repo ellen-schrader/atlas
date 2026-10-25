@@ -40,7 +40,9 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Room for the saved-search step's 10 minutes of embedding (paced for
+    # Voyage's free tier). Runner minutes cost nothing on a public repo.
+    timeout-minutes: 60
     environment: preprint-watch
     defaults:
       run:
@@ -69,8 +71,9 @@ jobs:
       - if: ${{ !cancelled() }}
         run: uv run --frozen python -m api.preprint_watch ${{ inputs.dry_run && '--dry-run' || '' }}
       # Saved searches (issue #164): copy the week's bioRxiv/medRxiv preprints,
-      # then run the searches that are due and file their suggestions. Only
-      # for labs with the feature; a manual run defaults to a dry run.
+      # run the searches that are due and file their suggestions, then embed
+      # what people are waiting on so the page can sort it by fit. Only for
+      # labs with the feature; a manual run defaults to a dry run.
       - if: ${{ !cancelled() }}
         run: uv run --frozen python -m api.saved_searches_run ${{ inputs.dry_run && '--dry-run' || '' }}
       # Link lab papers to the clinical trials they name (only for labs with the
