@@ -41,7 +41,7 @@ export function SearchDialog({
   search?: SavedSearch | null;
   onSaved?: (s: SavedSearch, rerun: boolean) => void;
 }) {
-  const title = search ? "Edit search" : "New saved search";
+  const title = search ? "Edit search" : "New search";
   return (
     <Modal
       open={open}
@@ -53,8 +53,7 @@ export function SearchDialog({
         <div>
           <h2 className="text-heading font-semibold text-fg">{title}</h2>
           <p className="mt-1 text-sm text-muted">
-            Runs once a week on what’s new. What it finds is suggested to you
-            alone; the papers you import go to the lab’s library.
+            Atlas runs it every week and lists the new papers on this page.
           </p>
         </div>
         {open && (
@@ -108,8 +107,13 @@ function SearchForm({
       setTested({ query: asked.query, sources: asked.sources.join(), results }),
   });
   const save = useMutation({
-    mutationFn: () =>
-      search ? updateSearch(teamId, search.id, f) : createSearch(teamId, f),
+    mutationFn: () => {
+      // The name is optional: without one, the search is called by its query.
+      const named = { ...f, name: f.name.trim() || nameFor(f.query) };
+      return search
+        ? updateSearch(teamId, search.id, named)
+        : createSearch(teamId, named);
+    },
     onSuccess: (s) => {
       void qc.invalidateQueries({ queryKey: ["saved-searches", teamId] });
       const rerun =
@@ -124,7 +128,10 @@ function SearchForm({
     tested !== null &&
     tested.query === f.query &&
     tested.sources === f.sources.join();
-  const ready = f.name.trim() && f.query.trim() && f.sources.length > 0;
+  // A new search may go unnamed (it is called by its query); an existing one
+  // keeps a name rather than being renamed by clearing the field.
+  const ready =
+    f.query.trim() && f.sources.length > 0 && (!search || f.name.trim());
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (ready && !save.isPending) save.mutate();
@@ -140,17 +147,7 @@ function SearchForm({
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm font-medium text-fg">
-        Name
-        <Input
-          required
-          maxLength={120}
-          value={f.name}
-          onChange={(e) => setF({ ...f, name: e.target.value })}
-          placeholder="Tertiary lymphoid structures"
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-sm font-medium text-fg">
-        Query
+        What to look for
         <Textarea
           required
           maxLength={2000}
@@ -161,28 +158,63 @@ function SearchForm({
           onChange={(e) => {
             setF({ ...f, query: e.target.value });
           }}
-          placeholder={
-            '("tertiary lymphoid structure*"[tiab] OR TLS[tiab]) AND cancer'
-          }
+          placeholder="tertiary lymphoid structures AND breast cancer"
         />
         <span className="text-xs font-normal text-muted">
-          Paste your PubMed search as it is, or type keywords. AND, OR, NOT,
-          brackets, “quoted phrases”, a trailing * and tags such as [tiab] or
-          [au] work everywhere; PubMed-only filters like [pt] apply on PubMed
-          alone.
+          A few keywords work, or paste a search from PubMed as it is.
         </span>
       </label>
+      <details className="-mt-2 text-xs text-muted">
+        <summary className="cursor-pointer select-none font-medium hover:text-fg">
+          Tips for a sharper search
+        </summary>
+        <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4">
+          <li>
+            Put phrases in quotes: <code>"flow matching"</code> finds the
+            phrase, not the two words anywhere.
+          </li>
+          <li>
+            Combine with AND, OR, NOT and brackets:{" "}
+            <code>"flow matching" AND (protein OR molecule)</code>.
+          </li>
+          <li>
+            A trailing * matches word endings: <code>organoid*</code>.
+          </li>
+          <li>
+            PubMed tags such as [tiab] (title or abstract) and [au] (author)
+            work on every source; filters like [pt] apply on PubMed only.
+          </li>
+        </ul>
+      </details>
       <ChipGroup
-        legend="Search in"
+        legend="Where to look"
         options={SOURCE_OPTIONS}
         selected={f.sources}
         onToggle={toggle}
       />
 
+      <label className="flex flex-col gap-1 text-sm font-medium text-fg">
+        <span>
+          Name{" "}
+          {!search && (
+            <span className="font-normal text-muted">(optional)</span>
+          )}
+        </span>
+        <Input
+          required={!!search}
+          maxLength={120}
+          value={f.name}
+          onChange={(e) => setF({ ...f, name: e.target.value })}
+          placeholder={
+            f.query.trim() ? nameFor(f.query) : "TLS in breast cancer"
+          }
+        />
+      </label>
+
       <div className="flex flex-col gap-3 rounded-card border border-border bg-surface-2 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted">
-            See what it would have found in the past week.
+            Check what it finds before you save it.
           </p>
           <Button
             type="button"
@@ -200,7 +232,7 @@ function SearchForm({
             ) : (
               <FlaskConical size={13} aria-hidden />
             )}
-            Test query
+            Preview last week
           </Button>
         </div>
         {preview.isPending && (
@@ -288,4 +320,12 @@ function PreviewResults({ results }: { results: SourceResult[] }) {
       ))}
     </ul>
   );
+}
+
+/** A name for a search that wasn't given one: its query, cut short. */
+function nameFor(query: string): string {
+  const q = query.trim().replace(/\s+/g, " ");
+  // By characters, not UTF-16 units, so an emoji isn't cut in half.
+  const chars = Array.from(q);
+  return chars.length > 60 ? `${chars.slice(0, 59).join("")}…` : q;
 }
