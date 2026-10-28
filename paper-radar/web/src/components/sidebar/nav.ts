@@ -10,7 +10,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { SAVED_SEARCHES_FEATURE } from "@/lib/savedSearches";
 import { TRIALS_FEATURE } from "@/lib/trials";
 
 export interface NavItem {
@@ -63,7 +62,6 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Suggested papers",
         icon: ScanSearch,
         beta: true,
-        feature: SAVED_SEARCHES_FEATURE,
         description: () => "New papers from your saved searches, every week",
       },
     ],

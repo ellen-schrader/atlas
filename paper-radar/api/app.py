@@ -50,6 +50,7 @@ from . import map_summary as map_summary_mod
 from . import overview as overview_mod
 from .backfill_metadata import _doi_owner, follow_year, plan_update
 from .config import get_api_settings
+from .deps import require_member as _require_member
 from .deps import require_token
 from .paper_identity import (
     PreprintRef,
@@ -2069,34 +2070,6 @@ class ImportResponse(BaseModel):
     imported: int
     skipped: int
     failed: int
-
-
-def _require_member(token: str, team_id: str) -> str:
-    """The caller's id, or 403 — enforced before we read or write anything.
-
-    The import path reads with the service role (it has to: it needs to see papers
-    posted by *other* members to dedupe against them), which bypasses RLS. Without
-    this check, `team_id` is attacker-controlled and the pre-flight becomes an oracle:
-    post a one-entry .bib with a DOI at someone else's lab and a "duplicate" verdict
-    tells you they have that paper. Every other write in this file goes through
-    `user_client`, where RLS does this job for us; here it has to be explicit.
-    """
-    user_id = get_user_id(token)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    member = (
-        user_client(token)  # as the caller, so RLS answers the question honestly
-        .table("team_members")
-        .select("user_id")
-        .eq("team_id", team_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not member.data:
-        raise HTTPException(status_code=403, detail="You are not a member of this lab.")
-    return user_id
 
 
 def _chunked(items: list[str], size: int = 100) -> list[list[str]]:

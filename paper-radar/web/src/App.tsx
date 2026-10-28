@@ -236,7 +236,7 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/maps" element={<MapsLibrary />} />
         <Route path="/maps/overview" element={<MapView />} />
         <Route path="/maps/:mapId" element={<MapDashboard />} />
-        {/* Saved searches (issue #164): dark unless the feature is on. */}
+        {/* Saved searches (issue #164). */}
         <Route path="/suggestions" element={<Suggestions />} />
         {/* Clinical trials: dark unless the feature is on (RequireTrials). */}
         <Route path="/trials" element={<Trials />} />

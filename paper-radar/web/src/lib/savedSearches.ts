@@ -2,8 +2,6 @@
  *  calls are in lib/api.ts. Searches and suggestions are the signed-in
  *  person's own; what they import goes to the lab's library. */
 
-export const SAVED_SEARCHES_FEATURE = "saved_searches";
-
 export type SourceKey = "pubmed" | "biorxiv" | "arxiv";
 
 /** The sources a search can run on, in the order the API uses. */

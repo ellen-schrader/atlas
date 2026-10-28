@@ -3,14 +3,12 @@ arXiv searches and what they suggest, from Claude. Read the suggestions,
 import the wanted ones into the lab's library, dismiss the rest, and save a
 new search.
 
-Hosted connector only, and listed only to people for whom the feature is on
-(`entitled`, used by atlas_mcp/http.py), as the clinical trials tools are.
+Hosted connector only.
 
 Access: searches and suggestions are the caller's own. Each tool resolves the
 lab as the caller (membership and the lab's Claude-access switch, through
-`lab.resolve_team`), checks the saved searches switch, and then reads and
-writes with the service role through api/saved_searches.py, always scoped to
-this person in this lab. The tests hold them to it.
+`lab.resolve_team`), and then reads and writes with the service role through
+api/saved_searches.py, always scoped to this person in this lab. The tests hold them to it.
 
 Importing adds papers to the shared library under the person's name, so it
 previews first and only imports on a second call with confirm=true; saving a
@@ -26,32 +24,15 @@ from uuid import UUID
 from api import saved_searches as ss
 from api.supa import service_client
 
-from . import features, lab
-from .tools import _excerpt, _md_link, _untrusted, audited, in_worker_thread
+from . import lab
+from .tools import _excerpt, _md_link, _untrusted, audited, in_worker_thread, offload
 
-FEATURE = ss.FEATURE
-NOT_AVAILABLE = "Saved searches aren't switched on for you in this lab."
 _SOURCE_LABEL = {"pubmed": "PubMed", "biorxiv": "bioRxiv/medRxiv", "arxiv": "arXiv"}
 _PAPER_SOURCE = {"pubmed": "PubMed", "biorxiv": "bioRxiv", "medrxiv": "medRxiv", "arxiv": "arXiv"}
 _ABSTRACT_CHARS = 600
 
 
-def entitled(user_id: str | None) -> bool:
-    """Whether saved searches are on for this person in any of their labs.
-    Decides whether the tools are listed."""
-    return features.entitled(user_id, FEATURE)
-
-
-def _check_feature(team: dict) -> None:
-    features.check(team, FEATURE, NOT_AVAILABLE)
-
-
-def _team(team_id: str | None) -> dict:
-    """The lab to act on: resolved as the caller, then the saved searches switch."""
-    return features.team_for(team_id, FEATURE, NOT_AVAILABLE)
-
-
-_offload = features.offload
+_offload = offload
 
 
 def _page() -> str:
@@ -106,7 +87,7 @@ def list_saved_searches(team_id: str | None = None) -> str:
         team_id: Which lab, if you belong to more than one.
     """
     try:
-        team = _team(team_id)
+        team = lab.resolve_team(team_id)
     except lab.LabError as exc:
         return f"Error: {exc}"
     rows = ss.own_searches(service_client(), lab.current_user_id(), team["id"])
@@ -154,7 +135,7 @@ def list_suggestions(
         team_id: Which lab, if you belong to more than one.
     """
     try:
-        team = _team(team_id)
+        team = lab.resolve_team(team_id)
     except lab.LabError as exc:
         return f"Error: {exc}"
     svc = service_client()
@@ -238,7 +219,6 @@ async def import_suggestions(
     """
     try:
         team = lab.resolve_team(team_id)  # on the loop: attributes the call for the audit log
-        await _offload(_check_feature, team)
         ids = _ids(suggestion_ids)
     except lab.LabError as exc:
         return f"Error: {exc}"
@@ -282,7 +262,6 @@ async def dismiss_suggestions(suggestion_ids: list[str], team_id: str | None = N
     """
     try:
         team = lab.resolve_team(team_id)  # on the loop: attributes the call for the audit log
-        await _offload(_check_feature, team)
         ids = _ids(suggestion_ids)
     except lab.LabError as exc:
         return f"Error: {exc}"
@@ -347,7 +326,6 @@ async def create_saved_search(
     """
     try:
         team = lab.resolve_team(team_id)  # on the loop: attributes the call for the audit log
-        await _offload(_check_feature, team)
     except lab.LabError as exc:
         return f"Error: {exc}"
     user_id = lab.current_user_id()

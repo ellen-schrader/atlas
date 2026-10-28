@@ -2,9 +2,9 @@
 
 Served by the API process for one host (``mcp_public_url``, e.g.
 https://mcp.labatlas.app), so it costs nothing extra to run. Read-only paper tools,
-no mood board (docs/CLAUDE_CONNECTOR_PLAN.md); and for people with them
-switched on, the clinical trials tools (atlas_mcp/trials.py) and the saved
-searches tools (atlas_mcp/searches.py), some of which write.
+no mood board (docs/CLAUDE_CONNECTOR_PLAN.md); the saved searches tools
+(atlas_mcp/searches.py); and, for people with them switched on, the clinical
+trials tools (atlas_mcp/trials.py). Some of the last two write.
 
 Auth: this is an OAuth *resource server*. Supabase Auth's OAuth 2.1 server issues the
 tokens; we only verify them. The SDK publishes the protected-resource metadata and
@@ -187,14 +187,13 @@ def as_caller(tool: Callable) -> Callable:
 
 # Tools listed only to people with a feature switched on: each module's tool
 # names and its `entitled` (looked up per call, so tests can stub it).
-_GATED = ((trials, "TRIAL_TOOL_NAMES"), (searches, "SEARCH_TOOL_NAMES"))
+_GATED = ((trials, "TRIAL_TOOL_NAMES"),)
 
 
 class AtlasMCP(FastMCP):
-    """FastMCP that lists (and runs) the clinical trials and saved searches tools
-    only for people who have that feature, so the labs that don't never see
-    them. A hidden tool called by name gets the same answer as one that doesn't
-    exist."""
+    """FastMCP that lists (and runs) the clinical trials tools only for people
+    who have that feature, so the labs that don't never see them. A hidden tool
+    called by name gets the same answer as one that doesn't exist."""
 
     async def _hidden(self) -> set[str]:
         """The gated tools this caller may not see. One thread for all the
@@ -233,9 +232,9 @@ class AtlasMCP(FastMCP):
 
 
 def build_mcp(public_url: str, supabase_url: str, verifier: TokenVerifier | None = None) -> FastMCP:
-    """The hosted server: read-only paper tools, and the clinical trials and
-    saved searches tools for people who have them, each run as the caller. `verifier`
-    defaults to Supabase's; tests pass a stub."""
+    """The hosted server: read-only paper tools, the saved searches tools, and
+    the clinical trials tools for people who have them, each run as the caller.
+    `verifier` defaults to Supabase's; tests pass a stub."""
     public = public_url.rstrip("/")
     host = urlparse(public).netloc
     mcp = AtlasMCP(
@@ -255,9 +254,9 @@ def build_mcp(public_url: str, supabase_url: str, verifier: TokenVerifier | None
             allowed_origins=[public, *_BROWSER_ORIGINS],
         ),
     )
+    searching = searches.READ_SEARCH_TOOLS + searches.WRITE_SEARCH_TOOLS
     gated = trials.READ_TRIAL_TOOLS + trials.WRITE_TRIAL_TOOLS
-    gated += searches.READ_SEARCH_TOOLS + searches.WRITE_SEARCH_TOOLS
-    for tool in READ_TOOLS + gated:
+    for tool in READ_TOOLS + searching + gated:
         mcp.add_tool(as_caller(tool))
     return mcp
 

@@ -4,8 +4,8 @@ gate, untrusted-content framing, and citation formatting.
 Tool functions live in `papers` (the paper tools), `figures` (the beta mood
 board), `trials` (clinical trials) and `searches` (saved searches). They are
 plain functions here; each server entry point registers the set it serves
-(`server` for stdio: papers and figures; the hosted server: read-only papers,
-plus the trial and saved searches tools for those who have them).
+(`server` for stdio: papers and figures; the hosted server: read-only papers
+and saved searches, plus the trial tools for those who have them).
 """
 
 from __future__ import annotations
@@ -137,6 +137,12 @@ def in_worker_thread(fn: Callable) -> Callable:
         )
 
     return wrapper
+
+
+def offload(fn, *args):
+    """Run blocking work off the event loop, as the caller (anyio copies the
+    context), within the connector's own thread budget."""
+    return anyio.to_thread.run_sync(functools.partial(fn, *args), limiter=TOOL_THREADS)
 
 
 def _clamp(limit: int) -> int:
