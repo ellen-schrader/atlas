@@ -31,7 +31,7 @@ from paper_radar.trials import FEATURE, ctgov
 from paper_radar.trials.extraction import DIMENSIONS, Extraction
 
 from . import features, lab
-from .tools import _md_link, _paper_title_link, _untrusted, audited, in_worker_thread
+from .tools import _md_link, _paper_title_link, _untrusted, audited, in_worker_thread, offload
 
 NOT_AVAILABLE = "Clinical trials isn't switched on for this lab."
 # What one get_trial_sources answer may hold: clients cut off (or refuse) tool
@@ -68,7 +68,7 @@ def _team(team_id: str | None) -> dict:
     return features.team_for(team_id, FEATURE, NOT_AVAILABLE)
 
 
-_offload = features.offload
+_offload = offload
 
 
 def _trial_link(t: dict[str, Any]) -> str:

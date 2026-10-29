@@ -1,14 +1,13 @@
 """Run the saved searches that are due and file what is new (issue #164).
 
-Daily, in the preprint-watch workflow, for labs where the saved_searches
-feature is on for anyone:
+Daily, in the preprint-watch workflow:
 
 1. Copy the bioRxiv/medRxiv preprints posted since the last copy into
    ``rxiv_feed`` (their API can only list by date), and drop ones past a month.
 2. Finish imports the API was stopped in the middle of.
 3. Run each active search last run a week ago or more, for an owner who is
-   still in the lab and has the feature, and file the papers the lab does not
-   have as suggestions for them (api/saved_searches.py).
+   still in the lab, and file the papers the lab does not have as suggestions
+   for them (api/saved_searches.py).
 4. Embed the papers people are waiting on, newest first, for up to
    EMBED_BUDGET, so the page can sort them by fit (Voyage's free tier allows
    ~12 a minute; what is left waits for tomorrow).
@@ -43,44 +42,51 @@ TIME_BUDGET = 15 * 60  # seconds; the rest wait for tomorrow
 EMBED_BUDGET = 10 * 60  # seconds of embedding a day
 
 
-def _feature_owners(svc) -> tuple[set[str], set[str]]:
-    """(labs with the feature, people with it) -- a search runs if either holds."""
-    teams = svc.table("team_features").select("team_id").eq("feature", ss.FEATURE).execute()
-    users = svc.table("user_features").select("user_id").eq("feature", ss.FEATURE).execute()
-    return {r["team_id"] for r in teams.data or []}, {r["user_id"] for r in users.data or []}
+PAGE = 1000  # PostgREST's max_rows: a longer answer is cut short without saying so
+IN_CHUNK = 100  # lab ids per in.(...) filter, which travels in the query string
+
+
+def _active_searches(svc) -> list[dict]:
+    rows: list[dict] = []
+    while True:
+        page = (
+            svc.table("saved_searches")
+            .select(ss._SEARCH_COLUMNS)
+            .eq("active", True)
+            .order("last_run_at", desc=False, nullsfirst=True)
+            .order("id")
+            .range(len(rows), len(rows) + PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows += page
+        if len(page) < PAGE:
+            return rows
 
 
 def due_searches(svc, now: datetime) -> list[dict]:
-    teams, users = _feature_owners(svc)
-    if not teams and not users:
-        return []
-    rows = (
-        svc.table("saved_searches")
-        .select(ss._SEARCH_COLUMNS)
-        .eq("active", True)
-        .order("last_run_at", desc=False, nullsfirst=True)
-        .execute()
-        .data
-        or []
-    )
+    rows = _active_searches(svc)
     cutoff = now - DUE_AFTER
     rows = [
         r
         for r in rows
-        if (r["team_id"] in teams or r["user_id"] in users)
-        and (not r["last_run_at"] or datetime.fromisoformat(r["last_run_at"]) <= cutoff)
+        if not r["last_run_at"] or datetime.fromisoformat(r["last_run_at"]) <= cutoff
     ]
     if not rows:
         return []
-    members = (
-        svc.table("team_members")
-        .select("team_id, user_id")
-        .in_("team_id", list({r["team_id"] for r in rows}))
-        .execute()
-        .data
-        or []
-    )
-    still_in = {(m["team_id"], m["user_id"]) for m in members}
+    teams = sorted({r["team_id"] for r in rows})
+    still_in: set[tuple[str, str]] = set()
+    for i in range(0, len(teams), IN_CHUNK):
+        members = (
+            svc.table("team_members")
+            .select("team_id, user_id")
+            .in_("team_id", teams[i : i + IN_CHUNK])
+            .execute()
+            .data
+            or []
+        )
+        still_in |= {(m["team_id"], m["user_id"]) for m in members}
     return [r for r in rows if (r["team_id"], r["user_id"]) in still_in]
 
 
@@ -128,8 +134,6 @@ def run(*, dry_run: bool = False) -> tuple[int, int, int]:
     """(searches run, new suggestions, searches with an error)."""
     svc = service_client()
     now = datetime.now(UTC)
-    if not any(_feature_owners(svc)):
-        return 0, 0, 0
     # Every day, not only when a search is due: a search saved today, and the
     # preview, match against this copy.
     copied = refresh_feed(svc, now.date(), dry_run=dry_run)

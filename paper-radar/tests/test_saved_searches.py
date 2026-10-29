@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -120,15 +121,13 @@ def test_due_searches(monkeypatch):
     yesterday = (now - timedelta(days=1)).isoformat()
     svc = _Svc(
         {
-            "team_features": [{"team_id": "lab"}],
-            "user_features": [{"user_id": "tester"}],
             "saved_searches": [
                 {"id": "new", "team_id": "lab", "user_id": "u1", "last_run_at": None},
                 {"id": "weekly", "team_id": "lab", "user_id": "u1", "last_run_at": week_ago},
                 {"id": "recent", "team_id": "lab", "user_id": "u1", "last_run_at": yesterday},
                 {"id": "left-lab", "team_id": "lab", "user_id": "gone", "last_run_at": None},
                 {"id": "trying", "team_id": "other", "user_id": "tester", "last_run_at": None},
-                {"id": "no-feature", "team_id": "other", "user_id": "u2", "last_run_at": None},
+                {"id": "other-lab", "team_id": "other", "user_id": "u2", "last_run_at": None},
             ],
             "team_members": [
                 {"team_id": "lab", "user_id": "u1"},
@@ -137,7 +136,57 @@ def test_due_searches(monkeypatch):
             ],
         }
     )
-    assert [s["id"] for s in run.due_searches(svc, now)] == ["new", "weekly", "trying"]
+    assert [s["id"] for s in run.due_searches(svc, now)] == ["new", "weekly", "trying", "other-lab"]
+
+
+class _Paged:
+    """A table that honours range() and in_(), recording each in_ filter."""
+
+    def __init__(self, rows, ins):
+        self.rows, self.ins, self.lo, self.hi = rows, ins, 0, None
+
+    def __getattr__(self, name):
+        return lambda *a, **k: self
+
+    def range(self, lo, hi):
+        self.lo, self.hi = lo, hi
+        return self
+
+    def in_(self, col, values):
+        self.ins.append(values)
+        self.rows = [r for r in self.rows if r[col] in values]
+        return self
+
+    def execute(self):
+        return _Rows(self.rows[self.lo : None if self.hi is None else self.hi + 1])
+
+
+def test_due_searches_reads_every_page_and_chunks_the_labs(monkeypatch):
+    monkeypatch.setattr(run, "PAGE", 3)
+    monkeypatch.setattr(run, "IN_CHUNK", 2)
+    now = datetime(2026, 10, 28, 5, 40, tzinfo=UTC)
+    searches = [
+        {"id": f"s{i}", "team_id": f"lab{i}", "user_id": "u", "last_run_at": None} for i in range(7)
+    ]
+    members = [{"team_id": f"lab{i}", "user_id": "u"} for i in range(7)]
+    ins: list[list[str]] = []
+    tables = {"saved_searches": searches, "team_members": members}
+    svc = SimpleNamespace(table=lambda name: _Paged(tables[name], ins))
+    assert [s["id"] for s in run.due_searches(svc, now)] == [f"s{i}" for i in range(7)]
+    assert [len(chunk) for chunk in ins] == [2, 2, 2, 1]
+
+
+def test_the_cap_counts_every_lab():
+    def svc(rows):
+        return _Svc({"saved_searches": rows})
+
+    other = [{"team_id": f"lab{i % 5}"} for i in range(ss.MAX_SEARCHES_TOTAL)]
+    with pytest.raises(ss.Refused, match="across your labs"):
+        ss.checked_new(svc(other), "u", "new-lab", "x", "tls", ["pubmed"])
+    here = [{"team_id": "lab"}] * ss.MAX_SEARCHES
+    with pytest.raises(ss.Refused, match=f"You have {ss.MAX_SEARCHES} saved searches;"):
+        ss.checked_new(svc(here), "u", "lab", "x", "tls", ["pubmed"])
+    assert ss.checked_new(svc(here[:-1]), "u", "lab", "x", "tls", ["pubmed"])[0] == "x"
 
 
 class _Updates:
@@ -229,7 +278,6 @@ def test_import_keeps_the_source_doi_and_abstract_when_the_lookup_lacks_them(mon
 def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
     copied: list[date] = []
     monkeypatch.setattr(run, "service_client", lambda: None)
-    monkeypatch.setattr(run, "_feature_owners", lambda svc: ({"lab"}, set()))
     monkeypatch.setattr(run, "refresh_feed", lambda svc, today, dry_run: copied.append(today) or 0)
     monkeypatch.setattr(ss, "retry_stuck_imports", lambda svc, now: 0)
     monkeypatch.setattr(run, "due_searches", lambda svc, now: [])
@@ -239,13 +287,6 @@ def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
     assert len(copied) == 1
     # Yesterday's leftovers are embedded on a day with nothing due, too.
     assert embedded == [run.EMBED_BUDGET]
-
-
-def test_nothing_runs_without_the_feature(monkeypatch):
-    monkeypatch.setattr(run, "service_client", lambda: None)
-    monkeypatch.setattr(run, "_feature_owners", lambda svc: (set(), set()))
-    monkeypatch.setattr(run, "refresh_feed", lambda *a, **k: pytest.fail("no copying"))
-    assert run.run() == (0, 0, 0)
 
 
 def test_sources_are_checked_and_named_by_key():

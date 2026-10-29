@@ -407,8 +407,10 @@ def test_bibtex_preflight_refuses_a_lab_you_are_not_in(monkeypatch):
     attacker-controlled and a "duplicate" verdict tells you a lab you can't see holds
     that DOI — an oracle over any lab's corpus."""
     import api.app as app_mod
+    import api.supa as supa_mod
 
     monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "attacker")
+    monkeypatch.setattr(supa_mod, "get_user_id", lambda _t: "attacker")  # the membership check
 
     class _NoMembership:
         def table(self, _n):
@@ -427,6 +429,7 @@ def test_bibtex_preflight_refuses_a_lab_you_are_not_in(monkeypatch):
             return type("R", (), {"data": []})()  # not a member of anything
 
     monkeypatch.setattr(app_mod, "user_client", lambda _t: _NoMembership())
+    monkeypatch.setattr(supa_mod, "user_client", lambda _t: _NoMembership())
 
     for path in ("/import/bibtex/preflight", "/import/bibtex"):
         resp = client.post(
@@ -543,11 +546,13 @@ def test_posting_to_a_lab_you_are_not_in_writes_nothing(monkeypatch):
     insert (which happens after), a non-member's hand-typed metadata would already be
     on a row every other lab sharing that paper can see by the time the 403 lands."""
     import api.app as app_mod
+    import api.supa as supa_mod
 
     def _no_writes(*_a, **_k):
         raise AssertionError("nothing may be written before membership is checked")
 
     monkeypatch.setattr(app_mod, "get_user_id", lambda _t: "attacker")
+    monkeypatch.setattr(supa_mod, "get_user_id", lambda _t: "attacker")  # the membership check
     monkeypatch.setattr(app_mod, "_upsert_paper", _no_writes)
     monkeypatch.setattr(app_mod, "_create_post", _no_writes)
     monkeypatch.setattr(app_mod, "fetch_metadata", _no_writes)
@@ -569,6 +574,7 @@ def test_posting_to_a_lab_you_are_not_in_writes_nothing(monkeypatch):
             return type("R", (), {"data": []})()  # not a member of anything
 
     monkeypatch.setattr(app_mod, "user_client", lambda _t: _NoMembership())
+    monkeypatch.setattr(supa_mod, "user_client", lambda _t: _NoMembership())
 
     resp = client.post(
         "/posts",

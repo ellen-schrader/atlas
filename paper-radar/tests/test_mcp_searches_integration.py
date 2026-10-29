@@ -8,8 +8,7 @@ the way the hosted server calls them; the literature sources stubbed.
 What it holds the tools to: a search saved from Claude previews first and then
 files suggestions for its owner alone; importing previews first and then posts
 to the lab as that person; nobody can answer another person's suggestions;
-and in a lab without the feature every tool refuses. Which tools are listed to
-whom is test_mcp_searches.py's.
+and in a lab one is not in every tool refuses.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from api import paper_identity  # noqa: E402
 from api import saved_searches as ss  # noqa: E402
 from api.config import get_api_settings  # noqa: E402
 from api.supa import _anon_client, service_client  # noqa: E402
-from atlas_mcp import features, http, lab, searches  # noqa: E402
+from atlas_mcp import http, lab, searches  # noqa: E402
 from paper_radar.ingest.metadata import PaperMetadata  # noqa: E402
 from paper_radar.search import sources  # noqa: E402
 from paper_radar.search.sources import Hit  # noqa: E402
@@ -73,7 +72,6 @@ def _local(monkeypatch):
     monkeypatch.setattr(paper_identity, "published_record", lambda meta: None)
     monkeypatch.setattr(sources, "search_arxiv", lambda *a, **k: [])
     monkeypatch.setattr(searches.threading, "Thread", _Now)
-    features._enabled_cache.clear()
     yield
     for cached in (get_api_settings, service_client, _anon_client):
         cached.cache_clear()
@@ -115,7 +113,7 @@ class _World:
         ).json()["access_token"]
         return uid, web
 
-    def lab(self, owner: tuple[str, str], *members: str, feature: bool = True) -> str:
+    def lab(self, owner: tuple[str, str], *members: str) -> str:
         """A lab with Claude access on; ``owner`` is (id, web token)."""
         tid = str(uuid.uuid4())
         self.teams.append(tid)
@@ -126,8 +124,6 @@ class _World:
         self._post("team_members", {"team_id": tid, "user_id": owner[0], "role": "owner"})
         for uid in members:
             self._post("team_members", {"team_id": tid, "user_id": uid, "role": "member"})
-        if feature:
-            self._post("team_features", {"team_id": tid, "feature": ss.FEATURE})
         httpx.post(
             f"{REST}/rpc/set_mcp_access",
             headers=bearer(owner[1]),
@@ -173,7 +169,7 @@ def _as(person: tuple[str, str], tool, **kwargs) -> str:
 
 
 def _connected(world) -> tuple[tuple[str, str], tuple[str, str], str]:
-    """Two members of a lab with the feature, each connected through Claude."""
+    """Two members of a lab, each connected through Claude."""
     a_id, a_web = world.user()
     b_id, b_web = world.user()
     team = world.lab((a_id, a_web), b_id)
@@ -260,21 +256,23 @@ def test_importing_previews_then_posts_as_the_person(world, monkeypatch):
     )
 
 
-def test_every_tool_refuses_in_a_lab_without_the_feature(world):
+def test_every_tool_refuses_in_a_lab_one_is_not_in(world):
+    a, _b, _team = _connected(world)
     c_id, c_web = world.user()
-    team = world.lab((c_id, c_web), feature=False)
-    c = (c_id, connector_token(c_web)[0])
-    assert not searches.entitled(c_id)
+    team = world.lab((c_id, c_web))
     calls = [
         (searches.list_saved_searches, {}),
         (searches.list_suggestions, {}),
         (searches.import_suggestions, {"suggestion_ids": [str(uuid.uuid4())]}),
         (searches.dismiss_suggestions, {"suggestion_ids": [str(uuid.uuid4())]}),
-        (searches.create_saved_search, {"name": "x", "query": "tls"}),
+        (searches.create_saved_search, {"name": "x", "query": "tls", "confirm": True}),
     ]
     for tool, kwargs in calls:
-        out = _as(c, tool, team_id=team, **kwargs)
-        assert out == f"Error: {searches.NOT_AVAILABLE}", (tool.__name__, out)
+        out = _as(a, tool, team_id=team, **kwargs)
+        assert out.startswith("Error: "), (tool.__name__, out)
+    assert (
+        not service_client().table("saved_searches").select("id").eq("team_id", team).execute().data
+    )
 
 
 def test_saving_at_the_cap_is_refused_before_anything_is_searched(world, monkeypatch):

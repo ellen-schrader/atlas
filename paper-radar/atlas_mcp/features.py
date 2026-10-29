@@ -1,6 +1,6 @@
-"""Feature switches for the hosted connector's dark tools (clinical trials,
-saved searches): whether to list a feature's tools to someone at all
-(`entitled`), and the per-lab check each of those tools makes (`team_for`).
+"""Feature switches for the hosted connector's dark tools (clinical trials):
+whether to list a feature's tools to someone at all (`entitled`), and the
+per-lab check each of those tools makes (`team_for`).
 
 Both read with the service role: the switch tables are closed to connector
 tokens, like everything the database gate doesn't open.
@@ -8,16 +8,12 @@ tokens, like everything the database gate doesn't open.
 
 from __future__ import annotations
 
-import functools
 import threading
 import time
-
-import anyio
 
 from api.supa import service_client
 
 from . import lab
-from .tools import TOOL_THREADS
 
 _enabled_cache: dict[str, tuple[float, frozenset[str]]] = {}
 _cache_lock = threading.Lock()
@@ -84,9 +80,3 @@ def team_for(team_id: str | None, feature: str, refusal: str) -> dict:
     team = lab.resolve_team(team_id)
     check(team, feature, refusal)
     return team
-
-
-def offload(fn, *args):
-    """Run blocking work off the event loop, as the caller (anyio copies the
-    context), within the connector's own thread budget."""
-    return anyio.to_thread.run_sync(functools.partial(fn, *args), limiter=TOOL_THREADS)

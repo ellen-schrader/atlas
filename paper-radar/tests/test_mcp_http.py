@@ -24,7 +24,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 from api import embeddings  # noqa: E402
 from atlas_mcp import http as mcp_http  # noqa: E402
-from atlas_mcp import lab  # noqa: E402
+from atlas_mcp import lab, searches  # noqa: E402
 from atlas_mcp.papers import READ_TOOLS  # noqa: E402
 
 SUPABASE = "https://project.supabase.test"
@@ -194,11 +194,11 @@ def test_protected_resource_metadata_points_at_supabase(server):
     assert [s.rstrip("/") for s in meta["authorization_servers"]] == [ISSUER]
 
 
-def test_only_the_read_only_paper_tools_are_served(server):
+def test_the_read_only_paper_and_saved_searches_tools_are_served(server):
     r = _rpc(server, "tools/list")
     assert r.status_code == 200, r.text
     names = {t["name"] for t in r.json()["result"]["tools"]}
-    assert names == {t.__name__ for t in READ_TOOLS}
+    assert names == {t.__name__ for t in READ_TOOLS} | searches.SEARCH_TOOL_NAMES
     assert "post_paper" not in names and "get_figure_image" not in names
 
 

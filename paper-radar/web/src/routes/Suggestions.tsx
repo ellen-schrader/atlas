@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 
 import { SelectCheckbox } from "@/components/ExportBar";
-import { RequireFeature } from "@/components/RequireFeature";
 import { SearchDialog } from "@/components/suggestions/SearchDialog";
 import { useToast } from "@/components/Toast";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -36,7 +35,6 @@ import { invalidateAfterPost } from "@/lib/paperLookup";
 import {
   ARXIV_BIOLOGY,
   PAPER_SOURCE_LABEL,
-  SAVED_SEARCHES_FEATURE,
   type SavedSearch,
   type SearchFields,
   type SearchIdea,
@@ -72,14 +70,6 @@ function savedOrder(): Order {
 }
 
 export default function Suggestions() {
-  return (
-    <RequireFeature feature={SAVED_SEARCHES_FEATURE}>
-      <SuggestionsPage />
-    </RequireFeature>
-  );
-}
-
-function SuggestionsPage() {
   const { team } = useAppContext();
   const qc = useQueryClient();
   const toast = useToast();

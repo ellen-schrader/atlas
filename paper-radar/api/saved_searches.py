@@ -6,12 +6,10 @@ import the ones they want into the lab's library or dismiss the rest. Searches
 and suggestions are personal; imports go to the shared library.
 
 The tables have no grants for signed-in users (see the migration): everything
-goes through here, which checks the feature and membership as the caller and
-then reads and writes with the service role, like the trials tools. The
-functions above the router take the service client, so the job and the Claude
-tools use the same code.
-
-Every endpoint answers 404 unless the feature is on for the caller in that lab.
+goes through here, which checks membership as the caller and then reads and
+writes with the service role, like the trials tools. The functions above the
+router take the service client, so the job and the Claude tools use the same
+code.
 """
 
 from __future__ import annotations
@@ -36,16 +34,18 @@ from paper_radar.search import sources
 from paper_radar.search.sources import Hit, SourceError
 
 from . import embeddings, taste
-from .deps import require_feature, require_token
+from .deps import require_member, require_token
 from .ratelimit import PerUserRateLimiter
 from .search_ideas import search_ideas
 from .supa import service_client
 
 log = logging.getLogger(__name__)
 
-FEATURE = "saved_searches"
 SOURCES = ("pubmed", "biorxiv", "arxiv")
 MAX_SEARCHES = 10  # per person per lab
+# Per person across their labs: anyone can make a lab, and every search costs
+# the daily job time (and Voyage calls) that the other labs' searches wait on.
+MAX_SEARCHES_TOTAL = 20
 MAX_PER_CALL = 50  # suggestions imported or dismissed in one request
 WINDOW_DAYS = 7  # what a first run, and the preview, look back over
 OVERLAP_DAYS = 3  # later runs reach back past the last one: arXiv announces a
@@ -646,10 +646,6 @@ def retry_stuck_imports(svc, now: datetime) -> int:
 # --- API -----------------------------------------------------------------------------------
 
 
-def _require_feature(token: str, team_id: str) -> str:
-    return require_feature(token, team_id, FEATURE)
-
-
 class Refused(Exception):
     """A request this module turns down, in words for the person; ``status`` is
     the HTTP status the API answers with."""
@@ -772,17 +768,15 @@ def checked_new(
     """(name, query, sources) for a new search, checked, under the person's
     cap; Refused if not."""
     name, query, picked = checked_name(name), checked_query(query), checked_sources(picked)
-    have = (
-        svc.table("saved_searches")
-        .select("id", count="exact")
-        .eq("user_id", user_id)
-        .eq("team_id", team_id)
-        .execute()
-        .count
-        or 0
-    )
-    if have >= MAX_SEARCHES:
+    mine = svc.table("saved_searches").select("team_id").eq("user_id", user_id).execute().data
+    here = sum(r["team_id"] == team_id for r in mine or [])
+    if here >= MAX_SEARCHES:
         raise Refused(f"You have {MAX_SEARCHES} saved searches; delete one first.", 409)
+    if len(mine or []) >= MAX_SEARCHES_TOTAL:
+        raise Refused(
+            f"You have {MAX_SEARCHES_TOTAL} saved searches across your labs; delete one first.",
+            409,
+        )
     return name, query, picked
 
 
@@ -1020,7 +1014,7 @@ def run_now(search: dict) -> None:
 @router.get("", response_model=list[SavedSearch])
 def my_searches(team_id: UUID, token: str = Depends(require_token)) -> list[SavedSearch]:
     team = str(team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     return [_search_out(r, r["pending"]) for r in own_searches(service_client(), user_id, team)]
 
 
@@ -1035,7 +1029,7 @@ def create_search(
     req: SearchIn, background: BackgroundTasks, token: str = Depends(require_token)
 ) -> SavedSearch:
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     svc = service_client()
     with _as_http():
         row = new_search(svc, user_id, team, req.name, req.query, req.sources, req.arxiv_categories)
@@ -1051,7 +1045,7 @@ def update_search(
     token: str = Depends(require_token),
 ) -> SavedSearch:
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     svc = service_client()
     current = _own_search(svc, str(search_id), user_id, team)
     changes: dict = {}
@@ -1093,7 +1087,7 @@ def ideas(team_id: UUID, token: str = Depends(require_token)) -> list[SearchIdea
     """A few searches to start from, built from the caller's tags (see
     api/search_ideas.py). Nothing is saved."""
     team = str(team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     svc = service_client()
     lab = svc.table("teams").select("name").eq("id", team).limit(1).execute().data or []
     rows = (
@@ -1114,7 +1108,7 @@ def ideas(team_id: UUID, token: str = Depends(require_token)) -> list[SearchIdea
 def order_searches(req: SearchOrder, token: str = Depends(require_token)) -> None:
     """Put the caller's searches in this order, highest priority first."""
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     with _as_http():
         reorder_searches(service_client(), user_id, team, [str(i) for i in req.ids])
 
@@ -1123,7 +1117,7 @@ def order_searches(req: SearchOrder, token: str = Depends(require_token)) -> Non
 def delete_search(search_id: UUID, team_id: UUID, token: str = Depends(require_token)) -> None:
     """Delete the caller's search and its waiting suggestions, except papers
     another of their searches also found (those stay under that one)."""
-    user_id = _require_feature(token, str(team_id))
+    user_id = require_member(token, str(team_id))
     done = (
         service_client()
         .rpc(
@@ -1141,7 +1135,7 @@ def delete_search(search_id: UUID, team_id: UUID, token: str = Depends(require_t
 def preview(req: PreviewIn, token: str = Depends(require_token)) -> list[SourceResult]:
     """What the query finds over the past week, before it is saved."""
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     with _as_http():
         query, picked = checked_query(req.query), checked_sources(req.sources)
         categories = checked_categories(req.arxiv_categories)
@@ -1157,7 +1151,7 @@ def my_suggestions(
 ) -> list[Suggestion]:
     """The caller's waiting suggestions: each search's best-fitting hundred
     (``order=relevant``, scored), or its newest (``order=newest``, unscored)."""
-    user_id = _require_feature(token, str(team_id))
+    user_id = require_member(token, str(team_id))
     svc = service_client()
     rows = None
     if order == "relevant":
@@ -1191,7 +1185,7 @@ def import_suggestions(
     """Add the papers to the lab. They appear within a minute or so: each is
     looked up in full first, as posting a link is."""
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     ids = [str(i) for i in req.ids]
     taken = take_pending(service_client(), user_id, team, ids, "importing")
     if taken:
@@ -1202,6 +1196,6 @@ def import_suggestions(
 @router.post("/suggestions/dismiss", response_model=Decided)
 def dismiss_suggestions(req: Decide, token: str = Depends(require_token)) -> Decided:
     team = str(req.team_id)
-    user_id = _require_feature(token, team)
+    user_id = require_member(token, team)
     taken = take_pending(service_client(), user_id, team, [str(i) for i in req.ids], "dismissed")
     return Decided(count=len(taken))

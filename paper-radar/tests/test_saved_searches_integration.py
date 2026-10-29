@@ -7,7 +7,7 @@ and database, with the literature sources stubbed.
 What it holds the feature to: searches and suggestions are personal; one person
 dismissing a paper does not hide it from anyone else; importing posts it to the
 lab as that person; papers the lab already has are not suggested; nobody can
-read or change another person's search; and without the feature it all 404s.
+read or change another person's search; and nobody outside the lab gets in.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ class _World:
         )
         return uid, {"Authorization": f"Bearer {token}"}
 
-    def lab(self, *members: str, feature: bool = True) -> str:
+    def lab(self, *members: str) -> str:
         tid = str(uuid.uuid4())
         self.teams.append(tid)
         self.admin.table("teams").insert(
@@ -97,10 +97,6 @@ class _World:
         for uid in members:
             self.admin.table("team_members").insert(
                 {"team_id": tid, "user_id": uid, "role": "member"}
-            ).execute()
-        if feature:
-            self.admin.table("team_features").insert(
-                {"team_id": tid, "feature": ss.FEATURE}
             ).execute()
         return tid
 
@@ -292,27 +288,21 @@ def test_bad_query_and_limits(world, monkeypatch):
     assert full.status_code == 409
 
 
-def test_without_the_feature_everything_404s(world):
+def test_every_lab_has_it_but_only_for_its_members(world):
     a, a_auth = world.user()
-    lab = world.lab(a, feature=False)
+    lab = world.lab(a)  # no feature switch anywhere
     client = TestClient(app)
-    assert client.get("/saved-searches", params={"team_id": lab}, headers=a_auth).status_code == 404
-    assert (
-        client.get(
-            "/saved-searches/suggestions", params={"team_id": lab}, headers=a_auth
-        ).status_code
-        == 404
-    )
-    made = client.post(
-        "/saved-searches", json={"team_id": lab, "name": "x", "query": "tls"}, headers=a_auth
-    )
-    assert made.status_code == 404
-    # Nor does it work for a lab one is not in, feature or not.
-    b, b_auth = world.user()
+    assert client.get("/saved-searches", params={"team_id": lab}, headers=a_auth).status_code == 200
+    b, _b_auth = world.user()
     other = world.lab(b)
-    assert (
-        client.get("/saved-searches", params={"team_id": other}, headers=a_auth).status_code == 404
-    )
+    for out in (
+        client.get("/saved-searches", params={"team_id": other}, headers=a_auth),
+        client.get("/saved-searches/suggestions", params={"team_id": other}, headers=a_auth),
+        client.post(
+            "/saved-searches", json={"team_id": other, "name": "x", "query": "tls"}, headers=a_auth
+        ),
+    ):
+        assert out.status_code == 403, out.text
 
 
 def test_connectors_cannot_read_the_tables(world):
