@@ -1,5 +1,5 @@
-import { type CSSProperties, type RefObject, useCallback, useEffect, useRef, useState } from "react";
-import { type QueryKey, useQueryClient } from "@tanstack/react-query";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Sparkle, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
@@ -10,145 +10,67 @@ import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
 import { useToast } from "@/components/Toast";
 import type { RecommendationsResult } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
-import type { Recommendation, RecommendationReason } from "@/lib/types";
+import type { Recommendation, RecommendationReason, RecFeedback } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
 
-/** 👍 / 👎 on a recommendation (#182), both private to you. 👍 "More like this"
- *  (paper_status.liked_at) is a taste signal that doesn't touch your reading
- *  list; the card stays, its thumb filled, until the row next refreshes. 👎
- *  "Not interested" (dismissed_at) is no signal at all, and the card goes at
- *  once. Either way the server won't offer the paper again, so both toasts
- *  carry an Undo: after the refresh it is the only way back.
+/** 👍 / 👎 on a recommendation (#182), both private to you, both switches on
+ *  the card: click again to take it back, click the other to change your mind.
+ *  👍 "More like this" (paper_status.liked_at) is a taste signal that doesn't
+ *  touch your reading list. 👎 "Not interested" (dismissed_at) is no signal at
+ *  all; the card dims but stays, so it can be taken back. Either way the paper
+ *  isn't offered again once the row refreshes.
  *
- *  Both edit the cached Discover list rather than refetching it, so the other
- *  cards don't reshuffle under the pointer. One card's writes go out in click
- *  order, so a quick 👍 then 👎 can't land the other way round. */
-function useRecFeedback(userId: string, teamId: string, rowRef: RefObject<HTMLDivElement | null>) {
+ *  The answer lives in the cached Discover list, so it survives Home
+ *  remounting, and the row isn't refetched, so the cards don't reshuffle under
+ *  the pointer. One card's writes go out in click order, so quick clicks can't
+ *  land the other way round (the database keeps the later answer as well). */
+function useRecFeedback(userId: string, teamId: string) {
   const qc = useQueryClient();
   const toast = useToast();
-  const key = ["recommendations", teamId, "discover"];
   const chains = useRef(new Map<string, Promise<unknown>>());
-  // When each 👍 on screen was given, so undoing a 👎 can put it back as it was.
-  const likedAt = useRef(new Map<string, string>());
 
-  function inOrder<T>(paperId: string, run: () => Promise<T>): Promise<T> {
-    const next = (chains.current.get(paperId) ?? Promise.resolve()).then(run, run);
-    chains.current.set(paperId, next);
-    return next;
-  }
-
-  type Removed = [QueryKey, number, Recommendation];
-
-  function edit(paperId: string, change: (rec: Recommendation) => Recommendation) {
-    qc.setQueriesData<RecommendationsResult>({ queryKey: key }, (data) =>
-      data && {
-        ...data,
-        results: data.results.map((r) => (r.post.papers.id === paperId ? change(r) : r)),
-      },
+  // `from`: change only a card still showing this answer.
+  function show(paperId: string, feedback: RecFeedback, from?: { feedback: RecFeedback }) {
+    qc.setQueriesData<RecommendationsResult>(
+      { queryKey: ["recommendations", teamId, "discover"] },
+      (data) =>
+        data && {
+          ...data,
+          results: data.results.map((r) =>
+            r.post.papers.id === paperId && (!from || r.feedback === from.feedback)
+              ? { ...r, feedback }
+              : r,
+          ),
+        },
     );
   }
 
-  function take(paperId: string): Removed[] {
-    const removed: Removed[] = [];
-    for (const [k, data] of qc.getQueriesData<RecommendationsResult>({ queryKey: key })) {
-      const at = data?.results.findIndex((r) => r.post.papers.id === paperId) ?? -1;
-      if (!data || at < 0) continue;
-      removed.push([k, at, data.results[at]]);
-      qc.setQueryData<RecommendationsResult>(k, {
-        ...data,
-        results: data.results.filter((_, j) => j !== at),
-      });
-    }
-    return removed;
-  }
-
-  function putBack(removed: Removed[]) {
-    for (const [k, at, rec] of removed) {
-      qc.setQueryData<RecommendationsResult>(k, (data) => {
-        if (!data || data.results.some((r) => r.post.papers.id === rec.post.papers.id)) return data;
-        const results = [...data.results];
-        results.splice(Math.min(at, results.length), 0, rec);
-        return { ...data, results };
-      });
-    }
-  }
-
-  // The focused 👎 goes with its card, so a keyboard user would land at the top
-  // of the page. Its neighbour is focused before the card goes: cards are keyed,
-  // so that element survives the re-render, which a lookup by position
-  // afterwards can't promise (it can run before React has removed the card).
-  function keepFocus() {
-    const row = rowRef.current;
-    const card = document.activeElement?.closest("[data-rec-card]");
-    if (!row || !card || !row.contains(card)) return;
-    const cards = Array.from(row.querySelectorAll<HTMLElement>("[data-rec-card]"));
-    const at = cards.indexOf(card as HTMLElement);
-    (cards[at + 1] ?? cards[at - 1])?.focus();
-  }
-
-  async function write(paperId: string, fields: Record<string, string | null>) {
-    const { error } = await supabase
-      .from("paper_status")
-      .upsert(
-        { user_id: userId, team_id: teamId, paper_id: paperId, ...fields },
-        { onConflict: "user_id,paper_id,team_id" },
-      );
+  async function write(paperId: string, feedback: RecFeedback) {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("paper_status").upsert(
+      {
+        user_id: userId,
+        team_id: teamId,
+        paper_id: paperId,
+        liked_at: feedback === "up" ? now : null,
+        dismissed_at: feedback === "down" ? now : null,
+      },
+      { onConflict: "user_id,paper_id,team_id" },
+    );
     return !error;
   }
 
-  async function like(paperId: string, on: boolean) {
-    edit(paperId, (r) => ({ ...r, liked: on }));
-    const now = new Date().toISOString();
-    if (on) likedAt.current.set(paperId, now);
-    else likedAt.current.delete(paperId);
-    const ok = await inOrder(paperId, () => write(paperId, { liked_at: on ? now : null }));
-    if (!ok) {
-      // Only if nothing newer has been clicked on this card since.
-      edit(paperId, (r) => (r.liked === on ? { ...r, liked: !on } : r));
+  return async function answer(paperId: string, was: RecFeedback, next: RecFeedback) {
+    show(paperId, next);
+    const run = () => write(paperId, next);
+    const done = (chains.current.get(paperId) ?? Promise.resolve()).then(run, run);
+    chains.current.set(paperId, done);
+    if (!(await done)) {
+      // Back to how it was, unless something newer has been clicked since.
+      show(paperId, was, { feedback: next });
       toast({ message: "Couldn’t save that. Try again." });
-      return;
     }
-    if (on) {
-      toast({
-        message: "You’ll see more like this",
-        actionLabel: "Undo",
-        onAction: async () => {
-          likedAt.current.delete(paperId);
-          const undone = await inOrder(paperId, () => write(paperId, { liked_at: null }));
-          if (!undone) throw new Error("Undo failed");
-          edit(paperId, (r) => ({ ...r, liked: false }));
-        },
-      });
-    }
-  }
-
-  async function dislike(paperId: string) {
-    keepFocus();
-    const removed = take(paperId);
-    const liked = likedAt.current.get(paperId) ?? null;
-    likedAt.current.delete(paperId);
-    // A 👎 replaces a 👍 given a moment ago on the same card.
-    const dismissed = { dismissed_at: new Date().toISOString(), liked_at: null };
-    if (!(await inOrder(paperId, () => write(paperId, dismissed)))) {
-      putBack(removed);
-      toast({ message: "Couldn’t hide that. Try again." });
-      return;
-    }
-    toast({
-      message: "You won’t see this one again",
-      actionLabel: "Undo",
-      onAction: async () => {
-        // Back as it was, 👍 included. Throw so the toast stays open and offers
-        // Undo again.
-        const back = { dismissed_at: null, liked_at: liked };
-        if (!(await inOrder(paperId, () => write(paperId, back)))) throw new Error("Undo failed");
-        if (liked) likedAt.current.set(paperId, liked);
-        putBack(removed.map(([k, at, rec]) => [k, at, { ...rec, liked: !!liked }]));
-      },
-    });
-  }
-
-  return { like, dislike };
+  };
 }
 
 interface RecsState {
@@ -188,7 +110,7 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
-  const feedback = useRecFeedback(userId, teamId, rowRef);
+  const answer = useRecFeedback(userId, teamId);
 
   const measure = useCallback(() => {
     const el = rowRef.current;
@@ -265,8 +187,7 @@ export function RecommendationsRow({
                 userId={userId}
                 bookmarked={bookmarkedIds.has(r.post.papers.id)}
                 onOpen={() => onOpen(r.post.papers.id)}
-                onLike={(on) => void feedback.like(r.post.papers.id, on)}
-                onDislike={() => void feedback.dislike(r.post.papers.id)}
+                onAnswer={(next) => void answer(r.post.papers.id, r.feedback, next)}
               />
             </div>
           ))}
@@ -334,8 +255,7 @@ export function RecCard({
   userId,
   bookmarked,
   onOpen,
-  onLike,
-  onDislike,
+  onAnswer,
 }: {
   rec: Recommendation;
   teamId: string;
@@ -343,14 +263,16 @@ export function RecCard({
   userId: string;
   bookmarked: boolean;
   onOpen: () => void;
-  onLike: (on: boolean) => void;
-  onDislike: () => void;
+  onAnswer: (next: RecFeedback) => void;
 }) {
   const post = rec.post;
   const p = post.papers;
   const tags = (post.tags.length ? post.tags : p.tags).slice(0, 2);
   const topic = null; // no stable topic id yet — see TopicDot
   const eyebrow = [p.venue, p.year].filter(Boolean).join(" · ");
+  const down = rec.feedback === "down";
+  // A 👎 card stays where it is, faded, until the row refreshes.
+  const fade = cn("transition-opacity", down && "opacity-40");
 
   return (
     // role="button", not <button>: the bookmark and thumbs inside are buttons.
@@ -371,12 +293,12 @@ export function RecCard({
       {/* The same generative spine as PaperCard, so a paper wears the same colour
           on Home as in Papers. Stronger than PaperCard's 0.35: a row of three to
           five cards doesn't shout the way a full grid does. */}
-      <div className="absolute inset-x-0 top-0 h-1.5 opacity-75" aria-hidden>
+      <div className={cn("absolute inset-x-0 top-0 h-1.5 opacity-75", down && "opacity-30")} aria-hidden>
         <Cover seed={p.id} />
       </div>
       <div className="flex min-w-0 items-center gap-2 text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
         <TopicDot topic={topic} />
-        <span className="min-w-0 flex-1 truncate">{eyebrow}</span>
+        <span className={cn("min-w-0 flex-1 truncate", fade)}>{eyebrow}</span>
         {/* Saving acts on the paper, so it sits apart from the thumbs, which
             answer the recommendation. Negative margins keep the eyebrow's
             height and the icon's alignment with the card's edge. */}
@@ -393,11 +315,18 @@ export function RecCard({
           />
         </span>
       </div>
-      <h3 className="mt-2.5 line-clamp-3 h-[57px] text-card font-semibold leading-[19px] tracking-snug">
+      <h3
+        className={cn(
+          "mt-2.5 line-clamp-3 h-[57px] text-card font-semibold leading-[19px] tracking-snug",
+          fade,
+        )}
+      >
         {p.title ?? p.url}
       </h3>
-      <div className="mt-2 truncate text-meta text-muted">{formatAuthors(p.authors, 3)}</div>
-      <div className="mt-2 flex h-6 min-w-0 gap-1.5">
+      <div className={cn("mt-2 truncate text-meta text-muted", fade)}>
+        {formatAuthors(p.authors, 3)}
+      </div>
+      <div className={cn("mt-2 flex h-6 min-w-0 gap-1.5", fade)}>
         {tags[0] && <Chip className="shrink-0">{tags[0]}</Chip>}
         {tags[1] && (
           <Chip className="min-w-0 overflow-hidden">
@@ -407,7 +336,12 @@ export function RecCard({
       </div>
       <div className="mt-auto pt-3">
         <div className="flex items-start gap-2 border-t border-border pt-3">
-          {rec.reason ? (
+          {down ? (
+            // Says what 👎 did, so taking it back is the obvious next move.
+            <p className="h-[34px] flex-1 text-meta leading-[17px] text-muted">
+              You won’t see this again
+            </p>
+          ) : rec.reason ? (
             <>
               <Sparkle size={12} aria-hidden className="mt-[3px] shrink-0 fill-accent text-accent" />
               <p className="line-clamp-2 h-[34px] flex-1 text-meta leading-[17px] text-muted">
@@ -424,32 +358,51 @@ export function RecCard({
             onClick={(e) => e.stopPropagation()}
             className="-mr-2 -mt-2 flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:gap-3"
           >
-            <button
-              type="button"
-              onClick={() => onLike(!rec.liked)}
-              aria-pressed={!!rec.liked}
-              aria-label="More like this"
-              title="More like this"
-              className={cn(
-                "tap-target grid h-8 w-8 place-items-center rounded-full transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                rec.liked ? "text-accent" : "text-muted hover:text-fg",
-              )}
-            >
-              <ThumbsUp size={15} fill={rec.liked ? "currentColor" : "none"} aria-hidden />
-            </button>
-            <button
-              type="button"
-              onClick={onDislike}
-              aria-label="Not interested"
-              title="Not interested"
-              className="tap-target grid h-8 w-8 place-items-center rounded-full text-muted transition hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              <ThumbsDown size={15} aria-hidden />
-            </button>
+            <ThumbButton
+              label="More like this"
+              Icon={ThumbsUp}
+              on={rec.feedback === "up"}
+              onClick={() => onAnswer(rec.feedback === "up" ? undefined : "up")}
+            />
+            <ThumbButton
+              label="Not interested"
+              Icon={ThumbsDown}
+              on={down}
+              onClick={() => onAnswer(down ? undefined : "down")}
+            />
           </span>
         </div>
       </div>
     </div>
+  );
+}
+
+/** 👍 or 👎: outlined until chosen, then filled in the accent colour. */
+function ThumbButton({
+  label,
+  Icon,
+  on,
+  onClick,
+}: {
+  label: string;
+  Icon: typeof ThumbsUp;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "tap-target grid h-8 w-8 place-items-center rounded-full transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        on ? "text-accent" : "text-muted hover:text-fg",
+      )}
+    >
+      <Icon size={15} fill={on ? "currentColor" : "none"} aria-hidden />
+    </button>
   );
 }
 

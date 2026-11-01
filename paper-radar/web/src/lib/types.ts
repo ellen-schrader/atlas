@@ -104,10 +104,13 @@ export interface Recommendation {
   post: PaperPost;
   /** Why this paper was picked; absent for the cold-start recency fallback. */
   reason?: RecommendationReason | null;
-  /** Client-only: 👍 given on this card. The API never sends it, because a
-   *  liked paper isn't recommended again. */
-  liked?: boolean;
+  /** Client-only: the 👍 / 👎 given on this card. The API never sends it,
+   *  because an answered paper isn't recommended again. */
+  feedback?: RecFeedback;
 }
+
+/** 👍 "More like this", 👎 "Not interested", or no answer (#182). */
+export type RecFeedback = "up" | "down" | undefined;
 
 /** The signal behind a recommendation (docs/dashboard.md §3.4; the rules are in
  *  api/app.py above _REASON_MIN_SIMILARITY). `ref_label` is the paper title for
