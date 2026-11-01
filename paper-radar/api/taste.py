@@ -42,6 +42,7 @@ W_COMMENT = 0.75
 W_BOOKMARK = 1.5  # paper_status.saved — an explicit, deliberate save
 W_POSTED = 1.0  # shared with the lab, in Atlas or (by name) from Teams
 W_READ = 0.25  # read / reading — consumed, but says little about preference
+W_LIKED = 1.0  # 👍 on a recommendation: "more like this", as deliberate as a reaction
 HALFLIFE_DAYS = 90.0
 
 # When one paper carries several kinds of engagement, the strongest names it.
@@ -49,9 +50,10 @@ ANCHOR_RANK = {
     "similar_saved": 0,
     "similar_posted": 1,
     "similar_reacted": 2,
-    "similar_discussed": 3,
-    "similar_read": 4,
-    "similar_reading": 5,
+    "similar_liked": 3,
+    "similar_discussed": 4,
+    "similar_read": 5,
+    "similar_reading": 6,
 }
 
 # Below this, naming one engaged paper as the reason would be a claim the
@@ -269,7 +271,7 @@ def engagement_weights(
         anchor(c["paper_id"], "similar_discussed")
     for s in (
         client.table("paper_status")
-        .select("paper_id, saved, status, updated_at")
+        .select("paper_id, saved, status, updated_at, liked_at, dismissed_at")
         .eq("team_id", team_id)
         .eq("user_id", user_id)
         .execute()
@@ -282,16 +284,23 @@ def engagement_weights(
         # it had been consumed. Harmless while the client deleted those rows on
         # the way past; since 20261007130000 they are kept on purpose, so the
         # same question has to be asked here.
-        if not s.get("saved") and s.get("status") == "unread":
+        # A 👍 (liked_at) is a signal on its own; a 👎 (dismissed_at) never is.
+        # The database keeps only the later of the two; checked here as well.
+        liked = bool(s.get("liked_at")) and not s.get("dismissed_at")
+        if not s.get("saved") and s.get("status") == "unread" and not liked:
             continue
         # Keyed off `saved`, not a status value. Since the two-axis split
         # (20261006120000) a save is a boolean that survives being read, so the
         # old `status == "to_read"` test would never fire again and every saved
         # paper would quietly collapse to the much weaker W_READ.
-        base = W_BOOKMARK if s.get("saved") else W_READ
-        add(s["paper_id"], base * recency_decay(parse_ts(s.get("updated_at")), now))
+        base = W_BOOKMARK if s.get("saved") else W_LIKED if liked else W_READ
+        # A 👍 ages from when it was given: updated_at moves with any later edit.
+        when = s.get("liked_at") if liked and not s.get("saved") else s.get("updated_at")
+        add(s["paper_id"], base * recency_decay(parse_ts(when), now))
         if s.get("saved"):
             anchor(s["paper_id"], "similar_saved")
+        elif liked:
+            anchor(s["paper_id"], "similar_liked")
         elif s.get("status") == "read":
             anchor(s["paper_id"], "similar_read")
         elif s.get("status") == "reading":

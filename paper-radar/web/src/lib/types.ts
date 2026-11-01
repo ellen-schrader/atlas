@@ -116,6 +116,7 @@ export interface RecommendationReason {
     | "similar_posted"
     | "similar_read"
     | "similar_reacted"
+    | "similar_liked"
     | "similar_discussed"
     | "similar_reading"
     | "profile"
