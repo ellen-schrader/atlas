@@ -1,6 +1,5 @@
 import { type CSSProperties, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
 
 import { ContinueReadingCard, ContinueReadingHeading } from "@/components/home/ContinueReading";
 import { LabFeed } from "@/components/home/LabFeed";
@@ -10,7 +9,6 @@ import { RecommendationsRow } from "@/components/home/Recommendations";
 import { TagVolume } from "@/components/home/TagVolume";
 import { Trending } from "@/components/home/Trending";
 import { usePaperModal } from "@/components/PaperModal";
-import { useToast } from "@/components/Toast";
 import { useEngagementCounts } from "@/hooks/useEngagementCounts";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useFollowedTags } from "@/hooks/useFollowedTags";
@@ -20,8 +18,8 @@ import { usePaperSearch } from "@/hooks/usePaperSearch";
 import { useReadingList } from "@/hooks/useReadingList";
 import { useReadPapers } from "@/hooks/useReadPapers";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
+import { useSetReadStatus } from "@/hooks/useSetReadStatus";
 import { useTagVolume, useTrendingLabs, useTrendingTags } from "@/hooks/useTrends";
-import { supabase } from "@/lib/supabase";
 import { useAppContext } from "@/routes/Layout";
 
 /** Collapses a query into what a panel shows: skeleton, error line, or data. */
@@ -42,8 +40,6 @@ export default function Dashboard() {
   const { team, userId, displayName, shellWidth } = useAppContext();
   const { openPaper } = usePaperModal();
   const navigate = useNavigate();
-  const qc = useQueryClient();
-  const toast = useToast();
   const frame = homeFrame(shellWidth);
   const { cols, tier } = frame;
   const mobile = tier === "mobile";
@@ -74,22 +70,10 @@ export default function Dashboard() {
   const [hoveredTag, setHoveredTag] = useState<string | null>(null);
   const [touch] = useState(() => window.matchMedia?.("(hover: none)").matches ?? false);
 
-  async function markPaperRead(paperId: string) {
-    const { error } = await supabase
-      .from("paper_status")
-      .update({ status: "read", updated_at: new Date().toISOString() })
-      .eq("user_id", userId)
-      .eq("team_id", team.id)
-      .eq("paper_id", paperId);
-    if (error) {
-      toast({ message: "Couldn’t mark that as read. Try again." });
-      return;
-    }
-    // The same set ReadingList's markRead refreshes.
-    for (const key of ["reading-list", "read-this-week", "recommendations", "read-papers"]) {
-      void qc.invalidateQueries({ queryKey: [key] });
-    }
-  }
+  const setReadStatus = useSetReadStatus(userId, team.id);
+  // Finishing a paper changes your taste, so Discover is recomputed.
+  const markPaperRead = (paperId: string) =>
+    void setReadStatus(paperId, "read", { refreshRecommendations: true });
 
   const firstName = displayName.split(/[\s@]/)[0];
   const bookmarkedIds = new Set((toRead ?? []).map((r) => r.paper_id));
@@ -141,7 +125,7 @@ export default function Dashboard() {
       next={nextUp}
       compact={!mobile}
       onOpen={() => nextUp && openPaper(nextUp.paper_id)}
-      onMarkRead={() => nextUp && void markPaperRead(nextUp.paper_id)}
+      onMarkRead={() => nextUp && markPaperRead(nextUp.paper_id)}
     />
   );
 

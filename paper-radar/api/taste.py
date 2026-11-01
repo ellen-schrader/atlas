@@ -577,6 +577,17 @@ def rpc_tagged(
     return [(r["post_id"], r.get("similarity") or 0.0) for r in rows]
 
 
+def rpc_recent_unseen(
+    client, team_id: str, limit: int, exclude: frozenset[str] = frozenset()
+) -> list[str]:
+    """recent_unseen: post ids, newest first, of papers the caller hasn't seen,
+    dismissed or posted — the cold start's feed (app and connector alike)."""
+    params: dict = {"p_team": team_id, "p_limit": limit}
+    if exclude:
+        params["p_exclude"] = sorted(exclude)
+    return [r["post_id"] for r in client.rpc("recent_unseen", params).execute().data or []]
+
+
 def discover_sources(
     client, team_id: str, loaded: dict, limit: int, exclude: frozenset[str] = frozenset()
 ) -> dict[str, list[tuple[str, float]]]:

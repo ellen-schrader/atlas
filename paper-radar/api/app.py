@@ -1836,7 +1836,6 @@ _followed_hits = taste.followed_hits
 def _recency_fallback(
     uc,
     team_id: str,
-    seen: set[str],
     limit: int,
     follows: list[str] | None = None,
     exclude: frozenset[str] = frozenset(),
@@ -1845,22 +1844,12 @@ def _recency_fallback(
     led by the newest posts carrying a followed tag, however old, if the caller
     follows any.
 
-    ``seen`` is the engaged-paper set the discover feed excludes (the SQL RPC does
-    this server-side; here it comes from the request's `_engagement_weights` keys —
-    every engagement row gets a nonzero weight, so the keys are exactly the seen set).
-    ``exclude``: the caller's Teams posts, which recommend_tagged can't tell are theirs."""
+    "Unseen" is decided in Postgres (recent_unseen, seen_by_me), as for every other
+    source, so dismissed papers stay out however many there are. ``exclude``: the
+    caller's Teams posts, which the RPCs can't tell are theirs."""
     lead = [pid for pid, _ in _rpc_tagged(uc, team_id, follows or [], None, limit, exclude)]
-    rows = (
-        uc.table("paper_posts")
-        .select("id, paper_id, posted_at")
-        .eq("team_id", team_id)
-        .order("posted_at", desc=True)
-        .limit(limit * 4)
-        .execute()
-        .data
-        or []
-    )
-    rest = [r["id"] for r in rows if r["paper_id"] not in seen and r["id"] not in lead]
+    newest = _rpc_recent_unseen(uc, team_id, limit + len(lead), exclude)
+    rest = [pid for pid in newest if pid not in lead]
     return _hydrate(uc, (lead + rest)[:limit], {}, cold=True)
 
 
@@ -1971,6 +1960,7 @@ _DISCOVER_SOURCES = taste.DISCOVER_SOURCES
 
 _rpc_recommend = taste.rpc_recommend
 _rpc_tagged = taste.rpc_tagged
+_rpc_recent_unseen = taste.rpc_recent_unseen
 _discover_sources = taste.discover_sources
 
 
@@ -2017,7 +2007,7 @@ def recommendations(
 
     if taste_vec is None:
         follows = loaded.get("follows") or []
-        result = _recency_fallback(uc, team_id, set(weights), limit, follows, exclude)
+        result = _recency_fallback(uc, team_id, limit, follows, exclude)
         try:
             _attach_reasons(
                 result, _new_reasons(uc, user_id, [r.post for r in result.results], follows)
