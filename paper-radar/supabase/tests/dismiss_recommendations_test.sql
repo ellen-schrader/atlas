@@ -1,11 +1,12 @@
 -- dismiss_recommendations_test.sql — "Not interested" (#182,
 -- 20261101130000_dismiss_recommendations.sql): a dismissed paper leaves
--- recommend_papers, recommend_tagged and window_scores; saving it or starting it
+-- recommend_papers, recommend_tagged, window_scores and the cold start's
+-- recent_unseen; a merge keeps it; saving it or starting it
 -- clears the dismissal, so un-saving later puts it back as before. Ada writes
 -- her own rows as `authenticated`, the way the app does.
 
 begin;
-select plan(7);
+select plan(9);
 
 create function pg_temp.qv() returns extensions.vector
 language sql immutable as $$
@@ -30,7 +31,9 @@ insert into public.team_members (team_id, user_id, role) values
 
 insert into public.papers (id, url, url_norm, title, embedding) values
     ('d0000000-0000-0000-0000-000000000001', 'http://d/1', 'd/1', 'Not for Ada', pg_temp.qv()),
-    ('d0000000-0000-0000-0000-000000000002', 'http://d/2', 'd/2', 'Control',     pg_temp.qv());
+    ('d0000000-0000-0000-0000-000000000002', 'http://d/2', 'd/2', 'Control',     pg_temp.qv()),
+    -- A preprint of the control paper, never posted: merged into it below.
+    ('d0000000-0000-0000-0000-000000000003', 'http://d/3', 'd/3', 'Preprint',    null);
 
 -- Cara posts both, tagged, so all three functions can see them.
 insert into public.paper_posts (paper_id, team_id, posted_by, source, tags) values
@@ -57,6 +60,12 @@ select is(
         '66666666-6666-6666-6666-666666666666', array['spatial'], pg_temp.qv(), 20)),
     array['d0000000-0000-0000-0000-000000000002']::uuid[],
     'recommend_tagged: a dismissed paper is left out');
+
+select is(
+    (select array_agg(paper_id) from public.recent_unseen(
+        '66666666-6666-6666-6666-666666666666', 20)),
+    array['d0000000-0000-0000-0000-000000000002']::uuid[],
+    'recent_unseen (the cold start): a dismissed paper is left out');
 
 select is(
     (select array_agg(paper_id) from public.window_scores(
@@ -112,6 +121,22 @@ select is(
        and paper_id = 'd0000000-0000-0000-0000-000000000001'),
     null,
     'another member cannot dismiss a paper for Ada');
+
+-- Merging a preprint Ada dismissed into a paper where she has an all-default row
+-- (left by un-saving): the kept paper stays dismissed.
+insert into public.paper_status (user_id, paper_id, team_id, saved, status, dismissed_at) values
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000003',
+     '66666666-6666-6666-6666-666666666666', false, 'unread', now()),
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000002',
+     '66666666-6666-6666-6666-666666666666', false, 'unread', null);
+select public.merge_papers('d0000000-0000-0000-0000-000000000003',
+                           'd0000000-0000-0000-0000-000000000002', 'manual');
+select isnt(
+    (select dismissed_at from public.paper_status
+     where user_id = '00000000-0000-0000-0000-0000000000d1'
+       and paper_id = 'd0000000-0000-0000-0000-000000000002'),
+    null,
+    'merge_papers keeps a dismissal from the merged paper');
 
 select * from finish();
 rollback;

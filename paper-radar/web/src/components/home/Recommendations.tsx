@@ -1,5 +1,5 @@
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { type CSSProperties, type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, Sparkle, Sparkles, X } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
@@ -8,6 +8,8 @@ import { Cover } from "@/components/Cover";
 import { HeadingLink, SectionHeading, TopicDot } from "@/components/home/HomeSection";
 import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
 import { useToast } from "@/components/Toast";
+import { useSetReadStatus } from "@/hooks/useSetReadStatus";
+import type { RecommendationsResult } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { Recommendation, RecommendationReason } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
@@ -17,72 +19,96 @@ import { cn, formatAuthors } from "@/lib/utils";
 type RecAction = "read" | "dismiss";
 
 /** Mark a recommended paper read, or not interested, and offer Undo. The card
- *  goes at once; the row isn't refetched, so the others don't reshuffle under
- *  the pointer, and Undo just shows it again. A recommended paper has no
+ *  leaves the cached Discover list itself, so it stays gone when Home remounts,
+ *  and the row isn't refetched, so the other cards don't reshuffle under the
+ *  pointer. Undo puts it back where it was. A recommended paper has no
  *  meaningful status row (the API leaves those out), so Undo restores the
  *  defaults: unread, not dismissed. */
-function useRecActions(userId: string, teamId: string) {
+function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDivElement | null>) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const setReadStatus = useSetReadStatus(userId, teamId);
 
-  const show = useCallback((paperId: string, on: boolean) => {
-    setHidden((cur) => {
-      const next = new Set(cur);
-      if (on) next.delete(paperId);
-      else next.add(paperId);
-      return next;
-    });
-  }, []);
+  type Removed = [QueryKey, number, Recommendation];
 
-  async function write(paperId: string, fields: Record<string, unknown>) {
-    return supabase
-      .from("paper_status")
-      .upsert(
-        { user_id: userId, team_id: teamId, paper_id: paperId, ...fields },
-        { onConflict: "user_id,paper_id,team_id" },
-      );
+  function take(paperId: string): Removed[] {
+    const removed: Removed[] = [];
+    for (const [key, data] of qc.getQueriesData<RecommendationsResult>({
+      queryKey: ["recommendations", teamId, "discover"],
+    })) {
+      const at = data?.results.findIndex((r) => r.post.papers.id === paperId) ?? -1;
+      if (!data || at < 0) continue;
+      removed.push([key, at, data.results[at]]);
+      qc.setQueryData<RecommendationsResult>(key, {
+        ...data,
+        results: data.results.filter((_, j) => j !== at),
+      });
+    }
+    return removed;
   }
 
-  function refreshReading() {
-    for (const key of ["reading-list", "read-this-week", "read-papers"]) {
-      void qc.invalidateQueries({ queryKey: [key] });
+  function putBack(removed: Removed[]) {
+    for (const [key, at, rec] of removed) {
+      qc.setQueryData<RecommendationsResult>(key, (data) => {
+        if (!data || data.results.some((r) => r.post.papers.id === rec.post.papers.id)) return data;
+        const results = [...data.results];
+        results.splice(Math.min(at, results.length), 0, rec);
+        return { ...data, results };
+      });
     }
+  }
+
+  // The focused button goes with its card; hand focus to the card that takes
+  // its place (or the one before, at the end of the row) so a keyboard user
+  // carries on from there rather than from the top of the page.
+  function keepFocus() {
+    const row = rowRef.current;
+    const card = document.activeElement?.closest("[data-rec-card]");
+    if (!row || !card || !row.contains(card)) return;
+    const at = Array.from(row.querySelectorAll("[data-rec-card]")).indexOf(card);
+    requestAnimationFrame(() => {
+      const cards = row.querySelectorAll<HTMLElement>("[data-rec-card]");
+      (cards[at] ?? cards[at - 1])?.focus();
+    });
+  }
+
+  async function dismiss(paperId: string, dismissedAt: string | null) {
+    const { error } = await supabase
+      .from("paper_status")
+      .upsert(
+        { user_id: userId, team_id: teamId, paper_id: paperId, dismissed_at: dismissedAt },
+        { onConflict: "user_id,paper_id,team_id" },
+      );
+    return !error;
   }
 
   async function act(paperId: string, action: RecAction) {
-    show(paperId, false);
-    const now = new Date().toISOString();
-    const { error } = await write(
-      paperId,
-      action === "read" ? { status: "read", updated_at: now } : { dismissed_at: now },
-    );
-    if (error) {
-      show(paperId, true);
-      toast({
-        message:
-          action === "read" ? "Couldn’t mark that as read. Try again." : "Couldn’t hide that. Try again.",
-      });
+    keepFocus();
+    const removed = take(paperId);
+    const ok =
+      action === "read"
+        ? await setReadStatus(paperId, "read")
+        : await dismiss(paperId, new Date().toISOString());
+    if (!ok) {
+      putBack(removed);
+      // setReadStatus says so itself.
+      if (action === "dismiss") toast({ message: "Couldn’t hide that. Try again." });
       return;
     }
-    if (action === "read") refreshReading();
     toast({
       message: action === "read" ? "Marked as read" : "You won’t see this one again",
       actionLabel: "Undo",
       onAction: async () => {
-        const { error: undoErr } = await write(
-          paperId,
-          action === "read" ? { status: "unread", updated_at: now } : { dismissed_at: null },
-        );
+        const undone =
+          action === "read" ? await setReadStatus(paperId, "unread") : await dismiss(paperId, null);
         // Throw so the toast stays open and offers Undo again.
-        if (undoErr) throw new Error(undoErr.message);
-        show(paperId, true);
-        if (action === "read") refreshReading();
+        if (!undone) throw new Error("Undo failed");
+        putBack(removed);
       },
     });
   }
 
-  return { hidden, act };
+  return act;
 }
 
 interface RecsState {
@@ -122,8 +148,7 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
-  const { hidden, act } = useRecActions(userId, teamId);
-  const results = recs.results.filter((r) => !hidden.has(r.post.papers.id));
+  const act = useRecActions(userId, teamId, rowRef);
 
   const measure = useCallback(() => {
     const el = rowRef.current;
@@ -141,7 +166,7 @@ export function RecommendationsRow({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [measure, results.length]);
+  }, [measure, recs.results.length]);
 
   // One click = one page of cards. The row's width is exactly perPage cards plus
   // their gaps, so a page is the row width plus one gap.
@@ -155,7 +180,7 @@ export function RecommendationsRow({
 
   // Arrows alone on the right edge; Tune sits with the title, where the Lab feed
   // keeps its filter.
-  const right = !mobile && results.length > perPage && (
+  const right = !mobile && recs.results.length > perPage && (
     <>
       <ArrowButton dir="left" disabled={edges.start} onClick={() => page(-1)} />
       <ArrowButton dir="right" disabled={edges.end} onClick={() => page(1)} />
@@ -180,7 +205,7 @@ export function RecommendationsRow({
             </div>
           ))}
         </div>
-      ) : results.length > 0 ? (
+      ) : recs.results.length > 0 ? (
         <div
           ref={rowRef}
           onScroll={measure}
@@ -191,7 +216,7 @@ export function RecommendationsRow({
             mobile && "-mx-4 scroll-px-4 px-4",
           )}
         >
-          {results.map((r) => (
+          {recs.results.map((r) => (
             <div key={r.post.id} className="flex shrink-0 snap-start" style={itemStyle}>
               <RecCard
                 rec={r}
@@ -289,6 +314,7 @@ export function RecCard({
     <div
       role="button"
       tabIndex={0}
+      data-rec-card
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;

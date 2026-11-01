@@ -96,8 +96,9 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
     """Recommend papers for you to read next, the way Atlas's Discover feed does.
 
     Uses your research profile, the tags you follow, and the papers you post, save,
-    react to, discuss and read in the lab; each paper says why it was picked. Falls
-    back to the most recent papers when Atlas knows nothing about you yet.
+    react to, discuss and read in the lab; each paper says why it was picked. Papers
+    you marked "Not interested" in Atlas are left out. Falls back to the newest
+    papers you haven't seen when Atlas knows nothing about you yet.
 
     Args:
         limit: Maximum number of recommendations (1-50).
@@ -113,17 +114,18 @@ def recommend_reading(limit: int = 8, team_id: str | None = None) -> str:
                 + "\n\n".join(_with_why(h) for h in hits),
             )
         # No recommendations — either no reading history yet, or nothing unseen is
-        # left (e.g. you posted everything). Fall back to recency, said plainly.
-        recent = lab.recent(team, _clamp(limit))
+        # left (e.g. you posted everything). Fall back to the newest papers you
+        # haven't seen or dismissed, said plainly.
+        recent = lab.recent_unseen(team, _clamp(limit))
     except lab.LabError as exc:
         return f"Error: {exc}"
     if not recent:
-        return f"No papers in {team['name']} yet to recommend from."
+        return f"No papers in {team['name']} you haven't already seen."
     return _untrusted(
         "lab papers",
         f"No personalised recommendations in {team['name']} right now (Atlas doesn't "
-        "know your interests yet, or you've already seen every paper) — here are the "
-        "most recent instead:\n\n" + _render(recent, ""),
+        "know your interests yet) — here are the newest papers you haven't seen "
+        "instead:\n\n" + _render(recent, ""),
     )
 
 

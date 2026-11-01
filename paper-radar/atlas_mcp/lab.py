@@ -459,6 +459,16 @@ def recent(team: dict, limit: int) -> list[dict]:
     return _hydrate(client, posts)
 
 
+@with_refresh
+def recent_unseen(team: dict, limit: int) -> list[dict]:
+    """The lab's newest papers you haven't seen, dismissed or posted: what
+    recommend_reading falls back to, as the app's cold start does (recent_unseen).
+    A paper you shared from Teams can still appear: only your name links it to you."""
+    client = get_client()
+    ids = taste.rpc_recent_unseen(client, team["id"], limit)
+    return _hydrate_in_order(client, ids)
+
+
 # === similarity + recommendations (read-only, embedding-based) =============
 # All numpy-free: the MCP server runs under the lean `mcp` extra (no numpy), so
 # vector math here is plain Python over `list[float]`. The nearest-neighbour work

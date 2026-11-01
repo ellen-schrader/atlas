@@ -1037,30 +1037,6 @@ def test_followed_hits_use_post_tags():
     assert _followed_hits(paper_tagged, ["imaging", "spatial"]) == ["spatial", "imaging"]
 
 
-def test_a_dismissed_paper_is_not_interest_and_is_collected():
-    """Marking a paper "Not interested" (#182) leaves an unsaved, unread row with dismissed_at:
-    no weight, and handed back so the cold-start feed can leave it out."""
-    from api.app import _engagement_weights
-
-    uc = _FakeClient(
-        paper_status=[
-            {
-                "paper_id": "dismissed",
-                "saved": False,
-                "status": "unread",
-                "updated_at": None,
-                "dismissed_at": "2026-11-01T12:00:00Z",
-            },
-            {"paper_id": "discarded", "saved": False, "status": "unread", "updated_at": None},
-        ]
-    )
-    dismissed: set[str] = set()
-    weights = _engagement_weights(uc, "user-1", "team-1", dismissed=dismissed)
-
-    assert weights == {}
-    assert dismissed == {"dismissed"}
-
-
 def test_cold_start_puts_followed_tags_first_and_says_so():
     from api.app import _new_reasons, _recency_fallback
 
@@ -1073,14 +1049,18 @@ def test_cold_start_puts_followed_tags_first_and_says_so():
     uc = _FakeClient(
         paper_posts=rows,
         profiles=[],
-        **{"rpc:recommend_tagged": [{"post_id": "post-2", "similarity": None}]},
+        **{
+            "rpc:recommend_tagged": [{"post_id": "post-2", "similarity": None}],
+            # recent_unseen has already left out what the caller saw or dismissed.
+            "rpc:recent_unseen": [{"post_id": f"post-{n}"} for n in (1, 2, 3)],
+        },
     )
-    result = _recency_fallback(uc, "team-1", set(), 3, ["spatial"])
+    result = _recency_fallback(uc, "team-1", 3, ["spatial"])
     assert [r.post["id"] for r in result.results] == ["post-2", "post-1", "post-3"]
     assert result.cold_start is True
 
     # Without follows: plain newest-first.
-    plain = _recency_fallback(uc, "team-1", set(), 3)
+    plain = _recency_fallback(uc, "team-1", 3)
     assert [r.post["id"] for r in plain.results] == ["post-1", "post-2", "post-3"]
 
     reasons = _new_reasons(uc, "user-1", [r.post for r in result.results], ["spatial"])
