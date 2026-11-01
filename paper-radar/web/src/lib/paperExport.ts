@@ -109,7 +109,7 @@ function toBibtex(papers: ExportPaper[], opts: ExportOptions): string {
       const type = p.venue && !preprint ? "article" : "misc";
       const fields: [string, string][] = [];
       if (p.title) fields.push(["title", p.title]);
-      if (p.authors.length) fields.push(["author", p.authors.map(bibEscape).join(" and ")]);
+      if (p.authors.length) fields.push(["author", p.authors.map(bibAuthor).join(" and ")]);
       if (p.year != null) fields.push(["year", String(p.year)]);
       if (p.venue) fields.push([preprint ? "howpublished" : "journal", p.venue]);
       const doi = p.doi ? bareDoi(p.doi) : null;
@@ -278,6 +278,14 @@ function uniqueKey(base: string, used: Set<string>): string {
 }
 
 /** Escape the characters that are syntactically special in a BibTeX brace value. */
+/** One BibTeX author. Names are stored "Given Family", so one holding " and " or a
+ *  comma is a group ("IMpassion031 Trial and Investigators"): braced, so a reference
+ *  manager reads it as one name and doesn't reorder it. */
+function bibAuthor(name: string): string {
+  const escaped = bibEscape(name);
+  return /\sand\s|,/i.test(name) ? `{${escaped}}` : escaped;
+}
+
 function bibEscape(s: string): string {
   // Backslash and braces are handled in one pass: escaping `\` first inserts `{}`
   // that a separate brace pass would then double-escape into `\{\}`.

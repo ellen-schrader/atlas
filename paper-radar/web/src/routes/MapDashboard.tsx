@@ -38,7 +38,6 @@ import { useAppContext } from "@/routes/Layout";
 import { Scatter } from "@/routes/Map";
 
 type Sort = "importance" | "recent" | "discussed";
-const paperLab = (p: MapPaper) => (p.authors.length ? p.authors[p.authors.length - 1] : null);
 
 /**
  * A topic map's dashboard: the scoped t-SNE + sub-themes (M2), and the ranked,
@@ -137,7 +136,7 @@ export default function MapDashboard() {
     const filtered = all.filter(
       (p) =>
         (!unreadOnly || p.read_status !== "read") &&
-        (!labFilter || paperLab(p) === labFilter) &&
+        (!labFilter || p.lab === labFilter) &&
         (activeCluster == null || clusterByPid.get(p.paper_id) === activeCluster) &&
         (!q || (p.title ?? "").toLowerCase().includes(q)),
     );

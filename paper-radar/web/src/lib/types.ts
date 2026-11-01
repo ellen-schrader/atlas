@@ -222,6 +222,7 @@ export interface MapPaper {
   read_status: "unread" | "reading" | "read" | null;
   posted_at: string | null;
   pinned: boolean;
+  lab: string | null; // the last author who is a person, as `labs` counts it
 }
 
 export interface MapPapersData {

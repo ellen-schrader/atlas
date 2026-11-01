@@ -74,6 +74,32 @@ def test_authors_are_reordered_from_last_first():
     assert e.authors == ["Zena Werb", "Rohan Patel", "Anja Müller"]
 
 
+def test_group_authors_stay_whole():
+    # Trial papers end with a group: an "and" inside its braces doesn't split it,
+    # a comma doesn't reorder it, and wrapping brackets go.
+    bib = r"""@article{schmid2020,
+      title = {Pembrolizumab for Early Triple-Negative Breast Cancer},
+      author = {Schmid, Peter and {(KEYNOTE-522 Investigators)} and
+                {(IMpassion031 Trial and Investigators)} and {CLEOPATRA Study Group, the}},
+      year = {2020},
+      doi = {10.1056/NEJMoa1910549}
+    }"""
+    (e,) = parse_bibtex(bib).entries
+    assert e.authors == [
+        "Peter Schmid",
+        "KEYNOTE-522 Investigators",
+        "IMpassion031 Trial and Investigators",
+        "CLEOPATRA Study Group, the",
+    ]
+
+
+def test_brace_protected_person_parts_are_still_reordered():
+    bib = r"""@article{x, title = {T}, author = {{Smith}, {John} and {van Dyk}, {David}},
+      year = {2020}, doi = {10.1/x}}"""
+    (e,) = parse_bibtex(bib).entries
+    assert e.authors == ["John Smith", "David van Dyk"]
+
+
 def test_month_macro_and_numeric_month_both_resolve():
     a, b = parse_bibtex(ZOTERO).entries[0], parse_bibtex(ZOTERO).entries[1]
     assert a.published_at == date(2025, 3, 1)   # `month = mar` (a bare macro, not a string)

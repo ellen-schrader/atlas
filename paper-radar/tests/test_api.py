@@ -233,6 +233,21 @@ def test_compute_stats_aggregates_posts():
     assert labs == {"B. Last": 1, "C. Only": 1}
 
 
+def test_lab_skips_trial_groups():
+    from api.app import _last_author_lab
+
+    trial = ["Peter Schmid", "Joyce O'Shaughnessy", "KEYNOTE-522 Investigators"]
+    assert _last_author_lab(trial) == "Joyce O'Shaughnessy"
+    assert _last_author_lab(["Sandra Swain", "(CLEOPATRA Study Group)"]) == "Sandra Swain"
+    assert _last_author_lab(["E. Mittendorf", "(IMpassion031 Trial", "Investigators)"]) == (
+        "E. Mittendorf"
+    )
+    assert _last_author_lab(["TCGA Research Network"]) is None
+    assert _last_author_lab(["Raza Ali"]) == "Raza Ali"
+    # a person with a parenthetical is still a person
+    assert _last_author_lab(["A Author", "Wei Chen (陈伟)"]) == "Wei Chen (陈伟)"
+
+
 def test_resolve_dedup_key_strips_tracking_params(signed_in):
     resp = client.post(
         "/resolve",

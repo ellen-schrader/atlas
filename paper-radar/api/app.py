@@ -17,6 +17,7 @@ Enrichment (summary/tags) still lands later in a worker.
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -1039,9 +1040,34 @@ def similarity(req: SimilarityRequest, token: str = Depends(require_token)) -> S
     return SimilarityResponse(similarities={r["paper_id"]: r["similarity"] for r in rows})
 
 
+# A trial group or consortium in the author list ("KEYNOTE-522 Investigators",
+# "CLEOPATRA Study Group") isn't a lab; nor is a name wholly in brackets, or a
+# piece of one the BibTeX import split ("(monarchE Committee", "Investigators)").
+# Same rule as public.is_group_author (20261101120000_trending_labs_skip_groups.sql);
+# keep the two in step.
+_GROUP_WORDS = re.compile(
+    r"\b(investigators?|group|consortium|collaborat\w*|committee|trialists|network|"
+    r"working party|on behalf of)\b",
+    re.I,
+)
+
+
+def _is_group_author(name: str) -> bool:
+    name = name.strip()
+    return bool(
+        _GROUP_WORDS.search(name)
+        or (name.startswith("(") and name.endswith(")"))
+        or ("(" in name) != (")" in name)
+    )
+
+
 def _last_author_lab(authors: list) -> str | None:
-    """Last author as a rough proxy for 'the lab that produced the paper' (§4.1a)."""
-    return authors[-1] if authors else None
+    """Last author as a rough proxy for 'the lab that produced the paper' (§4.1a):
+    the last one that is a person, skipping trial groups and consortia."""
+    for name in reversed(authors):
+        if isinstance(name, str) and name.strip() and not _is_group_author(name):
+            return name.strip()
+    return None
 
 
 # PostgREST caps a single response at max_rows (supabase/config.toml: 1000). Page
@@ -1313,6 +1339,7 @@ class MapPaper(BaseModel):
     read_status: str | None = None  # 'unread'|'reading'|'read'|None, for the caller
     posted_at: str | None = None
     pinned: bool = False
+    lab: str | None = None  # _last_author_lab, so the lab filter matches `labs`
 
 
 class MapPapersResponse(BaseModel):
@@ -1414,6 +1441,7 @@ def map_papers(
                     read_status=read.get(pid),
                     posted_at=post.get("posted_at"),
                     pinned=bool(pinned_by_pid.get(pid, False)),
+                    lab=_last_author_lab(p.get("authors") or []),
                 ),
             )
         )
@@ -1428,9 +1456,8 @@ def map_papers(
 
     lab_counts: Counter = Counter()
     for mp in papers:
-        lab = _last_author_lab(mp.authors)
-        if lab:
-            lab_counts[lab] += 1
+        if mp.lab:
+            lab_counts[mp.lab] += 1
     labs = [{"lab": lab, "count": n} for lab, n in lab_counts.most_common(8)]
     return MapPapersResponse(total=len(papers), papers=papers, labs=labs)
 
