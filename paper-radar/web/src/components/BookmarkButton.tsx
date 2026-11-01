@@ -19,6 +19,7 @@ export function BookmarkButton({
   bookmarked,
   showLabel = false,
   className,
+  onSaved,
 }: {
   paperId: string;
   teamId: string;
@@ -26,6 +27,8 @@ export function BookmarkButton({
   bookmarked: boolean;
   showLabel?: boolean;
   className?: string;
+  /** After a save or un-save has been written. */
+  onSaved?: (saved: boolean) => void;
 }) {
   const qc = useQueryClient();
   const [on, setOn] = useState(bookmarked);
@@ -71,6 +74,7 @@ export function BookmarkButton({
       return;
     }
     void qc.invalidateQueries({ queryKey: ["reading-list", userId, teamId] });
+    onSaved?.(next);
   }
 
   return (

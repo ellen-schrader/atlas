@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -135,6 +136,33 @@ def test_a_save_outranks_a_post_as_the_reason():
     weights = taste.engagement_weights(client, "u1", "t1", anchors)
     assert anchors["p"] == "similar_saved"
     assert weights["p"] == pytest.approx(taste.W_POSTED + taste.W_BOOKMARK + taste.W_REACTION)
+
+
+def test_thumbs_on_a_recommendation():
+    """👍 (liked_at) is a private "more like this": weighted without a save,
+    aged from when it was given, and it names the reason. 👎 (dismissed_at)
+    says nothing (#182)."""
+
+    def row(pid: str, **kw) -> dict:
+        return {"paper_id": pid, "saved": False, "status": "unread", "updated_at": None, **kw}
+
+    now = datetime.now(UTC).isoformat()
+    year_ago = (datetime.now(UTC) - timedelta(days=365)).isoformat()
+    client = _Client(
+        paper_status=[
+            row("liked", liked_at=now),
+            # Touched today, liked a year ago: the 👍 has decayed.
+            row("old-like", liked_at=year_ago, updated_at=now),
+            row("dismissed", dismissed_at=now),
+        ]
+    )
+    anchors: dict[str, str] = {}
+    weights = taste.engagement_weights(client, "u1", "t1", anchors)
+
+    assert set(weights) == {"liked", "old-like"}
+    assert weights["liked"] == pytest.approx(taste.W_LIKED, rel=1e-3)
+    assert weights["old-like"] < taste.W_LIKED / 4
+    assert anchors == {"liked": "similar_liked", "old-like": "similar_liked"}
 
 
 # --- the blend, unchanged by the move off numpy --------------------------------------

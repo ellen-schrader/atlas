@@ -88,14 +88,16 @@ def recipients(svc, paper_id: str) -> dict[str, set[str]]:
             out[post["team_id"]].add(post["posted_by"])
     statuses = (
         svc.table("paper_status")
-        .select("team_id, user_id, saved, status")
+        .select("team_id, user_id, saved, status, liked_at")
         .eq("paper_id", paper_id)
         .execute()
         .data
         or []
     )
     for st in statuses:
-        if st["team_id"] in out and (st.get("saved") or st.get("status") != "unread"):
+        if st["team_id"] in out and (
+            st.get("saved") or st.get("status") != "unread" or st.get("liked_at")
+        ):
             out[st["team_id"]].add(st["user_id"])
     for team_id, users in out.items():
         if not users:
