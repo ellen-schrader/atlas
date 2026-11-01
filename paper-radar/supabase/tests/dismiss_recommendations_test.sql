@@ -1,8 +1,8 @@
 -- dismiss_recommendations_test.sql — 👍 / 👎 on recommendations (#182,
 -- 20261101130000_dismiss_recommendations.sql): a dismissed paper leaves
 -- recommend_papers, recommend_tagged, window_scores and the cold start's
--- recent_unseen; a merge keeps it; saving it or starting it
--- clears the dismissal, so un-saving later puts it back as before. Ada writes
+-- recent_unseen; a merge keeps it; saving the paper doesn't undo it (the card
+-- still shows 👎), only taking the 👎 back does. Ada writes
 -- her own rows as `authenticated`, the way the app does.
 
 begin;
@@ -84,7 +84,7 @@ select is(
     2,
     'undo puts the paper back');
 
--- Dismiss again, then save: the save clears the dismissal…
+-- 👎 again, then save from the same card: the 👎 stands, as the card shows…
 update public.paper_status set dismissed_at = now()
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
@@ -92,14 +92,14 @@ update public.paper_status set saved = true
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
 
-select is(
+select isnt(
     (select dismissed_at from public.paper_status
      where user_id = '00000000-0000-0000-0000-0000000000d1'
        and paper_id = 'd0000000-0000-0000-0000-000000000001'),
     null,
-    'saving a dismissed paper clears the dismissal');
+    'saving a paper keeps its 👎');
 
--- …so un-saving it puts it back into circulation, as un-saving always has.
+-- …so un-saving it leaves the paper out: you said you weren't interested.
 update public.paper_status set saved = false
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
@@ -107,8 +107,13 @@ where user_id = '00000000-0000-0000-0000-0000000000d1'
 select is(
     (select count(*)::int from public.recommend_papers(
         '66666666-6666-6666-6666-666666666666', pg_temp.qv(), 20)),
-    2,
-    'un-saving after a save brings the paper back');
+    1,
+    'un-saving after a save keeps a 👎 paper out');
+
+-- Taking the 👎 back is what returns it.
+update public.paper_status set dismissed_at = null
+where user_id = '00000000-0000-0000-0000-0000000000d1'
+  and paper_id = 'd0000000-0000-0000-0000-000000000001';
 
 -- Cara's view is her own: Ada's dismissal never hid anything from her.
 set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000d2"}';

@@ -1,5 +1,4 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Sparkle, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
@@ -8,41 +7,40 @@ import { Cover } from "@/components/Cover";
 import { HeadingLink, SectionHeading, TopicDot } from "@/components/home/HomeSection";
 import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
 import { useToast } from "@/components/Toast";
-import type { RecommendationsResult } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
-import type { Recommendation, RecommendationReason, RecFeedback } from "@/lib/types";
+import type { Recommendation, RecommendationReason } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
+
+/** 👍 "More like this", 👎 "Not interested", or no answer (#182). */
+type RecFeedback = "up" | "down" | undefined;
+
+interface Answer {
+  rec: Recommendation;
+  at: number; // where the card sat, to keep it there if a refetch drops it
+  shown: RecFeedback;
+}
 
 /** 👍 / 👎 on a recommendation (#182), both private to you, both switches on
  *  the card: click again to take it back, click the other to change your mind.
  *  👍 "More like this" (paper_status.liked_at) is a taste signal that doesn't
  *  touch your reading list. 👎 "Not interested" (dismissed_at) is no signal at
- *  all; the card dims but stays, so it can be taken back. Either way the paper
- *  isn't offered again once the row refreshes.
+ *  all; the card dims but stays, so it can be taken back.
  *
- *  The answer lives in the cached Discover list, so it survives Home
- *  remounting, and the row isn't refetched, so the cards don't reshuffle under
- *  the pointer. One card's writes go out in click order, so quick clicks can't
- *  land the other way round (the database keeps the later answer as well). */
+ *  Answers live here, for this visit to Home, not in the query cache: the API
+ *  leaves answered papers out, so a refetch (a Mark read elsewhere on Home, the
+ *  tab regaining focus) would otherwise drop a card mid-thought. An answered
+ *  card keeps its place until Home is next opened. One card's writes go out in
+ *  click order; if one fails, the card shows the last answer the server took,
+ *  unless the user has clicked again since. */
 function useRecFeedback(userId: string, teamId: string) {
-  const qc = useQueryClient();
   const toast = useToast();
-  const chains = useRef(new Map<string, Promise<unknown>>());
+  const [answers, setAnswers] = useState<ReadonlyMap<string, Answer>>(() => new Map());
+  const chains = useRef(new Map<string, Promise<boolean>>());
+  const clicks = useRef(new Map<string, number>());
+  const saved = useRef(new Map<string, RecFeedback>());
 
-  // `from`: change only a card still showing this answer.
-  function show(paperId: string, feedback: RecFeedback, from?: { feedback: RecFeedback }) {
-    qc.setQueriesData<RecommendationsResult>(
-      { queryKey: ["recommendations", teamId, "discover"] },
-      (data) =>
-        data && {
-          ...data,
-          results: data.results.map((r) =>
-            r.post.papers.id === paperId && (!from || r.feedback === from.feedback)
-              ? { ...r, feedback }
-              : r,
-          ),
-        },
-    );
+  function show(rec: Recommendation, at: number, shown: RecFeedback) {
+    setAnswers((cur) => new Map(cur).set(rec.post.papers.id, { rec, at, shown }));
   }
 
   async function write(paperId: string, feedback: RecFeedback) {
@@ -60,17 +58,37 @@ function useRecFeedback(userId: string, teamId: string) {
     return !error;
   }
 
-  return async function answer(paperId: string, was: RecFeedback, next: RecFeedback) {
-    show(paperId, next);
-    const run = () => write(paperId, next);
-    const done = (chains.current.get(paperId) ?? Promise.resolve()).then(run, run);
-    chains.current.set(paperId, done);
-    if (!(await done)) {
-      // Back to how it was, unless something newer has been clicked since.
-      show(paperId, was, { feedback: next });
-      toast({ message: "Couldn’t save that. Try again." });
+  async function answer(rec: Recommendation, at: number, next: RecFeedback) {
+    const id = rec.post.papers.id;
+    const click = (clicks.current.get(id) ?? 0) + 1;
+    clicks.current.set(id, click);
+    show(rec, at, next);
+    const run = () => write(id, next);
+    const done = (chains.current.get(id) ?? Promise.resolve(true)).then(run, run);
+    chains.current.set(id, done);
+    const ok = await done;
+    if (chains.current.get(id) === done) chains.current.delete(id);
+    if (ok) {
+      saved.current.set(id, next);
+      return;
     }
-  };
+    // A recommended paper starts unanswered: the API leaves answered ones out.
+    if (clicks.current.get(id) === click) show(rec, at, saved.current.get(id));
+    toast({ message: "Couldn’t save that. Try again." });
+  }
+
+  return { answers, answer };
+}
+
+/** The row's cards: the API's, plus any answered this visit that a refetch
+ *  has since left out, back where they were. */
+function withAnswered(results: Recommendation[], answers: ReadonlyMap<string, Answer>) {
+  const list = [...results];
+  const ids = new Set(results.map((r) => r.post.papers.id));
+  for (const [id, a] of [...answers].sort((x, y) => x[1].at - y[1].at)) {
+    if (!ids.has(id)) list.splice(Math.min(a.at, list.length), 0, a.rec);
+  }
+  return list;
 }
 
 interface RecsState {
@@ -110,7 +128,8 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
-  const answer = useRecFeedback(userId, teamId);
+  const { answers, answer } = useRecFeedback(userId, teamId);
+  const cards = withAnswered(recs.results, answers);
 
   const measure = useCallback(() => {
     const el = rowRef.current;
@@ -128,7 +147,7 @@ export function RecommendationsRow({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [measure, recs.results.length]);
+  }, [measure, cards.length]);
 
   // One click = one page of cards. The row's width is exactly perPage cards plus
   // their gaps, so a page is the row width plus one gap.
@@ -142,7 +161,7 @@ export function RecommendationsRow({
 
   // Arrows alone on the right edge; Tune sits with the title, where the Lab feed
   // keeps its filter.
-  const right = !mobile && recs.results.length > perPage && (
+  const right = !mobile && cards.length > perPage && (
     <>
       <ArrowButton dir="left" disabled={edges.start} onClick={() => page(-1)} />
       <ArrowButton dir="right" disabled={edges.end} onClick={() => page(1)} />
@@ -167,7 +186,7 @@ export function RecommendationsRow({
             </div>
           ))}
         </div>
-      ) : recs.results.length > 0 ? (
+      ) : cards.length > 0 ? (
         <div
           ref={rowRef}
           onScroll={measure}
@@ -178,7 +197,7 @@ export function RecommendationsRow({
             mobile && "-mx-4 scroll-px-4 px-4",
           )}
         >
-          {recs.results.map((r) => (
+          {cards.map((r, at) => (
             <div key={r.post.id} className="flex shrink-0 snap-start" style={itemStyle}>
               <RecCard
                 rec={r}
@@ -187,7 +206,8 @@ export function RecommendationsRow({
                 userId={userId}
                 bookmarked={bookmarkedIds.has(r.post.papers.id)}
                 onOpen={() => onOpen(r.post.papers.id)}
-                onAnswer={(next) => void answer(r.post.papers.id, r.feedback, next)}
+                feedback={answers.get(r.post.papers.id)?.shown}
+                onAnswer={(next) => void answer(r, at, next)}
               />
             </div>
           ))}
@@ -255,6 +275,7 @@ export function RecCard({
   userId,
   bookmarked,
   onOpen,
+  feedback,
   onAnswer,
 }: {
   rec: Recommendation;
@@ -263,6 +284,7 @@ export function RecCard({
   userId: string;
   bookmarked: boolean;
   onOpen: () => void;
+  feedback: RecFeedback;
   onAnswer: (next: RecFeedback) => void;
 }) {
   const post = rec.post;
@@ -270,16 +292,15 @@ export function RecCard({
   const tags = (post.tags.length ? post.tags : p.tags).slice(0, 2);
   const topic = null; // no stable topic id yet — see TopicDot
   const eyebrow = [p.venue, p.year].filter(Boolean).join(" · ");
-  const down = rec.feedback === "down";
-  // A 👎 card stays where it is, faded, until the row refreshes.
-  const fade = cn("transition-opacity", down && "opacity-40");
+  const down = feedback === "down";
+  // A 👎 card stays where it is, faded but readable, for the rest of the visit.
+  const fade = cn("transition-opacity", down && "opacity-60");
 
   return (
     // role="button", not <button>: the bookmark and thumbs inside are buttons.
     <div
       role="button"
       tabIndex={0}
-      data-rec-card
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -315,42 +336,41 @@ export function RecCard({
           />
         </span>
       </div>
-      <h3
-        className={cn(
-          "mt-2.5 line-clamp-3 h-[57px] text-card font-semibold leading-[19px] tracking-snug",
-          fade,
-        )}
-      >
-        {p.title ?? p.url}
-      </h3>
-      <div className={cn("mt-2 truncate text-meta text-muted", fade)}>
-        {formatAuthors(p.authors, 3)}
-      </div>
-      <div className={cn("mt-2 flex h-6 min-w-0 gap-1.5", fade)}>
-        {tags[0] && <Chip className="shrink-0">{tags[0]}</Chip>}
-        {tags[1] && (
-          <Chip className="min-w-0 overflow-hidden">
-            <span className="min-w-0 truncate">{tags[1]}</span>
-          </Chip>
-        )}
+      <div className={fade}>
+        <h3 className="mt-2.5 line-clamp-3 h-[57px] text-card font-semibold leading-[19px] tracking-snug">
+          {p.title ?? p.url}
+        </h3>
+        <div className="mt-2 truncate text-meta text-muted">{formatAuthors(p.authors, 3)}</div>
+        <div className="mt-2 flex h-6 min-w-0 gap-1.5">
+          {tags[0] && <Chip className="shrink-0">{tags[0]}</Chip>}
+          {tags[1] && (
+            <Chip className="min-w-0 overflow-hidden">
+              <span className="min-w-0 truncate">{tags[1]}</span>
+            </Chip>
+          )}
+        </div>
       </div>
       <div className="mt-auto pt-3">
         <div className="flex items-start gap-2 border-t border-border pt-3">
-          {down ? (
-            // Says what 👎 did, so taking it back is the obvious next move.
-            <p className="h-[34px] flex-1 text-meta leading-[17px] text-muted">
-              You won’t see this again
-            </p>
-          ) : rec.reason ? (
-            <>
-              <Sparkle size={12} aria-hidden className="mt-[3px] shrink-0 fill-accent text-accent" />
-              <p className="line-clamp-2 h-[34px] flex-1 text-meta leading-[17px] text-muted">
-                <ReasonText reason={rec.reason} teamName={teamName} />
+          {/* Polite live region: a screen reader hears what 👎 did, as it
+              would a toast. Its first content isn't announced. */}
+          <div aria-live="polite" className="flex min-w-0 flex-1 items-start gap-2">
+            {down ? (
+              // Says what 👎 did, so taking it back is the obvious next move.
+              <p className="h-[34px] flex-1 text-meta leading-[17px] text-muted">
+                You won’t see this again
               </p>
-            </>
-          ) : (
-            <span className="h-[34px] flex-1" />
-          )}
+            ) : rec.reason ? (
+              <>
+                <Sparkle size={12} aria-hidden className="mt-[3px] shrink-0 fill-accent text-accent" />
+                <p className="line-clamp-2 h-[34px] flex-1 text-meta leading-[17px] text-muted">
+                  <ReasonText reason={rec.reason} teamName={teamName} />
+                </p>
+              </>
+            ) : (
+              <span className="h-[34px] flex-1" />
+            )}
+          </div>
           {/* 32px round targets that show where they end, so a near miss doesn't
               open the paper; on touch, spaced so each 44px area (.tap-target)
               stays its own. Negative margins line the icons up with the text. */}
@@ -361,8 +381,8 @@ export function RecCard({
             <ThumbButton
               label="More like this"
               Icon={ThumbsUp}
-              on={rec.feedback === "up"}
-              onClick={() => onAnswer(rec.feedback === "up" ? undefined : "up")}
+              on={feedback === "up"}
+              onClick={() => onAnswer(feedback === "up" ? undefined : "up")}
             />
             <ThumbButton
               label="Not interested"

@@ -11,12 +11,13 @@
 --                 reading list. Not a reaction, which the whole lab sees.
 --
 -- Either one means you've answered the recommendation, so it isn't offered again.
--- A row holds one answer: the later one wins (trigger below), however the two
--- arrive (a quick 👍 then 👎 whose requests cross, or a merge of two copies).
+-- A row holds one answer: the later one wins (trigger below). The app writes both
+-- columns on every click, so this is for merges of two copies, and for anything
+-- that sets one column alone.
 --
--- Saving the paper or starting to read it clears the dismissal (trigger below),
--- so un-saving it afterwards puts it back into circulation, as un-saving always
--- has.
+-- Saving the paper or starting to read it leaves a 👎 alone: Home's card still
+-- shows it, and only taking the 👎 back (or a 👍) returns the paper to
+-- recommendations.
 --
 -- "Seen by me" was written out in full in every recommendation function; it is
 -- now one function, seen_by_me(), so the next change to it is made once. The
@@ -37,9 +38,6 @@ language plpgsql
 set search_path = public
 as $$
 begin
-    if new.saved or new.status <> 'unread' then
-        new.dismissed_at := null;
-    end if;
     if new.liked_at is not null and new.dismissed_at is not null then
         if new.liked_at > new.dismissed_at then
             new.dismissed_at := null;
