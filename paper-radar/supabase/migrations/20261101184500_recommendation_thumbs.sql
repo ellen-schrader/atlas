@@ -9,42 +9,28 @@
 --   dismissed_at  👎 "Not interested", as before.
 --
 -- Either one answers the recommendation, so seen_by_me() counts both and the
--- paper isn't offered again. A row holds one answer: the later one wins
--- (paper_status_one_answer). The app writes both columns on every click, so this
--- is for merges of two copies and for anything that sets one column alone.
+-- paper isn't offered again. A row holds at most one answer: a check
+-- constraint, so a write that would set both fails rather than one being
+-- dropped quietly. The app writes both columns on every click; merge_papers
+-- picks the newest answer of the two copies itself.
 --
--- Saving the paper or starting to read it no longer clears a 👎 (the trigger it
--- replaces, paper_status_clear_dismissal, did): Home's card still shows the 👎,
--- and only taking it back (or a 👍) returns the paper to recommendations.
+-- Saving the paper or starting to read it still clears a 👎
+-- (paper_status_clear_dismissal, 20261101130000): a saved or read paper is not
+-- one you aren't interested in, and un-saving it later puts it back into
+-- circulation. Home's card says so: saving clears its 👎, and 👎 is off on a
+-- card you've saved. The trigger now fires only when a column it reads changes.
 --
 -- seen_by_me and merge_papers are copied from 20261101130000 with liked_at added.
 
 alter table public.paper_status add column if not exists liked_at timestamptz;
 
+alter table public.paper_status
+    add constraint paper_status_one_answer check (num_nonnulls(liked_at, dismissed_at) <= 1);
+
 drop trigger if exists paper_status_clear_dismissal on public.paper_status;
-drop function if exists public.paper_status_clear_dismissal();
-
-create or replace function public.paper_status_one_answer()
-returns trigger
-language plpgsql
-set search_path = public
-as $$
-begin
-    if new.liked_at is not null and new.dismissed_at is not null then
-        if new.liked_at > new.dismissed_at then
-            new.dismissed_at := null;
-        else
-            new.liked_at := null;
-        end if;
-    end if;
-    return new;
-end;
-$$;
-
-drop trigger if exists paper_status_one_answer on public.paper_status;
-create trigger paper_status_one_answer
-    before insert or update on public.paper_status
-    for each row execute function public.paper_status_one_answer();
+create trigger paper_status_clear_dismissal
+    before insert or update of saved, status, dismissed_at on public.paper_status
+    for each row execute function public.paper_status_clear_dismissal();
 
 -- === what counts as "seen" ===================================================
 
@@ -76,7 +62,7 @@ as $$
            );
 $$;
 
--- === merges keep a 👍 or 👎 ===================================================
+-- === merges keep the newest answer ===========================================
 
 create or replace function public.merge_papers(p_from uuid, p_into uuid, p_reason text)
 returns uuid
@@ -161,10 +147,20 @@ begin
                          else 'unread'
                      end,
         updated_at = greatest(d.updated_at, s.updated_at),
-        -- An answer to either recommendation is an answer about the paper; if
-        -- they differ, paper_status_one_answer keeps the later one.
-        liked_at     = coalesce(d.liked_at, s.liked_at),
-        dismissed_at = coalesce(d.dismissed_at, s.dismissed_at)
+        -- An answer to either copy is an answer about the paper. One answer per
+        -- row (paper_status_one_answer), so the newest of the four wins: the
+        -- newest 👍 if it is newer than the newest 👎, else the newest 👎.
+        -- greatest() skips nulls, so an unanswered copy changes nothing.
+        liked_at     = case
+                           when greatest(d.liked_at, s.liked_at)
+                                > coalesce(greatest(d.dismissed_at, s.dismissed_at), '-infinity')
+                           then greatest(d.liked_at, s.liked_at)
+                       end,
+        dismissed_at = case
+                           when greatest(d.dismissed_at, s.dismissed_at)
+                                >= coalesce(greatest(d.liked_at, s.liked_at), '-infinity')
+                           then greatest(d.dismissed_at, s.dismissed_at)
+                       end
       from public.paper_status s
      where s.paper_id = p_from and d.paper_id = p_into
        and d.user_id = s.user_id and d.team_id = s.team_id;

@@ -141,7 +141,7 @@ def test_a_save_outranks_a_post_as_the_reason():
 def test_thumbs_on_a_recommendation():
     """👍 (liked_at) is a private "more like this": weighted without a save,
     aged from when it was given, and it names the reason. 👎 (dismissed_at)
-    says nothing, and wins over a 👍 if a row ever holds both (#182)."""
+    says nothing (#182)."""
 
     def row(pid: str, **kw) -> dict:
         return {"paper_id": pid, "saved": False, "status": "unread", "updated_at": None, **kw}
@@ -154,7 +154,6 @@ def test_thumbs_on_a_recommendation():
             # Touched today, liked a year ago: the 👍 has decayed.
             row("old-like", liked_at=year_ago, updated_at=now),
             row("dismissed", dismissed_at=now),
-            row("both", liked_at=year_ago, dismissed_at=now),
         ]
     )
     anchors: dict[str, str] = {}

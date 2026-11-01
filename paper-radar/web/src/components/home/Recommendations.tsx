@@ -77,7 +77,17 @@ function useRecFeedback(userId: string, teamId: string) {
     toast({ message: "Couldn’t save that. Try again." });
   }
 
-  return { answers, answer };
+  // Saving a paper clears its 👎 in the database (paper_status_clear_dismissal):
+  // a paper you saved is one you're interested in. The card follows.
+  function savedPaper(rec: Recommendation, at: number) {
+    const id = rec.post.papers.id;
+    if (answers.get(id)?.shown !== "down") return;
+    clicks.current.set(id, (clicks.current.get(id) ?? 0) + 1);
+    saved.current.set(id, undefined);
+    show(rec, at, undefined);
+  }
+
+  return { answers, answer, savedPaper };
 }
 
 /** The row's cards: the API's, plus any answered this visit that a refetch
@@ -128,7 +138,7 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
-  const { answers, answer } = useRecFeedback(userId, teamId);
+  const { answers, answer, savedPaper } = useRecFeedback(userId, teamId);
   const cards = withAnswered(recs.results, answers);
 
   const measure = useCallback(() => {
@@ -208,6 +218,7 @@ export function RecommendationsRow({
                 onOpen={() => onOpen(r.post.papers.id)}
                 feedback={answers.get(r.post.papers.id)?.shown}
                 onAnswer={(next) => void answer(r, at, next)}
+                onSaved={(on) => on && savedPaper(r, at)}
               />
             </div>
           ))}
@@ -277,6 +288,7 @@ export function RecCard({
   onOpen,
   feedback,
   onAnswer,
+  onSaved,
 }: {
   rec: Recommendation;
   teamId: string;
@@ -286,6 +298,7 @@ export function RecCard({
   onOpen: () => void;
   feedback: RecFeedback;
   onAnswer: (next: RecFeedback) => void;
+  onSaved: (saved: boolean) => void;
 }) {
   const post = rec.post;
   const p = post.papers;
@@ -332,6 +345,7 @@ export function RecCard({
             teamId={teamId}
             userId={userId}
             bookmarked={bookmarked}
+            onSaved={onSaved}
             className="tap-target h-8 w-8 justify-center rounded-full text-muted hover:bg-surface-2 hover:text-accent"
           />
         </span>
@@ -384,10 +398,13 @@ export function RecCard({
               on={feedback === "up"}
               onClick={() => onAnswer(feedback === "up" ? undefined : "up")}
             />
+            {/* Off on a saved paper: saving says you're interested, and the
+                database clears a 👎 on a saved paper. */}
             <ThumbButton
-              label="Not interested"
+              label={bookmarked ? "Saved to your reading list" : "Not interested"}
               Icon={ThumbsDown}
               on={down}
+              disabled={bookmarked}
               onClick={() => onAnswer(down ? undefined : "down")}
             />
           </span>
@@ -402,23 +419,27 @@ function ThumbButton({
   label,
   Icon,
   on,
+  disabled = false,
   onClick,
 }: {
   label: string;
   Icon: typeof ThumbsUp;
   on: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={on}
       aria-label={label}
       title={label}
       className={cn(
         "tap-target grid h-8 w-8 place-items-center rounded-full transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         on ? "text-accent" : "text-muted hover:text-fg",
+        "disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted",
       )}
     >
       <Icon size={15} fill={on ? "currentColor" : "none"} aria-hidden />

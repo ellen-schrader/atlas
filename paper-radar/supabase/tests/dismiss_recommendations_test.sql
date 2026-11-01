@@ -1,12 +1,12 @@
 -- dismiss_recommendations_test.sql — 👍 / 👎 on recommendations (#182,
 -- 20261101130000_dismiss_recommendations.sql): a dismissed paper leaves
 -- recommend_papers, recommend_tagged, window_scores and the cold start's
--- recent_unseen; a merge keeps it; saving the paper doesn't undo it (the card
--- still shows 👎), only taking the 👎 back does. Ada writes
+-- recent_unseen; a merge keeps the newest answer; saving the paper clears a 👎,
+-- so un-saving later puts it back. Ada writes
 -- her own rows as `authenticated`, the way the app does.
 
 begin;
-select plan(12);
+select plan(13);
 
 create function pg_temp.qv() returns extensions.vector
 language sql immutable as $$
@@ -84,7 +84,8 @@ select is(
     2,
     'undo puts the paper back');
 
--- 👎 again, then save from the same card: the 👎 stands, as the card shows…
+-- 👎 again, then save: the save clears the 👎 (a saved paper is one you're
+-- interested in), and Home's card clears its 👎 to match…
 update public.paper_status set dismissed_at = now()
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
@@ -92,14 +93,14 @@ update public.paper_status set saved = true
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
 
-select isnt(
+select is(
     (select dismissed_at from public.paper_status
      where user_id = '00000000-0000-0000-0000-0000000000d1'
        and paper_id = 'd0000000-0000-0000-0000-000000000001'),
     null,
-    'saving a paper keeps its 👎');
+    'saving a paper clears its 👎');
 
--- …so un-saving it leaves the paper out: you said you weren't interested.
+-- …so un-saving it later puts it back into circulation, as un-saving always has.
 update public.paper_status set saved = false
 where user_id = '00000000-0000-0000-0000-0000000000d1'
   and paper_id = 'd0000000-0000-0000-0000-000000000001';
@@ -107,13 +108,8 @@ where user_id = '00000000-0000-0000-0000-0000000000d1'
 select is(
     (select count(*)::int from public.recommend_papers(
         '66666666-6666-6666-6666-666666666666', pg_temp.qv(), 20)),
-    1,
-    'un-saving after a save keeps a 👎 paper out');
-
--- Taking the 👎 back is what returns it.
-update public.paper_status set dismissed_at = null
-where user_id = '00000000-0000-0000-0000-0000000000d1'
-  and paper_id = 'd0000000-0000-0000-0000-000000000001';
+    2,
+    'un-saving after a save brings the paper back');
 
 -- Cara's view is her own: Ada's dismissal never hid anything from her.
 set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000d2"}';
@@ -161,29 +157,48 @@ select is(
     0,
     'a paper given a thumbs up is not recommended again');
 
--- One answer per row, the later one: a 👍 arriving after a newer 👎 (crossed
--- requests) is dropped; a newer 👍 replaces an older 👎.
-update public.paper_status
-   set dismissed_at = now() + interval '1 second', liked_at = now()
- where user_id = '00000000-0000-0000-0000-0000000000d1'
-   and paper_id = 'd0000000-0000-0000-0000-000000000004';
-select is(
-    (select row(liked_at is null, dismissed_at is null) from public.paper_status
-     where user_id = '00000000-0000-0000-0000-0000000000d1'
-       and paper_id = 'd0000000-0000-0000-0000-000000000004')::text,
-    '(t,f)',
-    'a 👍 older than the 👎 on the same row is dropped');
-
-update public.paper_status set liked_at = now() + interval '2 seconds'
- where user_id = '00000000-0000-0000-0000-0000000000d1'
-   and paper_id = 'd0000000-0000-0000-0000-000000000004';
-select is(
-    (select row(liked_at is null, dismissed_at is null) from public.paper_status
-     where user_id = '00000000-0000-0000-0000-0000000000d1'
-       and paper_id = 'd0000000-0000-0000-0000-000000000004')::text,
-    '(f,t)',
-    'a newer 👍 replaces the 👎');
+-- At most one answer per row: setting both fails, rather than one being dropped.
+select throws_ok(
+    $$ update public.paper_status set dismissed_at = now()
+       where user_id = '00000000-0000-0000-0000-0000000000d1'
+         and paper_id = 'd0000000-0000-0000-0000-000000000004' $$,
+    '23514', null,
+    'a row cannot be both 👍 and 👎');
 reset role;
+
+-- Merges keep the newest answer of the two copies. p5 (👍 a day ago) merged
+-- into p6 (👎 now): the 👎. p7 (👍 now) into p8 (👍 a year ago): today's 👍.
+insert into public.papers (id, url, url_norm, title) values
+    ('d0000000-0000-0000-0000-000000000005', 'http://d/5', 'd/5', 'Liked copy'),
+    ('d0000000-0000-0000-0000-000000000006', 'http://d/6', 'd/6', 'Disliked copy'),
+    ('d0000000-0000-0000-0000-000000000007', 'http://d/7', 'd/7', 'Liked today'),
+    ('d0000000-0000-0000-0000-000000000008', 'http://d/8', 'd/8', 'Liked last year');
+insert into public.paper_status (user_id, paper_id, team_id, liked_at, dismissed_at) values
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000005',
+     '66666666-6666-6666-6666-666666666666', now() - interval '1 day', null),
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000006',
+     '66666666-6666-6666-6666-666666666666', null, now()),
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000007',
+     '66666666-6666-6666-6666-666666666666', now(), null),
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000008',
+     '66666666-6666-6666-6666-666666666666', now() - interval '1 year', null);
+select public.merge_papers('d0000000-0000-0000-0000-000000000005',
+                           'd0000000-0000-0000-0000-000000000006', 'manual');
+select public.merge_papers('d0000000-0000-0000-0000-000000000007',
+                           'd0000000-0000-0000-0000-000000000008', 'manual');
+
+select is(
+    (select row(liked_at is null, dismissed_at is null) from public.paper_status
+     where user_id = '00000000-0000-0000-0000-0000000000d1'
+       and paper_id = 'd0000000-0000-0000-0000-000000000006')::text,
+    '(t,f)',
+    'merge_papers: an older 👍 and a newer 👎 merge to the 👎');
+
+select ok(
+    (select liked_at > now() - interval '1 hour' from public.paper_status
+     where user_id = '00000000-0000-0000-0000-0000000000d1'
+       and paper_id = 'd0000000-0000-0000-0000-000000000008'),
+    'merge_papers: two 👍 merge to the newer one');
 
 select * from finish();
 rollback;

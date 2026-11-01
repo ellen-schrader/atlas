@@ -271,7 +271,7 @@ def engagement_weights(
         anchor(c["paper_id"], "similar_discussed")
     for s in (
         client.table("paper_status")
-        .select("paper_id, saved, status, updated_at, liked_at, dismissed_at")
+        .select("paper_id, saved, status, updated_at, liked_at")
         .eq("team_id", team_id)
         .eq("user_id", user_id)
         .execute()
@@ -284,9 +284,9 @@ def engagement_weights(
         # it had been consumed. Harmless while the client deleted those rows on
         # the way past; since 20261007130000 they are kept on purpose, so the
         # same question has to be asked here.
-        # A 👍 (liked_at) is a signal on its own; a 👎 (dismissed_at) never is.
-        # The database keeps only the later of the two; checked here as well.
-        liked = bool(s.get("liked_at")) and not s.get("dismissed_at")
+        # A 👍 (liked_at) is a signal on its own; a 👎 (dismissed_at) never is,
+        # and the database keeps it off any row that is saved, started or 👍.
+        liked = bool(s.get("liked_at"))
         if not s.get("saved") and s.get("status") == "unread" and not liked:
             continue
         # Keyed off `saved`, not a status value. Since the two-axis split
