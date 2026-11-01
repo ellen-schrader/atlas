@@ -70,19 +70,52 @@ def _clean(value: str | None) -> str | None:
     return text or None
 
 
+_AND = re.compile(r"\s+and\s+", re.I)
+
+
+def _split_names(raw: str) -> list[str]:
+    """Split on 'and' only outside braces: '{Trial and Investigators}' is one name."""
+    out: list[str] = []
+    depth, start = 0, 0
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and (m := _AND.match(raw, i)):
+            out.append(raw[start:i])
+            start = i = m.end()
+            continue
+        i += 1
+    out.append(raw[start:])
+    return out
+
+
 def _authors(raw: str | None) -> list[str]:
-    """BibTeX authors are 'and'-separated and often 'Last, First'."""
+    """BibTeX authors are 'and'-separated and often 'Last, First'.
+
+    A name wrapped whole in braces is a group ("{KEYNOTE-522 Investigators}"): it is
+    kept as written, not reordered at a comma, and loses any wrapping brackets.
+    """
     if not raw:
         return []
     out: list[str] = []
-    for chunk in re.split(r"\s+and\s+", raw, flags=re.I):
+    for chunk in _split_names(raw):
+        chunk = chunk.strip()
+        group = chunk.startswith("{") and chunk.endswith("}")
         name = _clean(chunk)
         if not name:
             continue
-        if "," in name:  # "Werb, Zena" -> "Zena Werb"
+        if name.startswith("(") and name.endswith(")"):
+            name = name[1:-1].strip()
+            group = True
+        if not group and "," in name:  # "Werb, Zena" -> "Zena Werb"
             last, _, first = name.partition(",")
             name = f"{first.strip()} {last.strip()}".strip()
-        out.append(name)
+        if name:
+            out.append(name)
     return out
 
 
