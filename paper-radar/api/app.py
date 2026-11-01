@@ -1605,7 +1605,6 @@ _W_COMMENT = taste.W_COMMENT
 _W_BOOKMARK = taste.W_BOOKMARK
 _W_POSTED = taste.W_POSTED
 _W_READ = taste.W_READ
-_W_LIKED = taste.W_LIKED
 _HALFLIFE_DAYS = taste.HALFLIFE_DAYS
 _parse_ts = taste.parse_ts
 _recency_decay = taste.recency_decay

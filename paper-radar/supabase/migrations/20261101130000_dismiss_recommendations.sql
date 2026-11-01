@@ -11,6 +11,8 @@
 --                 reading list. Not a reaction, which the whole lab sees.
 --
 -- Either one means you've answered the recommendation, so it isn't offered again.
+-- A row holds one answer: the later one wins (trigger below), however the two
+-- arrive (a quick 👍 then 👎 whose requests cross, or a merge of two copies).
 --
 -- Saving the paper or starting to read it clears the dismissal (trigger below),
 -- so un-saving it afterwards puts it back into circulation, as un-saving always
@@ -29,7 +31,7 @@
 alter table public.paper_status add column if not exists dismissed_at timestamptz;
 alter table public.paper_status add column if not exists liked_at timestamptz;
 
-create or replace function public.paper_status_clear_dismissal()
+create or replace function public.paper_status_one_answer()
 returns trigger
 language plpgsql
 set search_path = public
@@ -38,14 +40,21 @@ begin
     if new.saved or new.status <> 'unread' then
         new.dismissed_at := null;
     end if;
+    if new.liked_at is not null and new.dismissed_at is not null then
+        if new.liked_at > new.dismissed_at then
+            new.dismissed_at := null;
+        else
+            new.liked_at := null;
+        end if;
+    end if;
     return new;
 end;
 $$;
 
-drop trigger if exists paper_status_clear_dismissal on public.paper_status;
-create trigger paper_status_clear_dismissal
+drop trigger if exists paper_status_one_answer on public.paper_status;
+create trigger paper_status_one_answer
     before insert or update on public.paper_status
-    for each row execute function public.paper_status_clear_dismissal();
+    for each row execute function public.paper_status_one_answer();
 
 -- === what counts as "seen" ===================================================
 
@@ -289,7 +298,8 @@ begin
                          else 'unread'
                      end,
         updated_at = greatest(d.updated_at, s.updated_at),
-        -- An answer to either recommendation is an answer about the paper.
+        -- An answer to either recommendation is an answer about the paper; if
+        -- they differ, paper_status_one_answer keeps the later one.
         liked_at     = coalesce(d.liked_at, s.liked_at),
         dismissed_at = coalesce(d.dismissed_at, s.dismissed_at)
       from public.paper_status s

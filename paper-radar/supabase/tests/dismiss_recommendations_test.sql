@@ -6,7 +6,7 @@
 -- her own rows as `authenticated`, the way the app does.
 
 begin;
-select plan(10);
+select plan(12);
 
 create function pg_temp.qv() returns extensions.vector
 language sql immutable as $$
@@ -155,6 +155,29 @@ select is(
      where paper_id = 'd0000000-0000-0000-0000-000000000004'),
     0,
     'a paper given a thumbs up is not recommended again');
+
+-- One answer per row, the later one: a 👍 arriving after a newer 👎 (crossed
+-- requests) is dropped; a newer 👍 replaces an older 👎.
+update public.paper_status
+   set dismissed_at = now() + interval '1 second', liked_at = now()
+ where user_id = '00000000-0000-0000-0000-0000000000d1'
+   and paper_id = 'd0000000-0000-0000-0000-000000000004';
+select is(
+    (select row(liked_at is null, dismissed_at is null) from public.paper_status
+     where user_id = '00000000-0000-0000-0000-0000000000d1'
+       and paper_id = 'd0000000-0000-0000-0000-000000000004')::text,
+    '(t,f)',
+    'a 👍 older than the 👎 on the same row is dropped');
+
+update public.paper_status set liked_at = now() + interval '2 seconds'
+ where user_id = '00000000-0000-0000-0000-0000000000d1'
+   and paper_id = 'd0000000-0000-0000-0000-000000000004';
+select is(
+    (select row(liked_at is null, dismissed_at is null) from public.paper_status
+     where user_id = '00000000-0000-0000-0000-0000000000d1'
+       and paper_id = 'd0000000-0000-0000-0000-000000000004')::text,
+    '(f,t)',
+    'a newer 👍 replaces the 👎');
 reset role;
 
 select * from finish();

@@ -15,17 +15,27 @@ import { cn, formatAuthors } from "@/lib/utils";
 
 /** 👍 / 👎 on a recommendation (#182), both private to you. 👍 "More like this"
  *  (paper_status.liked_at) is a taste signal that doesn't touch your reading
- *  list; the card stays, its thumb filled. 👎 "Not interested" (dismissed_at)
- *  is no signal at all, and the card goes with an Undo.
+ *  list; the card stays, its thumb filled, until the row next refreshes. 👎
+ *  "Not interested" (dismissed_at) is no signal at all, and the card goes at
+ *  once. Either way the server won't offer the paper again, so both toasts
+ *  carry an Undo: after the refresh it is the only way back.
  *
- *  Both edit the cached Discover list rather than refetching it: the 👎 card
- *  stays gone and the 👍 stays filled when Home remounts, and the other cards
- *  don't reshuffle under the pointer. The server stops offering either paper
- *  on the next refresh. */
+ *  Both edit the cached Discover list rather than refetching it, so the other
+ *  cards don't reshuffle under the pointer. One card's writes go out in click
+ *  order, so a quick 👍 then 👎 can't land the other way round. */
 function useRecFeedback(userId: string, teamId: string, rowRef: RefObject<HTMLDivElement | null>) {
   const qc = useQueryClient();
   const toast = useToast();
   const key = ["recommendations", teamId, "discover"];
+  const chains = useRef(new Map<string, Promise<unknown>>());
+  // When each 👍 on screen was given, so undoing a 👎 can put it back as it was.
+  const likedAt = useRef(new Map<string, string>());
+
+  function inOrder<T>(paperId: string, run: () => Promise<T>): Promise<T> {
+    const next = (chains.current.get(paperId) ?? Promise.resolve()).then(run, run);
+    chains.current.set(paperId, next);
+    return next;
+  }
 
   type Removed = [QueryKey, number, Recommendation];
 
@@ -89,19 +99,37 @@ function useRecFeedback(userId: string, teamId: string, rowRef: RefObject<HTMLDi
   async function like(paperId: string, on: boolean) {
     edit(paperId, (r) => ({ ...r, liked: on }));
     const now = new Date().toISOString();
-    // updated_at dates the signal for the taste vector's recency decay.
-    const ok = await write(paperId, on ? { liked_at: now, updated_at: now } : { liked_at: null });
+    if (on) likedAt.current.set(paperId, now);
+    else likedAt.current.delete(paperId);
+    const ok = await inOrder(paperId, () => write(paperId, { liked_at: on ? now : null }));
     if (!ok) {
-      edit(paperId, (r) => ({ ...r, liked: !on }));
+      // Only if nothing newer has been clicked on this card since.
+      edit(paperId, (r) => (r.liked === on ? { ...r, liked: !on } : r));
       toast({ message: "Couldn’t save that. Try again." });
+      return;
+    }
+    if (on) {
+      toast({
+        message: "You’ll see more like this",
+        actionLabel: "Undo",
+        onAction: async () => {
+          likedAt.current.delete(paperId);
+          const undone = await inOrder(paperId, () => write(paperId, { liked_at: null }));
+          if (!undone) throw new Error("Undo failed");
+          edit(paperId, (r) => ({ ...r, liked: false }));
+        },
+      });
     }
   }
 
   async function dislike(paperId: string) {
     keepFocus();
     const removed = take(paperId);
+    const liked = likedAt.current.get(paperId) ?? null;
+    likedAt.current.delete(paperId);
     // A 👎 replaces a 👍 given a moment ago on the same card.
-    if (!(await write(paperId, { dismissed_at: new Date().toISOString(), liked_at: null }))) {
+    const dismissed = { dismissed_at: new Date().toISOString(), liked_at: null };
+    if (!(await inOrder(paperId, () => write(paperId, dismissed)))) {
       putBack(removed);
       toast({ message: "Couldn’t hide that. Try again." });
       return;
@@ -110,9 +138,12 @@ function useRecFeedback(userId: string, teamId: string, rowRef: RefObject<HTMLDi
       message: "You won’t see this one again",
       actionLabel: "Undo",
       onAction: async () => {
-        // Throw so the toast stays open and offers Undo again.
-        if (!(await write(paperId, { dismissed_at: null }))) throw new Error("Undo failed");
-        putBack(removed.map(([k, at, rec]) => [k, at, { ...rec, liked: false }]));
+        // Back as it was, 👍 included. Throw so the toast stays open and offers
+        // Undo again.
+        const back = { dismissed_at: null, liked_at: liked };
+        if (!(await inOrder(paperId, () => write(paperId, back)))) throw new Error("Undo failed");
+        if (liked) likedAt.current.set(paperId, liked);
+        putBack(removed.map(([k, at, rec]) => [k, at, { ...rec, liked: !!liked }]));
       },
     });
   }
