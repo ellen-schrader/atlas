@@ -61,15 +61,16 @@ function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDiv
   // The focused button goes with its card; hand focus to the card that takes
   // its place (or the one before, at the end of the row) so a keyboard user
   // carries on from there rather than from the top of the page.
+  // Its neighbour is focused before the card goes: cards are keyed, so that
+  // element survives the re-render, which a lookup by position afterwards
+  // can't promise (it can run before React has removed the card).
   function keepFocus() {
     const row = rowRef.current;
     const card = document.activeElement?.closest("[data-rec-card]");
     if (!row || !card || !row.contains(card)) return;
-    const at = Array.from(row.querySelectorAll("[data-rec-card]")).indexOf(card);
-    requestAnimationFrame(() => {
-      const cards = row.querySelectorAll<HTMLElement>("[data-rec-card]");
-      (cards[at] ?? cards[at - 1])?.focus();
-    });
+    const cards = Array.from(row.querySelectorAll<HTMLElement>("[data-rec-card]"));
+    const at = cards.indexOf(card as HTMLElement);
+    (cards[at + 1] ?? cards[at - 1])?.focus();
   }
 
   async function dismiss(paperId: string, dismissedAt: string | null) {
@@ -359,7 +360,11 @@ export function RecCard({
           ) : (
             <span className="h-[34px] flex-1" />
           )}
-          <span onClick={(e) => e.stopPropagation()} className="flex shrink-0 items-center">
+          {/* Spaced so each icon's 44px touch area (.tap-target) stays its own. */}
+          <span
+            onClick={(e) => e.stopPropagation()}
+            className="flex shrink-0 items-center gap-3 [@media(pointer:coarse)]:gap-6"
+          >
             <button
               type="button"
               onClick={() => onAction("dismiss")}
