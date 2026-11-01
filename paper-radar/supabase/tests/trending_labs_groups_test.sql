@@ -4,7 +4,7 @@
 -- reach Home's Labs board. Same JWT-claims trick as home_trends_test.sql.
 
 begin;
-select plan(2);
+select plan(3);
 
 insert into auth.users (id, email, raw_user_meta_data) values
     ('00000000-0000-0000-0000-0000000000c1', 'cy@lab.test', '{"display_name":"Cy"}'::jsonb);
@@ -29,7 +29,9 @@ insert into public.papers (id, url, url_norm, title, authors) values
     ('20000000-0000-0000-0000-000000000004', 'http://t/4', 't/4', 'Only a group',
      '["TCGA Research Network"]'),
     ('20000000-0000-0000-0000-000000000005', 'http://t/5', 't/5', 'Plain',
-     '["Wu","Rebecca Dent"]');
+     '["Wu","Rebecca Dent"]'),
+    ('20000000-0000-0000-0000-000000000006', 'http://t/6', 't/6', 'Parenthetical',
+     '["Wu","Wei Chen (陈伟)"]');
 
 insert into public.paper_posts (paper_id, team_id, posted_by, posted_at, tags, source)
 select id, '55555555-5555-5555-5555-555555555555', '00000000-0000-0000-0000-0000000000c1',
@@ -41,7 +43,8 @@ set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000c1"}'
 
 select results_eq(
     $$ select lab, n, sharers from public.trending_labs('55555555-5555-5555-5555-555555555555', 30, 5) $$,
-    $$ values ('Rebecca Dent'::text, 2, 1), ('Priya Rastogi'::text, 1, 1), ('Sandra Swain'::text, 1, 1) $$,
+    $$ values ('Rebecca Dent'::text, 2, 1), ('Priya Rastogi'::text, 1, 1),
+              ('Sandra Swain'::text, 1, 1), ('Wei Chen (陈伟)'::text, 1, 1) $$,
     'trending_labs: the last person, never a trial group or consortium'
 );
 
@@ -50,6 +53,15 @@ select is(
      where lab ~* 'investigators|group|network'),
     0,
     'trending_labs: a paper with only a group author has no lab'
+);
+
+select is(
+    (select array_agg(public.is_group_author(n) order by i)
+     from unnest(array['KEYNOTE-522 Investigators', '(KEYNOTE-355 Investigators)',
+                       '(monarchE Committee Members', 'Investigators)', 'Wei Chen (陈伟)',
+                       'Raza Ali']) with ordinality as t(n, i)),
+    array[true, true, true, true, false, false],
+    'is_group_author: groups, bracketed names and split pieces; not a person with a parenthetical'
 );
 
 select * from finish();

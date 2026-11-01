@@ -93,6 +93,13 @@ def test_group_authors_stay_whole():
     ]
 
 
+def test_brace_protected_person_parts_are_still_reordered():
+    bib = r"""@article{x, title = {T}, author = {{Smith}, {John} and {van Dyk}, {David}},
+      year = {2020}, doi = {10.1/x}}"""
+    (e,) = parse_bibtex(bib).entries
+    assert e.authors == ["John Smith", "David van Dyk"]
+
+
 def test_month_macro_and_numeric_month_both_resolve():
     a, b = parse_bibtex(ZOTERO).entries[0], parse_bibtex(ZOTERO).entries[1]
     assert a.published_at == date(2025, 3, 1)   # `month = mar` (a bare macro, not a string)

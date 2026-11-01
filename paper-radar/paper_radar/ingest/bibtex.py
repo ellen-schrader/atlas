@@ -93,6 +93,21 @@ def _split_names(raw: str) -> list[str]:
     return out
 
 
+def _wholly_braced(chunk: str) -> bool:
+    """'{CLEOPATRA Study Group, the}' is; '{Smith}, {John}' isn't (two braced parts)."""
+    if not chunk.startswith("{"):
+        return False
+    depth = 0
+    for i, ch in enumerate(chunk):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i == len(chunk) - 1
+    return False
+
+
 def _authors(raw: str | None) -> list[str]:
     """BibTeX authors are 'and'-separated and often 'Last, First'.
 
@@ -104,7 +119,7 @@ def _authors(raw: str | None) -> list[str]:
     out: list[str] = []
     for chunk in _split_names(raw):
         chunk = chunk.strip()
-        group = chunk.startswith("{") and chunk.endswith("}")
+        group = _wholly_braced(chunk)
         name = _clean(chunk)
         if not name:
             continue

@@ -244,6 +244,8 @@ def test_lab_skips_trial_groups():
     )
     assert _last_author_lab(["TCGA Research Network"]) is None
     assert _last_author_lab(["Raza Ali"]) == "Raza Ali"
+    # a person with a parenthetical is still a person
+    assert _last_author_lab(["A Author", "Wei Chen (陈伟)"]) == "Wei Chen (陈伟)"
 
 
 def test_resolve_dedup_key_strips_tracking_params(signed_in):

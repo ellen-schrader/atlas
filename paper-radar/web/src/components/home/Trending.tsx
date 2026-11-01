@@ -143,7 +143,7 @@ export function Trending({
                 <button
                   type="button"
                   onClick={() => onLab(a.lab)}
-                  title={`${a.lab} is the last author on these papers`}
+                  title={`${a.lab} is the senior author on these papers`}
                   className="flex min-h-11 w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <Avatar name={a.lab} size={26} />

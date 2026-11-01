@@ -10,9 +10,9 @@
 --    with an unclosed "(" are rejoined with " and " up to the piece that closes
 --    it, and brackets wrapping a whole name go. Only lists holding a bracket
 --    are touched. (paper_radar/ingest/bibtex.py no longer splits them.)
--- 2. trending_labs takes the last author that is a person, skipping names that
---    look like a group. The pattern matches api/app.py _GROUP_AUTHOR; keep the
---    two in step.
+-- 2. trending_labs takes the last author that is a person: is_group_author()
+--    skips group names, names wholly in brackets and split pieces. It is the
+--    same rule as api/app.py _is_group_author; keep the two in step.
 
 create or replace function pg_temp.rejoin_authors(a jsonb)
 returns jsonb
@@ -23,22 +23,25 @@ declare
     out_   jsonb := '[]'::jsonb;
     name_  text;
     held   text := null;
+    pieces jsonb := '[]'::jsonb;  -- what `held` was built from
 begin
     for name_ in select value from jsonb_array_elements_text(a) loop
         if held is not null then
             held := held || ' and ' || btrim(name_);
+            pieces := pieces || to_jsonb(btrim(name_));
             if name_ like '%)%' then
                 out_ := out_ || to_jsonb(held);
                 held := null;
             end if;
         elsif name_ like '%(%' and name_ not like '%)%' then
             held := btrim(name_);
+            pieces := jsonb_build_array(held);
         else
             out_ := out_ || to_jsonb(btrim(name_));
         end if;
     end loop;
-    if held is not null then  -- never closed: keep what was there
-        out_ := out_ || to_jsonb(held);
+    if held is not null then  -- never closed: keep the pieces as they were
+        out_ := out_ || pieces;
     end if;
     -- "(KEYNOTE-522 Investigators)" -> "KEYNOTE-522 Investigators"
     return (
@@ -50,11 +53,29 @@ begin
 end;
 $$;
 
-update public.papers
-set authors = pg_temp.rejoin_authors(authors)
-where jsonb_typeof(authors) = 'array'
-  and authors::text ~ '[()]'
-  and authors is distinct from pg_temp.rejoin_authors(authors);
+update public.papers p
+set authors = f.fixed
+from (
+    select id, pg_temp.rejoin_authors(authors) as fixed
+    from public.papers
+    where jsonb_typeof(authors) = 'array'
+      and authors::text ~ '[()]'
+) f
+where p.id = f.id
+  and p.authors is distinct from f.fixed;
+
+-- A trial group or consortium, a name wholly in brackets, or a split piece of
+-- one ("Investigators)"): not a person, so not a lab.
+create or replace function public.is_group_author(name text)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+    select name ~* '\m(investigators?|group|consortium|collaborat\w*|committee|trialists|network|working party|on behalf of)\M'
+        or btrim(name) ~ '^\(.*\)$'
+        or (strpos(name, '(') > 0) <> (strpos(name, ')') > 0);
+$$;
 
 create or replace function public.trending_labs(
     p_team  uuid,
@@ -76,7 +97,7 @@ as $$
         select btrim(a.name) as lab
         from jsonb_array_elements_text(p.authors) with ordinality as a(name, i)
         where btrim(a.name) <> ''
-          and a.name !~* '[()]|\m(investigators?|study group|group|consortium|collaborat\w*|trialists|network|working party|on behalf of)\M'
+          and not public.is_group_author(a.name)
         order by a.i desc
         limit 1
     ) l
