@@ -1037,6 +1037,28 @@ def test_followed_hits_use_post_tags():
     assert _followed_hits(paper_tagged, ["imaging", "spatial"]) == ["spatial", "imaging"]
 
 
+def test_thumbs_on_a_recommendation():
+    """👍 (liked_at) is a private "more like this": weighted without a save, and
+    it names the reason. 👎 (dismissed_at) leaves an unsaved, unread row that
+    says nothing (#182)."""
+    from api.app import _W_LIKED, _engagement_weights
+
+    def row(pid: str, **kw) -> dict:
+        return {"paper_id": pid, "saved": False, "status": "unread", "updated_at": None, **kw}
+
+    uc = _FakeClient(
+        paper_status=[
+            row("liked", liked_at="2026-11-01T12:00:00Z"),
+            row("dismissed", dismissed_at="2026-11-01T12:00:00Z"),
+        ]
+    )
+    anchors: dict[str, str] = {}
+    weights = _engagement_weights(uc, "user-1", "team-1", anchors)
+
+    assert weights == {"liked": pytest.approx(_W_LIKED)}
+    assert anchors == {"liked": "similar_liked"}
+
+
 def test_cold_start_puts_followed_tags_first_and_says_so():
     from api.app import _new_reasons, _recency_fallback
 

@@ -1,4 +1,4 @@
--- dismiss_recommendations_test.sql — "Not interested" (#182,
+-- dismiss_recommendations_test.sql — 👍 / 👎 on recommendations (#182,
 -- 20261101130000_dismiss_recommendations.sql): a dismissed paper leaves
 -- recommend_papers, recommend_tagged, window_scores and the cold start's
 -- recent_unseen; a merge keeps it; saving it or starting it
@@ -6,7 +6,7 @@
 -- her own rows as `authenticated`, the way the app does.
 
 begin;
-select plan(9);
+select plan(10);
 
 create function pg_temp.qv() returns extensions.vector
 language sql immutable as $$
@@ -137,6 +137,25 @@ select isnt(
        and paper_id = 'd0000000-0000-0000-0000-000000000002'),
     null,
     'merge_papers keeps a dismissal from the merged paper');
+
+-- 👍 (liked_at) answers the recommendation too: not offered again.
+insert into public.papers (id, url, url_norm, title, embedding) values
+    ('d0000000-0000-0000-0000-000000000004', 'http://d/4', 'd/4', 'Liked', pg_temp.qv());
+insert into public.paper_posts (paper_id, team_id, posted_by, source) values
+    ('d0000000-0000-0000-0000-000000000004', '66666666-6666-6666-6666-666666666666',
+     '00000000-0000-0000-0000-0000000000d2', 'web');
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-0000-0000-0000000000d1"}';
+insert into public.paper_status (user_id, paper_id, team_id, liked_at) values
+    ('00000000-0000-0000-0000-0000000000d1', 'd0000000-0000-0000-0000-000000000004',
+     '66666666-6666-6666-6666-666666666666', now());
+select is(
+    (select count(*)::int from public.recommend_papers(
+        '66666666-6666-6666-6666-666666666666', pg_temp.qv(), 20)
+     where paper_id = 'd0000000-0000-0000-0000-000000000004'),
+    0,
+    'a paper given a thumbs up is not recommended again');
+reset role;
 
 select * from finish();
 rollback;

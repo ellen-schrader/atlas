@@ -1,10 +1,16 @@
--- 20261101130000_dismiss_recommendations.sql — "Not interested" (#182).
+-- 20261101130000_dismiss_recommendations.sql — 👍 / 👎 on recommendations (#182).
 --
 -- Until now the only way to clear a recommendation you didn't want was to mark
--- it read, which told the taste vector you had read it. paper_status gets a
--- dismissed_at: the paper leaves Discover (and its cold start), the Claude
--- connector's recommend_reading and the digest's "For you". A dismissed row is
--- unsaved and unread, so taste.engagement_weights already skips it as a signal.
+-- it read, which told the taste vector you had read it. paper_status gets:
+--
+--   dismissed_at  👎 "Not interested": the paper leaves Discover (and its cold
+--                 start), the Claude connector's recommend_reading and the
+--                 digest's "For you". No weight in the taste vector.
+--   liked_at      👍 "More like this": a private positive signal (taste.W_LIKED,
+--                 between reading and saving) without adding the paper to the
+--                 reading list. Not a reaction, which the whole lab sees.
+--
+-- Either one means you've answered the recommendation, so it isn't offered again.
 --
 -- Saving the paper or starting to read it clears the dismissal (trigger below),
 -- so un-saving it afterwards puts it back into circulation, as un-saving always
@@ -17,9 +23,11 @@
 -- (same signatures, so grants are kept). recent_unseen() is the cold start's
 -- newest-first feed, filtered here rather than in Python, so a run of dismissed
 -- papers can't empty a page. merge_papers is copied from
--- 20261018120000_preprint_watch.sql with dismissed_at added to the status merge.
+-- 20261018120000_preprint_watch.sql with liked_at and dismissed_at added to the
+-- status merge.
 
 alter table public.paper_status add column if not exists dismissed_at timestamptz;
+alter table public.paper_status add column if not exists liked_at timestamptz;
 
 create or replace function public.paper_status_clear_dismissal()
 returns trigger
@@ -43,9 +51,10 @@ create trigger paper_status_clear_dismissal
 
 -- The caller has done something with this paper in this lab, so it isn't news to
 -- them. A paper_status row has to MEAN something: saved is intent, progress past
--- 'unread' is consumption, dismissed_at is "Not interested". The all-default row
--- un-saving leaves behind says nothing (20261007130000). Reactions and comments
--- count whatever they are. Posting is checked by the callers, on the post row.
+-- 'unread' is consumption, liked_at / dismissed_at answer a recommendation. The
+-- all-default row un-saving leaves behind says nothing (20261007130000).
+-- Reactions and comments count whatever they are. Posting is checked by the
+-- callers, on the post row.
 create or replace function public.seen_by_me(p_paper uuid, p_team uuid)
 returns boolean
 language sql
@@ -55,7 +64,8 @@ as $$
     select exists (
                select 1 from public.paper_status ps
                where ps.paper_id = p_paper and ps.team_id = p_team and ps.user_id = auth.uid()
-                 and (ps.saved or ps.status <> 'unread' or ps.dismissed_at is not null)
+                 and (ps.saved or ps.status <> 'unread'
+                      or ps.liked_at is not null or ps.dismissed_at is not null)
            )
         or exists (
                select 1 from public.reactions r
@@ -194,7 +204,7 @@ $$;
 revoke execute on function public.recent_unseen(uuid, int, uuid[]) from public, anon;
 grant execute on function public.recent_unseen(uuid, int, uuid[]) to authenticated;
 
--- === merges keep a dismissal =================================================
+-- === merges keep a 👍 or 👎 ===================================================
 
 create or replace function public.merge_papers(p_from uuid, p_into uuid, p_reason text)
 returns uuid
@@ -279,7 +289,8 @@ begin
                          else 'unread'
                      end,
         updated_at = greatest(d.updated_at, s.updated_at),
-        -- "Not interested" in either is not interested in the paper.
+        -- An answer to either recommendation is an answer about the paper.
+        liked_at     = coalesce(d.liked_at, s.liked_at),
         dismissed_at = coalesce(d.dismissed_at, s.dismissed_at)
       from public.paper_status s
      where s.paper_id = p_from and d.paper_id = p_into

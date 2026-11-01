@@ -1,6 +1,6 @@
 import { type CSSProperties, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { type QueryKey, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronLeft, ChevronRight, Sparkle, Sparkles, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Sparkle, Sparkles, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Chip } from "@/components/Chip";
@@ -8,38 +8,43 @@ import { Cover } from "@/components/Cover";
 import { HeadingLink, SectionHeading, TopicDot } from "@/components/home/HomeSection";
 import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
 import { useToast } from "@/components/Toast";
-import { useSetReadStatus } from "@/hooks/useSetReadStatus";
 import type { RecommendationsResult } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import type { Recommendation, RecommendationReason } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
 
-/** What a card can do besides saving (#182). "read" is for a paper read elsewhere
- *  and counts as reading it; "dismiss" is "Not interested" and counts as nothing. */
-type RecAction = "read" | "dismiss";
-
-/** Mark a recommended paper read, or not interested, and offer Undo. The card
- *  leaves the cached Discover list itself, so it stays gone when Home remounts,
- *  and the row isn't refetched, so the other cards don't reshuffle under the
- *  pointer. Undo puts it back where it was. A recommended paper has no
- *  meaningful status row (the API leaves those out), so Undo restores the
- *  defaults: unread, not dismissed. */
-function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDivElement | null>) {
+/** 👍 / 👎 on a recommendation (#182), both private to you. 👍 "More like this"
+ *  (paper_status.liked_at) is a taste signal that doesn't touch your reading
+ *  list; the card stays, its thumb filled. 👎 "Not interested" (dismissed_at)
+ *  is no signal at all, and the card goes with an Undo.
+ *
+ *  Both edit the cached Discover list rather than refetching it: the 👎 card
+ *  stays gone and the 👍 stays filled when Home remounts, and the other cards
+ *  don't reshuffle under the pointer. The server stops offering either paper
+ *  on the next refresh. */
+function useRecFeedback(userId: string, teamId: string, rowRef: RefObject<HTMLDivElement | null>) {
   const qc = useQueryClient();
   const toast = useToast();
-  const setReadStatus = useSetReadStatus(userId, teamId);
+  const key = ["recommendations", teamId, "discover"];
 
   type Removed = [QueryKey, number, Recommendation];
 
+  function edit(paperId: string, change: (rec: Recommendation) => Recommendation) {
+    qc.setQueriesData<RecommendationsResult>({ queryKey: key }, (data) =>
+      data && {
+        ...data,
+        results: data.results.map((r) => (r.post.papers.id === paperId ? change(r) : r)),
+      },
+    );
+  }
+
   function take(paperId: string): Removed[] {
     const removed: Removed[] = [];
-    for (const [key, data] of qc.getQueriesData<RecommendationsResult>({
-      queryKey: ["recommendations", teamId, "discover"],
-    })) {
+    for (const [k, data] of qc.getQueriesData<RecommendationsResult>({ queryKey: key })) {
       const at = data?.results.findIndex((r) => r.post.papers.id === paperId) ?? -1;
       if (!data || at < 0) continue;
-      removed.push([key, at, data.results[at]]);
-      qc.setQueryData<RecommendationsResult>(key, {
+      removed.push([k, at, data.results[at]]);
+      qc.setQueryData<RecommendationsResult>(k, {
         ...data,
         results: data.results.filter((_, j) => j !== at),
       });
@@ -48,8 +53,8 @@ function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDiv
   }
 
   function putBack(removed: Removed[]) {
-    for (const [key, at, rec] of removed) {
-      qc.setQueryData<RecommendationsResult>(key, (data) => {
+    for (const [k, at, rec] of removed) {
+      qc.setQueryData<RecommendationsResult>(k, (data) => {
         if (!data || data.results.some((r) => r.post.papers.id === rec.post.papers.id)) return data;
         const results = [...data.results];
         results.splice(Math.min(at, results.length), 0, rec);
@@ -58,12 +63,10 @@ function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDiv
     }
   }
 
-  // The focused button goes with its card; hand focus to the card that takes
-  // its place (or the one before, at the end of the row) so a keyboard user
-  // carries on from there rather than from the top of the page.
-  // Its neighbour is focused before the card goes: cards are keyed, so that
-  // element survives the re-render, which a lookup by position afterwards
-  // can't promise (it can run before React has removed the card).
+  // The focused 👎 goes with its card, so a keyboard user would land at the top
+  // of the page. Its neighbour is focused before the card goes: cards are keyed,
+  // so that element survives the re-render, which a lookup by position
+  // afterwards can't promise (it can run before React has removed the card).
   function keepFocus() {
     const row = rowRef.current;
     const card = document.activeElement?.closest("[data-rec-card]");
@@ -73,43 +76,48 @@ function useRecActions(userId: string, teamId: string, rowRef: RefObject<HTMLDiv
     (cards[at + 1] ?? cards[at - 1])?.focus();
   }
 
-  async function dismiss(paperId: string, dismissedAt: string | null) {
+  async function write(paperId: string, fields: Record<string, string | null>) {
     const { error } = await supabase
       .from("paper_status")
       .upsert(
-        { user_id: userId, team_id: teamId, paper_id: paperId, dismissed_at: dismissedAt },
+        { user_id: userId, team_id: teamId, paper_id: paperId, ...fields },
         { onConflict: "user_id,paper_id,team_id" },
       );
     return !error;
   }
 
-  async function act(paperId: string, action: RecAction) {
+  async function like(paperId: string, on: boolean) {
+    edit(paperId, (r) => ({ ...r, liked: on }));
+    const now = new Date().toISOString();
+    // updated_at dates the signal for the taste vector's recency decay.
+    const ok = await write(paperId, on ? { liked_at: now, updated_at: now } : { liked_at: null });
+    if (!ok) {
+      edit(paperId, (r) => ({ ...r, liked: !on }));
+      toast({ message: "Couldn’t save that. Try again." });
+    }
+  }
+
+  async function dislike(paperId: string) {
     keepFocus();
     const removed = take(paperId);
-    const ok =
-      action === "read"
-        ? await setReadStatus(paperId, "read")
-        : await dismiss(paperId, new Date().toISOString());
-    if (!ok) {
+    // A 👎 replaces a 👍 given a moment ago on the same card.
+    if (!(await write(paperId, { dismissed_at: new Date().toISOString(), liked_at: null }))) {
       putBack(removed);
-      // setReadStatus says so itself.
-      if (action === "dismiss") toast({ message: "Couldn’t hide that. Try again." });
+      toast({ message: "Couldn’t hide that. Try again." });
       return;
     }
     toast({
-      message: action === "read" ? "Marked as read" : "You won’t see this one again",
+      message: "You won’t see this one again",
       actionLabel: "Undo",
       onAction: async () => {
-        const undone =
-          action === "read" ? await setReadStatus(paperId, "unread") : await dismiss(paperId, null);
         // Throw so the toast stays open and offers Undo again.
-        if (!undone) throw new Error("Undo failed");
-        putBack(removed);
+        if (!(await write(paperId, { dismissed_at: null }))) throw new Error("Undo failed");
+        putBack(removed.map(([k, at, rec]) => [k, at, { ...rec, liked: false }]));
       },
     });
   }
 
-  return act;
+  return { like, dislike };
 }
 
 interface RecsState {
@@ -149,7 +157,7 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
-  const act = useRecActions(userId, teamId, rowRef);
+  const feedback = useRecFeedback(userId, teamId, rowRef);
 
   const measure = useCallback(() => {
     const el = rowRef.current;
@@ -226,7 +234,8 @@ export function RecommendationsRow({
                 userId={userId}
                 bookmarked={bookmarkedIds.has(r.post.papers.id)}
                 onOpen={() => onOpen(r.post.papers.id)}
-                onAction={(action) => void act(r.post.papers.id, action)}
+                onLike={(on) => void feedback.like(r.post.papers.id, on)}
+                onDislike={() => void feedback.dislike(r.post.papers.id)}
               />
             </div>
           ))}
@@ -294,7 +303,8 @@ export function RecCard({
   userId,
   bookmarked,
   onOpen,
-  onAction,
+  onLike,
+  onDislike,
 }: {
   rec: Recommendation;
   teamId: string;
@@ -302,7 +312,8 @@ export function RecCard({
   userId: string;
   bookmarked: boolean;
   onOpen: () => void;
-  onAction: (action: RecAction) => void;
+  onLike: (on: boolean) => void;
+  onDislike: () => void;
 }) {
   const post = rec.post;
   const p = post.papers;
@@ -311,7 +322,7 @@ export function RecCard({
   const eyebrow = [p.venue, p.year].filter(Boolean).join(" · ");
 
   return (
-    // role="button", not <button>: the bookmark inside is a button.
+    // role="button", not <button>: the bookmark and thumbs inside are buttons.
     <div
       role="button"
       tabIndex={0}
@@ -334,7 +345,22 @@ export function RecCard({
       </div>
       <div className="flex min-w-0 items-center gap-2 text-eyebrow font-bold uppercase tracking-eyebrow text-muted">
         <TopicDot topic={topic} />
-        <span className="truncate">{eyebrow}</span>
+        <span className="min-w-0 flex-1 truncate">{eyebrow}</span>
+        {/* Saving acts on the paper, so it sits apart from the thumbs, which
+            answer the recommendation. Negative margins keep the eyebrow's
+            height and the icon's alignment with the card's edge. */}
+        <span
+          onClick={(e) => e.stopPropagation()}
+          className="-my-2 -mr-2 shrink-0 normal-case tracking-normal"
+        >
+          <BookmarkButton
+            paperId={p.id}
+            teamId={teamId}
+            userId={userId}
+            bookmarked={bookmarked}
+            className="tap-target h-8 w-8 justify-center rounded-full text-muted hover:bg-surface-2 hover:text-accent"
+          />
+        </span>
       </div>
       <h3 className="mt-2.5 line-clamp-3 h-[57px] text-card font-semibold leading-[19px] tracking-snug">
         {p.title ?? p.url}
@@ -360,36 +386,35 @@ export function RecCard({
           ) : (
             <span className="h-[34px] flex-1" />
           )}
-          {/* Spaced so each icon's 44px touch area (.tap-target) stays its own. */}
+          {/* 32px round targets that show where they end, so a near miss doesn't
+              open the paper; on touch, spaced so each 44px area (.tap-target)
+              stays its own. Negative margins line the icons up with the text. */}
           <span
             onClick={(e) => e.stopPropagation()}
-            className="flex shrink-0 items-center gap-3 [@media(pointer:coarse)]:gap-6"
+            className="-mr-2 -mt-2 flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:gap-3"
           >
             <button
               type="button"
-              onClick={() => onAction("dismiss")}
-              aria-label="Not interested"
-              title="Not interested"
-              className="tap-target grid place-items-center text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              onClick={() => onLike(!rec.liked)}
+              aria-pressed={!!rec.liked}
+              aria-label="More like this"
+              title="More like this"
+              className={cn(
+                "tap-target grid h-8 w-8 place-items-center rounded-full transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                rec.liked ? "text-accent" : "text-muted hover:text-fg",
+              )}
             >
-              <X size={15} aria-hidden />
+              <ThumbsUp size={15} fill={rec.liked ? "currentColor" : "none"} aria-hidden />
             </button>
             <button
               type="button"
-              onClick={() => onAction("read")}
-              aria-label="Mark as read"
-              title="Mark as read"
-              className="tap-target grid place-items-center text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              onClick={onDislike}
+              aria-label="Not interested"
+              title="Not interested"
+              className="tap-target grid h-8 w-8 place-items-center rounded-full text-muted transition hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <Check size={15} aria-hidden />
+              <ThumbsDown size={15} aria-hidden />
             </button>
-            <BookmarkButton
-              paperId={p.id}
-              teamId={teamId}
-              userId={userId}
-              bookmarked={bookmarked}
-              className="tap-target text-muted hover:text-accent"
-            />
           </span>
         </div>
       </div>
@@ -409,6 +434,8 @@ function ReasonText({ reason, teamName }: { reason: RecommendationReason; teamNa
       return <>Similar to {ref}, which you read</>;
     case "similar_reacted":
       return <>Similar to {ref}, which you reacted to</>;
+    case "similar_liked":
+      return <>Similar to {ref}, which you liked</>;
     case "similar_discussed":
       return <>Similar to {ref}, which you discussed</>;
     case "similar_reading":

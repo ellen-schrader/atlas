@@ -104,6 +104,9 @@ export interface Recommendation {
   post: PaperPost;
   /** Why this paper was picked; absent for the cold-start recency fallback. */
   reason?: RecommendationReason | null;
+  /** Client-only: 👍 given on this card. The API never sends it, because a
+   *  liked paper isn't recommended again. */
+  liked?: boolean;
 }
 
 /** The signal behind a recommendation (docs/dashboard.md §3.4; the rules are in
@@ -116,6 +119,7 @@ export interface RecommendationReason {
     | "similar_posted"
     | "similar_read"
     | "similar_reacted"
+    | "similar_liked"
     | "similar_discussed"
     | "similar_reading"
     | "profile"

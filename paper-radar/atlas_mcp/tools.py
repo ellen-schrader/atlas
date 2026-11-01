@@ -258,6 +258,7 @@ _ANCHOR_VERBS = {
     "similar_saved": "you saved",
     "similar_posted": "you shared",
     "similar_reacted": "you reacted to",
+    "similar_liked": "you liked",
     "similar_discussed": "you discussed",
     "similar_read": "you read",
     "similar_reading": "you are reading",
