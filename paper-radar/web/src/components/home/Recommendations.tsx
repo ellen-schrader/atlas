@@ -1,13 +1,89 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Sparkle, Sparkles } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Check, ChevronLeft, ChevronRight, Sparkle, Sparkles, X } from "lucide-react";
 
 import { BookmarkButton } from "@/components/BookmarkButton";
 import { Chip } from "@/components/Chip";
 import { Cover } from "@/components/Cover";
 import { HeadingLink, SectionHeading, TopicDot } from "@/components/home/HomeSection";
 import { cardWidth, COL_GAP, type HomeTier } from "@/components/home/layout";
+import { useToast } from "@/components/Toast";
+import { supabase } from "@/lib/supabase";
 import type { Recommendation, RecommendationReason } from "@/lib/types";
 import { cn, formatAuthors } from "@/lib/utils";
+
+/** What a card can do besides saving (#182). "read" is for a paper read elsewhere
+ *  and counts as reading it; "dismiss" is "Not interested" and counts as nothing. */
+type RecAction = "read" | "dismiss";
+
+/** Mark a recommended paper read, or not interested, and offer Undo. The card
+ *  goes at once; the row isn't refetched, so the others don't reshuffle under
+ *  the pointer, and Undo just shows it again. A recommended paper has no
+ *  meaningful status row (the API leaves those out), so Undo restores the
+ *  defaults: unread, not dismissed. */
+function useRecActions(userId: string, teamId: string) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+
+  const show = useCallback((paperId: string, on: boolean) => {
+    setHidden((cur) => {
+      const next = new Set(cur);
+      if (on) next.delete(paperId);
+      else next.add(paperId);
+      return next;
+    });
+  }, []);
+
+  async function write(paperId: string, fields: Record<string, unknown>) {
+    return supabase
+      .from("paper_status")
+      .upsert(
+        { user_id: userId, team_id: teamId, paper_id: paperId, ...fields },
+        { onConflict: "user_id,paper_id,team_id" },
+      );
+  }
+
+  function refreshReading() {
+    for (const key of ["reading-list", "read-this-week", "read-papers"]) {
+      void qc.invalidateQueries({ queryKey: [key] });
+    }
+  }
+
+  async function act(paperId: string, action: RecAction) {
+    show(paperId, false);
+    const now = new Date().toISOString();
+    const { error } = await write(
+      paperId,
+      action === "read" ? { status: "read", updated_at: now } : { dismissed_at: now },
+    );
+    if (error) {
+      show(paperId, true);
+      toast({
+        message:
+          action === "read" ? "Couldn’t mark that as read. Try again." : "Couldn’t hide that. Try again.",
+      });
+      return;
+    }
+    if (action === "read") refreshReading();
+    toast({
+      message: action === "read" ? "Marked as read" : "You won’t see this one again",
+      actionLabel: "Undo",
+      onAction: async () => {
+        const { error: undoErr } = await write(
+          paperId,
+          action === "read" ? { status: "unread", updated_at: now } : { dismissed_at: null },
+        );
+        // Throw so the toast stays open and offers Undo again.
+        if (undoErr) throw new Error(undoErr.message);
+        show(paperId, true);
+        if (action === "read") refreshReading();
+      },
+    });
+  }
+
+  return { hidden, act };
+}
 
 interface RecsState {
   results: Recommendation[];
@@ -46,6 +122,8 @@ export function RecommendationsRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ start: true, end: true });
   const mobile = tier === "mobile";
+  const { hidden, act } = useRecActions(userId, teamId);
+  const results = recs.results.filter((r) => !hidden.has(r.post.papers.id));
 
   const measure = useCallback(() => {
     const el = rowRef.current;
@@ -63,7 +141,7 @@ export function RecommendationsRow({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [measure, recs.results.length]);
+  }, [measure, results.length]);
 
   // One click = one page of cards. The row's width is exactly perPage cards plus
   // their gaps, so a page is the row width plus one gap.
@@ -77,7 +155,7 @@ export function RecommendationsRow({
 
   // Arrows alone on the right edge; Tune sits with the title, where the Lab feed
   // keeps its filter.
-  const right = !mobile && recs.results.length > perPage && (
+  const right = !mobile && results.length > perPage && (
     <>
       <ArrowButton dir="left" disabled={edges.start} onClick={() => page(-1)} />
       <ArrowButton dir="right" disabled={edges.end} onClick={() => page(1)} />
@@ -102,7 +180,7 @@ export function RecommendationsRow({
             </div>
           ))}
         </div>
-      ) : recs.results.length > 0 ? (
+      ) : results.length > 0 ? (
         <div
           ref={rowRef}
           onScroll={measure}
@@ -113,7 +191,7 @@ export function RecommendationsRow({
             mobile && "-mx-4 scroll-px-4 px-4",
           )}
         >
-          {recs.results.map((r) => (
+          {results.map((r) => (
             <div key={r.post.id} className="flex shrink-0 snap-start" style={itemStyle}>
               <RecCard
                 rec={r}
@@ -122,6 +200,7 @@ export function RecommendationsRow({
                 userId={userId}
                 bookmarked={bookmarkedIds.has(r.post.papers.id)}
                 onOpen={() => onOpen(r.post.papers.id)}
+                onAction={(action) => void act(r.post.papers.id, action)}
               />
             </div>
           ))}
@@ -189,6 +268,7 @@ export function RecCard({
   userId,
   bookmarked,
   onOpen,
+  onAction,
 }: {
   rec: Recommendation;
   teamId: string;
@@ -196,6 +276,7 @@ export function RecCard({
   userId: string;
   bookmarked: boolean;
   onOpen: () => void;
+  onAction: (action: RecAction) => void;
 }) {
   const post = rec.post;
   const p = post.papers;
@@ -252,7 +333,25 @@ export function RecCard({
           ) : (
             <span className="h-[34px] flex-1" />
           )}
-          <span onClick={(e) => e.stopPropagation()} className="shrink-0">
+          <span onClick={(e) => e.stopPropagation()} className="flex shrink-0 items-center">
+            <button
+              type="button"
+              onClick={() => onAction("dismiss")}
+              aria-label="Not interested"
+              title="Not interested"
+              className="tap-target grid place-items-center text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <X size={15} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => onAction("read")}
+              aria-label="Mark as read"
+              title="Mark as read"
+              className="tap-target grid place-items-center text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Check size={15} aria-hidden />
+            </button>
             <BookmarkButton
               paperId={p.id}
               teamId={teamId}

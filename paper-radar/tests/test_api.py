@@ -1037,6 +1037,30 @@ def test_followed_hits_use_post_tags():
     assert _followed_hits(paper_tagged, ["imaging", "spatial"]) == ["spatial", "imaging"]
 
 
+def test_a_dismissed_paper_is_not_interest_and_is_collected():
+    """Marking a paper "Not interested" (#182) leaves an unsaved, unread row with dismissed_at:
+    no weight, and handed back so the cold-start feed can leave it out."""
+    from api.app import _engagement_weights
+
+    uc = _FakeClient(
+        paper_status=[
+            {
+                "paper_id": "dismissed",
+                "saved": False,
+                "status": "unread",
+                "updated_at": None,
+                "dismissed_at": "2026-11-01T12:00:00Z",
+            },
+            {"paper_id": "discarded", "saved": False, "status": "unread", "updated_at": None},
+        ]
+    )
+    dismissed: set[str] = set()
+    weights = _engagement_weights(uc, "user-1", "team-1", dismissed=dismissed)
+
+    assert weights == {}
+    assert dismissed == {"dismissed"}
+
+
 def test_cold_start_puts_followed_tags_first_and_says_so():
     from api.app import _new_reasons, _recency_fallback
 

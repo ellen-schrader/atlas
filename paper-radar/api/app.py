@@ -2001,6 +2001,7 @@ def recommendations(
     loaded: dict = {}
     profile = _profile_row(uc, user_id)
     teams_posts: set[str] = set()
+    dismissed: set[str] = set()
     weights = _engagement_weights(
         uc,
         user_id,
@@ -2008,6 +2009,7 @@ def recommendations(
         anchors,
         display_name=(profile or {}).get("display_name"),
         teams_posts=teams_posts,
+        dismissed=dismissed,
     )
     taste_vec = _taste_vector(uc, user_id, weights, loaded, profile=profile)
     exclude = frozenset(teams_posts)
@@ -2017,7 +2019,8 @@ def recommendations(
 
     if taste_vec is None:
         follows = loaded.get("follows") or []
-        result = _recency_fallback(uc, team_id, set(weights), limit, follows, exclude)
+        seen = set(weights) | dismissed  # the RPCs drop dismissals themselves
+        result = _recency_fallback(uc, team_id, seen, limit, follows, exclude)
         try:
             _attach_reasons(
                 result, _new_reasons(uc, user_id, [r.post for r in result.results], follows)

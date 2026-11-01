@@ -215,6 +215,7 @@ def engagement_weights(
     anchors: dict[str, str] | None = None,
     display_name: str | None = None,
     teams_posts: set[str] | None = None,
+    dismissed: set[str] | None = None,
 ) -> dict[str, float]:
     """Per-paper positive-interest weight for the user in this lab, blending signal
     strength (save > post = reaction > comment > read) with recency decay.
@@ -223,7 +224,9 @@ def engagement_weights(
     kind of engagement for the recommendation reasons (see ANCHOR_RANK). Pass
     ``display_name`` to count the Teams posts sent under it (see same_person),
     and ``teams_posts`` to collect those papers' ids: the recommendation RPCs
-    can't tell they are the caller's, so they are passed as p_exclude."""
+    can't tell they are the caller's, so they are passed as p_exclude. Pass
+    ``dismissed`` to collect the papers marked "Not interested", which carry no
+    weight but must stay out of the cold-start feed too."""
     now = datetime.now(UTC)
     weights: dict[str, float] = {}
 
@@ -269,7 +272,7 @@ def engagement_weights(
         anchor(c["paper_id"], "similar_discussed")
     for s in (
         client.table("paper_status")
-        .select("paper_id, saved, status, updated_at")
+        .select("paper_id, saved, status, updated_at, dismissed_at")
         .eq("team_id", team_id)
         .eq("user_id", user_id)
         .execute()
@@ -283,6 +286,9 @@ def engagement_weights(
         # the way past; since 20261007130000 they are kept on purpose, so the
         # same question has to be asked here.
         if not s.get("saved") and s.get("status") == "unread":
+            # A dismissal ("Not interested") is such a row too: never interest.
+            if s.get("dismissed_at") and dismissed is not None:
+                dismissed.add(s["paper_id"])
             continue
         # Keyed off `saved`, not a status value. Since the two-axis split
         # (20261006120000) a save is a boolean that survives being read, so the
