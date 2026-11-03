@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { Avatar } from "@/components/Avatar";
 import { BookmarkButton } from "@/components/BookmarkButton";
+import { AddToProject } from "@/components/projects/AddToProject";
 import { Cover } from "@/components/Cover";
 import { PaperEngagement } from "@/components/Engagement";
 import { usePaperModal } from "@/components/PaperModal";
@@ -170,6 +171,14 @@ export function PaperDetail({
                 )}
               />
               <MarkReadButton paperId={p.id} teamId={teamId} userId={userId} />
+              <AddToProject
+                paperId={p.id}
+                teamId={teamId}
+                userId={userId}
+                showLabel
+                align="left"
+                className={cn(ACTION_BTN, "border border-border font-medium hover:border-accent hover:text-accent")}
+              />
 
               <span className="ml-auto flex items-center gap-2 pl-6">
                 <CitePaperButton

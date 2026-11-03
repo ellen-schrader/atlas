@@ -8,6 +8,7 @@ import {
   projectFollows,
   projectPapers,
   projectPaperCounts,
+  projectsByPaper,
 } from "@/lib/projects";
 
 /** Every project the user can see in the lab, most recently changed first. */
@@ -16,6 +17,18 @@ export function useProjectList(teamId: string, enabled = true) {
     queryKey: ["projects", teamId],
     queryFn: () => listProjects(teamId),
     enabled,
+  });
+}
+
+/** paper id → the projects it is in, for these papers: chips and the
+ *  "Add to project" ticks. */
+export function useProjectsByPaper(teamId: string, paperIds: string[], enabled = true) {
+  const key = [...new Set(paperIds)].sort();
+  return useQuery({
+    queryKey: ["projects-by-paper", teamId, key],
+    queryFn: () => projectsByPaper(teamId, key),
+    enabled: enabled && key.length > 0,
+    placeholderData: (prev) => prev,
   });
 }
 
@@ -87,5 +100,6 @@ export function useRefreshProject() {
       qc.invalidateQueries({ queryKey: ["project-follows", id] }),
       qc.invalidateQueries({ queryKey: ["projects", teamId] }),
       qc.invalidateQueries({ queryKey: ["project-counts"] }),
+      qc.invalidateQueries({ queryKey: ["projects-by-paper", teamId] }),
     ]);
 }
