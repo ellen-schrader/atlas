@@ -10,14 +10,14 @@ The papers you save, the ones you argue about, the ones you keep coming back to 
 
 **Attrition.** A lab's judgment about what's worth reading lives in one postdoc's head. Five years of it walks out the door when she graduates. The next person inherits the Dropbox, not the mind.
 
-**Averaging.** The standing critique of AI in science is that it homogenises it. Every lab asks the same model the same question, gets the same consensus answer, The thing that actually drives science — a specific group's specific judgment about what matters — gets averaged away.
+**Averaging.** The standing critique of AI in science is that it homogenises it. Every lab asks the same model the same question and gets the same consensus answer. The thing that actually drives science — a specific group's specific judgment about what matters — gets averaged away.
 
 **Atlas is the bet against both.** It doesn't try to make Claude smarter. It makes Claude *yours* — grounded in what *this* lab reads, argues about, and admires.
 
 | | The generic version | The Atlas version |
 |---|---|---|
 | **Recommendations** | what the field cites | what **this lab** judged worth its time |
-| **"What's new" in a topic** | the consensus summary | **this lab's** view of what's moving |
+| **"What's new"** | the consensus summary | **this lab's** week, from `lab_digest` |
 | **Related work** | plausible citations, some invented | **this lab's** actual papers, links that resolve |
 
 These aren't three features. They're three instances of one move.

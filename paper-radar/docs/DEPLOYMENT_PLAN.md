@@ -39,9 +39,8 @@ wire the three tiers together with env vars. No data migration is needed.
    dependencies (~2–3 GB image, slow cold builds). Move those two to a
    `legacy` extra in `pyproject.toml` (faiss-cpu too — `embed/index.py` now
    imports it lazily, so only the local-index CLI path needs it).
-   scikit-learn stays in the base — the API's `/overview` map uses it for
-   t-SNE + KMeans (`api/overview.py` → `paper_radar.embed.index`; UMAP and
-   its numba chain were dropped entirely). The Streamlit app keeps working
+   scikit-learn (the `/overview` t-SNE map) left the base when topic maps
+   were retired in Nov 2026. The Streamlit app keeps working
    via `uv sync --extra dev --extra legacy`.
 3. ✓ **Add `api/Dockerfile`** — `python:3.12-slim`, install with `uv` from the
    lockfile (`uv sync --frozen --extra api --no-dev`), run

@@ -2,6 +2,10 @@
 # Deploy from this directory: fly deploy --remote-only
 app = "paper-radar-api"
 primary_region = "lhr"
+# Swap as a cushion for the 512 MB VM below: brief overlapping spikes (a large
+# BibTeX import alongside trial PDF extraction) page out instead of OOM-killing
+# the machine. Free; slower than RAM, so sustained use means scale memory up.
+swap_size_mb = 512
 
 [build]
   dockerfile = "api/Dockerfile"
