@@ -119,17 +119,22 @@ export async function getProject(id: string): Promise<Project | null> {
   return ((data ?? [])[0] as unknown as Project) ?? null;
 }
 
-/** Which of the lab's projects (that the user can see) each paper is in. */
-export async function projectsByPaper(teamId: string): Promise<Map<string, string[]>> {
-  const { data, error } = await supabase
-    .from("project_papers")
-    .select("project_id, paper_id, projects!inner(team_id)")
-    .eq("state", "in")
-    .eq("projects.team_id", teamId);
-  if (error) throw error;
-  const out = new Map<string, string[]>();
-  for (const r of (data ?? []) as { project_id: string; paper_id: string }[]) {
-    out.set(r.paper_id, [...(out.get(r.paper_id) ?? []), r.project_id]);
+/** Which of the lab's projects (that the user can see) each of these papers
+ *  is in. Asked per paper, never lab-wide, so it stays small and is never cut
+ *  short by PostgREST's row limit. */
+export async function projectsByPaper(teamId: string, paperIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>(paperIds.map((id) => [id, []]));
+  for (let i = 0; i < paperIds.length; i += CHUNK) {
+    const { data, error } = await supabase
+      .from("project_papers")
+      .select("project_id, paper_id, projects!inner(team_id)")
+      .eq("state", "in")
+      .eq("projects.team_id", teamId)
+      .in("paper_id", paperIds.slice(i, i + CHUNK));
+    if (error) throw error;
+    for (const r of (data ?? []) as { project_id: string; paper_id: string }[]) {
+      out.set(r.paper_id, [...(out.get(r.paper_id) ?? []), r.project_id]);
+    }
   }
   return out;
 }

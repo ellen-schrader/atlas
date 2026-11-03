@@ -20,12 +20,15 @@ export function useProjectList(teamId: string, enabled = true) {
   });
 }
 
-/** paper id → the projects it is in, for chips and the "Add to project" ticks. */
-export function useProjectsByPaper(teamId: string, enabled = true) {
+/** paper id → the projects it is in, for these papers: chips and the
+ *  "Add to project" ticks. */
+export function useProjectsByPaper(teamId: string, paperIds: string[], enabled = true) {
+  const key = [...new Set(paperIds)].sort();
   return useQuery({
-    queryKey: ["projects-by-paper", teamId],
-    queryFn: () => projectsByPaper(teamId),
-    enabled,
+    queryKey: ["projects-by-paper", teamId, key],
+    queryFn: () => projectsByPaper(teamId, key),
+    enabled: enabled && key.length > 0,
+    placeholderData: (prev) => prev,
   });
 }
 

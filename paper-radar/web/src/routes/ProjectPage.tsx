@@ -368,6 +368,7 @@ function ProjectView({
     for (const key of ["project", "project-closeness", "project-papers", "project-follows"])
       qc.removeQueries({ queryKey: [key, project.id] });
     void qc.invalidateQueries({ queryKey: ["projects", teamId] });
+    void qc.invalidateQueries({ queryKey: ["projects-by-paper", teamId] });
     toast({ message: `Deleted “${project.name}”` });
   }
 
