@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 
 import { useMemberships } from "@/hooks/useMemberships";
 import { useSession } from "@/hooks/useSession";
@@ -21,7 +21,10 @@ import OAuthConsent from "@/routes/OAuthConsent";
 import Onboarding from "@/routes/Onboarding";
 import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
+import ProjectPage from "@/routes/ProjectPage";
 import Projects from "@/routes/Projects";
+import { RequireFeature } from "@/components/RequireFeature";
+import { PROJECTS_FEATURE } from "@/lib/projects";
 import ReadingList from "@/routes/ReadingList";
 import Settings from "@/routes/Settings";
 import Suggestions from "@/routes/Suggestions";
@@ -227,8 +230,19 @@ function AuthedApp({ session }: { session: Session }) {
         <Route path="/reading-list" element={<ReadingList />} />
         {/* Old name for the reading list, kept so bookmarks still land. */}
         <Route path="/reading" element={<Navigate to="/reading-list" replace />} />
-        {/* Projects replace topic maps (docs/PROJECTS_PLAN.md); locked until built. */}
+        {/* Projects replace topic maps (docs/PROJECTS_PLAN.md): the index, or a
+            locked page without the feature. */}
         <Route path="/projects" element={<Projects />} />
+        <Route
+          path="/projects/:id"
+          element={
+            <RequireFeature feature={PROJECTS_FEATURE}>
+              <ProjectPage />
+            </RequireFeature>
+          }
+        />
+        {/* A map became the project with the same id. */}
+        <Route path="/maps/:id" element={<MapToProject />} />
         {/* Retired: topic maps and the figure gallery. Old links land on Projects. */}
         {["/map", "/maps", "/maps/*", "/gallery", "/board"].map((path) => (
           <Route key={path} path={path} element={<Navigate to="/projects" replace />} />
@@ -249,4 +263,10 @@ function AuthedApp({ session }: { session: Session }) {
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
+}
+
+/** /maps/:id → /projects/:id: each topic map was carried over as a project. */
+function MapToProject() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/projects/${id ?? ""}`} replace />;
 }
