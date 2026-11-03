@@ -21,8 +21,9 @@ primary_region = "lhr"
   # not a guarantee — a background embed killed mid-flight is recovered by
   # api/backfill_embeddings.py. Suspend needs a machine with no swap configured.
   #
-  # The always-on machine tried for October (issue #104: the first mention after
-  # idle can still time out) was reverted in Nov 2026 to save its cost.
+  # An always-on machine (min_machines_running = 1) was tried for October 2026
+  # and reverted: Teams kept timing out with it (issue #104), so the wake-up is
+  # not the cause and the machine was cost for nothing.
   auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
