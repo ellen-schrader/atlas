@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -51,7 +52,7 @@ class ProjectOut(BaseModel):
 
 
 class ProjectCreate(BaseModel):
-    team_id: str
+    team_id: UUID
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=400)
     visibility: Visibility = "private"
@@ -84,7 +85,8 @@ def _embed(user_id: str, description: str) -> list[float] | None:
 @router.post("", response_model=ProjectOut)
 def create_project(req: ProjectCreate, token: str = Depends(require_token)) -> ProjectOut:
     """Create a project in one of the caller's labs, owned by them."""
-    user_id = require_feature(token, req.team_id, FEATURE)
+    team_id = str(req.team_id)
+    user_id = require_feature(token, team_id, FEATURE)
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Give the project a name.")
@@ -94,7 +96,7 @@ def create_project(req: ProjectCreate, token: str = Depends(require_token)) -> P
         .table("projects")
         .insert(
             {
-                "team_id": req.team_id,
+                "team_id": team_id,
                 "owner_id": user_id,
                 "name": name,
                 "description": description,
@@ -113,12 +115,18 @@ def create_project(req: ProjectCreate, token: str = Depends(require_token)) -> P
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 def update_project(
-    project_id: str, req: ProjectPatch, token: str = Depends(require_token)
+    project_id: UUID, req: ProjectPatch, token: str = Depends(require_token)
 ) -> ProjectOut:
     """Rename, re-describe, share or tune a project. Only its owner can; RLS
     turns anyone else's update into no rows."""
     uc = user_client(token)
-    found = uc.table("projects").select("team_id, owner_id").eq("id", project_id).execute().data
+    found = (
+        uc.table("projects")
+        .select("team_id, owner_id, description")
+        .eq("id", str(project_id))
+        .execute()
+        .data
+    )
     if not found:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     user_id = require_feature(token, found[0]["team_id"], FEATURE)
@@ -131,14 +139,19 @@ def update_project(
             raise HTTPException(status_code=400, detail="Give the project a name.")
         updates["name"] = req.name.strip()
     if req.description is not None:
-        updates["description"] = " ".join(req.description.split())
-        updates["description_embedding"] = _embed(user_id, updates["description"])
+        description = " ".join(req.description.split())
+        # Only a changed description costs an embedding. If Voyage is down the
+        # old vector goes too rather than stand for words it wasn't made from;
+        # the papers take over once there are three.
+        if description != found[0]["description"]:
+            updates["description"] = description
+            updates["description_embedding"] = _embed(user_id, description)
     if req.visibility is not None:
         updates["visibility"] = req.visibility
     if req.suggest_level is not None:
         updates["suggest_level"] = req.suggest_level
 
-    if not uc.table("projects").update(updates).eq("id", project_id).execute().data:
+    if not uc.table("projects").update(updates).eq("id", str(project_id)).execute().data:
         raise HTTPException(status_code=403, detail="Only the project's owner can change it.")
-    rows = uc.table("projects").select(_COLUMNS).eq("id", project_id).execute().data
+    rows = uc.table("projects").select(_COLUMNS).eq("id", str(project_id)).execute().data
     return ProjectOut(**rows[0])

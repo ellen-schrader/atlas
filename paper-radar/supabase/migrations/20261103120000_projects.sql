@@ -19,8 +19,9 @@
 create table public.projects (
     id                    uuid primary key default gen_random_uuid(),
     team_id               uuid not null references public.teams (id) on delete cascade,
-    -- Null once the owner has deleted their account (delete_account removes
-    -- their private projects; shared ones stay for the people using them).
+    -- Null once the owner has left the lab or Atlas: their private projects
+    -- go with them, shared ones stay for the people using them
+    -- (projects_member_left, below).
     owner_id              uuid references public.profiles (id) on delete set null,
     name                  text not null check (char_length(btrim(name)) between 1 and 120),
     description           text not null default '' check (char_length(description) <= 400),
@@ -173,8 +174,8 @@ alter table public.project_follows enable row level security;
 
 -- Projects: anyone who can see one reads it; you create them in your own labs,
 -- as yourself; only the owner renames, re-describes, shares or deletes. The
--- lab's owners may delete a shared project whose owner has left Atlas, which
--- nobody else could ever remove.
+-- lab's owners see and may delete a shared project whose owner has left,
+-- which nobody else could ever remove.
 -- Spelled out rather than can_see_project(id): that function reads the table
 -- in its own snapshot, which doesn't hold a row being inserted, so INSERT ...
 -- RETURNING would fail its own select check.
@@ -187,6 +188,8 @@ create policy projects_select on public.projects for select
             or (visibility = 'people' and exists (
                    select 1 from public.project_people pe
                    where pe.project_id = projects.id and pe.user_id = auth.uid()))
+            -- An ownerless project, to the lab's owners, who can delete it.
+            or (owner_id is null and public.is_team_owner(team_id))
         )
     );
 create policy projects_insert on public.projects for insert
@@ -273,10 +276,49 @@ select public.close_to_connectors('public.project_papers');
 select public.close_to_connectors('public.project_views');
 select public.close_to_connectors('public.project_follows');
 
+-- === someone leaves the lab ==================================================
+
+-- Leaving a lab (or Atlas: deleting an account removes its memberships) takes
+-- the person's private projects, and those shared with nobody else, with them.
+-- Shared ones stay for the people using them, without an owner; the lab's
+-- owners can delete those. Their place on other projects' people lists goes.
+create function public.projects_member_left()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    delete from public.projects pj
+     where pj.team_id = old.team_id
+       and pj.owner_id = old.user_id
+       and (pj.visibility = 'private'
+            or (pj.visibility = 'people' and not exists (
+                   select 1 from public.project_people pe
+                   where pe.project_id = pj.id and pe.user_id <> old.user_id)));
+    update public.projects set owner_id = null
+     where team_id = old.team_id and owner_id = old.user_id;
+    delete from public.project_people pe
+     using public.projects pj
+     where pe.project_id = pj.id and pj.team_id = old.team_id and pe.user_id = old.user_id;
+    delete from public.project_views v
+     using public.projects pj
+     where v.project_id = pj.id and pj.team_id = old.team_id and v.user_id = old.user_id;
+    return old;
+end;
+$$;
+
+revoke execute on function public.projects_member_left() from public, anon, authenticated;
+
+create trigger projects_member_left
+    after delete on public.team_members
+    for each row execute function public.projects_member_left();
+
 -- === closeness ==============================================================
 
--- The last author who is a person, not a trial group: the "lab" of a paper, as
--- on Home's Labs board (trending_labs, 20261101120000).
+-- The last author who is a person, not a trial group: the "lab" of a paper.
+-- Home's Labs board (trending_labs, reissued below) uses it too, so a lab
+-- followed from there matches the same papers here.
 create function public.last_person_author(authors jsonb)
 returns text
 language sql
@@ -293,6 +335,33 @@ as $$
     limit 1;
 $$;
 
+-- trending_labs from 20261101120000_trending_labs_skip_groups.sql, with its
+-- inline last-author lateral replaced by last_person_author. Same signature
+-- and results, so its grants stay.
+create or replace function public.trending_labs(
+    p_team  uuid,
+    p_days  int default 30,
+    p_limit int default 5
+)
+returns table(lab text, n int, sharers int)
+language sql
+stable
+set search_path = public
+as $$
+    select l.lab,
+           count(distinct pp.paper_id)::int as n,
+           count(distinct coalesce(pp.posted_by::text, pp.posted_by_label))::int as sharers
+    from public.paper_posts pp
+    join public.papers p on p.id = pp.paper_id
+    cross join lateral (select public.last_person_author(p.authors) as lab) l
+    where pp.team_id = p_team
+      and pp.posted_at >= now() - make_interval(days => p_days)
+      and l.lab is not null
+    group by 1
+    order by n desc, sharers desc, lab
+    limit greatest(coalesce(p_limit, 5), 0);
+$$;
+
 -- How close every paper in the project's lab is to the project, for the
 -- closeness chart, the Suggested list and "Around this project".
 --
@@ -302,15 +371,19 @@ $$;
 --               rather than the centroid, so a project with two strands isn't
 --               suggested papers from the empty middle between them.
 --   nearest_id  that closest paper; null when it was the description.
---   related     in the related pool: the 120 closest papers, plus the
---               project's own. "Around this project" counts over it.
+--   related     in the related pool: the 120 closest papers neither in the
+--               project nor dismissed from it, plus the project's own.
+--               "Around this project" counts over it.
 --   suggested   'close' above the line; 'tag' or 'lab' for a related paper
 --               from a tag or lab the project follows (`via` names it); null
 --               for papers in the project or dismissed from it.
 --   cutoff      the line. With three or more papers it is a percentile of the
 --               project's own similarities (Fewer: the median, Balanced: the
 --               25th, More: the 10th), so it adapts to how tight the project
---               is; before that, a fixed similarity to the description.
+--               is. Before that it is a rank: the 10th, 20th or 40th closest
+--               paper. No fixed similarity, because a description (a query)
+--               and a paper sit at different similarities to the same papers,
+--               and one or two papers say nothing yet about how tight it is.
 --
 -- Every library paper with an embedding comes back (the chart draws the rest
 -- faintly). One pass over the lab's papers against the project's papers: for
@@ -381,23 +454,33 @@ as $$
             limit 1
         ) best on true
     ),
-    cut as (
-        select (case
-                    when count(*) >= 3 then percentile_cont(
-                        case (select suggest_level from pr)
-                            when 'fewer' then 0.5 when 'more' then 0.1 else 0.25 end
-                    ) within group (order by s.similarity)
-                    else case (select suggest_level from pr)
-                             when 'fewer' then 0.5 when 'more' then 0.4 else 0.45 end
-                end)::real as cutoff
+    own as (
+        select count(*) as n,
+               percentile_cont(
+                   case (select suggest_level from pr)
+                       when 'fewer' then 0.5 when 'more' then 0.1 else 0.25 end
+               ) within group (order by s.similarity) as pct
         from scored s
         where s.state = 'in' and s.similarity is not null and s.nearest_id is not null
     ),
     ranked as (
         select s.*,
-               (s.state = 'in'
-                or row_number() over (order by s.similarity desc nulls last) <= 120) as related
+               case when s.state is null and s.similarity is not null then
+                   row_number() over (
+                       partition by (s.state is null and s.similarity is not null)
+                       order by s.similarity desc)
+               end as rank
         from scored s
+    ),
+    cut as (
+        select coalesce(
+                   case when (select n from own) >= 3 then (select pct from own) end,
+                   (select r.similarity from ranked r
+                     where r.rank = case (select suggest_level from pr)
+                                        when 'fewer' then 10 when 'more' then 40 else 20 end),
+                   -- A lab with fewer papers than that: all of them.
+                   -1
+               )::real as cutoff
     ),
     follows as materialized (
         select f.kind, f.value
@@ -405,16 +488,16 @@ as $$
         where f.project_id = (select id from pr)
     )
     select r.paper_id, r.post_id, r.year, r.posted_at, r.similarity, r.nearest_id,
-           r.state, coalesce(r.related, false),
+           r.state, (r.state = 'in' or coalesce(r.rank <= 120, false)) as related,
            case
                when r.state is not null or r.similarity is null then null
                when r.similarity >= c.cutoff then 'close'
-               when r.related and ft.value is not null then 'tag'
-               when r.related and fl.value is not null then 'lab'
+               when r.rank <= 120 and ft.value is not null then 'tag'
+               when r.rank <= 120 and fl.value is not null then 'lab'
            end as suggested,
            case
                when r.state is not null or r.similarity is null or r.similarity >= c.cutoff then null
-               when r.related then coalesce(ft.value, fl.value)
+               when r.rank <= 120 then coalesce(ft.value, fl.value)
            end as via,
            c.cutoff
     from ranked r
@@ -433,8 +516,10 @@ as $$
 $$;
 
 -- One row per project the caller can see in a lab, for the projects index:
--- how many papers are in it, how many are suggested, and how many of those the
--- lab posted since the caller last opened it (all of them, if never).
+-- how many papers are in it (all of them, embedded or not), how many are
+-- suggested, and how many of those the lab posted since the caller last opened
+-- it (all of them, if never). It runs project_closeness once per project: fine
+-- for a lab's handful of projects; cache the counts if that ever grows.
 create function public.project_summaries(p_team uuid)
 returns table(project_id uuid, n_in int, n_suggested int, n_new int)
 language sql
@@ -442,16 +527,16 @@ stable
 set search_path = public, extensions
 as $$
     select pj.id,
-           count(*) filter (where c.state = 'in')::int,
-           count(*) filter (where c.suggested is not null)::int,
-           count(*) filter (
-               where c.suggested is not null
-                 and c.posted_at > coalesce(v.last_viewed_at, '-infinity'))::int
+           (select count(*) from public.project_papers pp
+             where pp.project_id = pj.id and pp.state = 'in')::int,
+           count(c.suggested)::int,
+           count(c.suggested) filter (
+               where c.posted_at > coalesce(v.last_viewed_at, '-infinity'))::int
     from public.projects pj
     left join public.project_views v on v.project_id = pj.id and v.user_id = auth.uid()
     left join lateral public.project_closeness(pj.id) c on true
     where pj.team_id = p_team
-    group by pj.id;
+    group by pj.id, v.last_viewed_at;
 $$;
 
 -- The caller has opened project `p` now: what the index's "N new" counts from.
@@ -502,7 +587,7 @@ cross join lateral jsonb_array_elements_text(
 join public.papers p on p.id::text = x.pid
 on conflict do nothing;  -- pinned and excluded both: pinned wins
 
--- === papers merged, accounts deleted ========================================
+-- === papers merged ==========================================================
 
 -- merge_papers is copied from 20261101184500_recommendation_thumbs.sql with
 -- step 4b added: project_papers cascades on the paper, so without it a merge
@@ -706,93 +791,5 @@ begin
 
     delete from public.papers where id = p_from;
     return alias;
-end;
-$$;
-
--- delete_account is copied from 20261019140000_delete_account.sql with the
--- private projects removed alongside the private maps. Same signature, so the
--- grants (service role only) stay.
-create or replace function public.delete_account(p_user uuid, p_confirm_email text)
-returns uuid[]
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    v_email text;
-    v_teams uuid[];
-    v_blocking text;
-    v_solo uuid[];
-begin
-    select email into v_email from auth.users where id = p_user;
-    if v_email is null then
-        raise exception 'No such account' using errcode = '42704';
-    end if;
-    if lower(trim(coalesce(p_confirm_email, ''))) <> lower(v_email) then
-        raise exception 'The email doesn''t match this account' using errcode = '22023';
-    end if;
-
-    -- Lock the user's labs first. Joining a lab inserts a member row whose
-    -- foreign key takes a KEY SHARE lock on the team, which FOR UPDATE blocks;
-    -- a co-owner deleting at the same moment waits here too. So the checks
-    -- below can't be overtaken by a join or by another deletion.
-    select coalesce(array_agg(t.id), '{}') into v_teams
-    from (
-        select t.id from public.teams t
-        join public.team_members me on me.team_id = t.id and me.user_id = p_user
-        order by t.id
-        for update of t
-    ) t;
-
-    -- Last owner of a lab that still has other members: refuse, naming the labs,
-    -- as leave_team does for one lab.
-    select string_agg(t.name, ', ' order by t.name) into v_blocking
-    from public.team_members me
-    join public.teams t on t.id = me.team_id
-    where me.user_id = p_user
-      and me.role = 'owner'
-      and not exists (
-          select 1 from public.team_members o
-          where o.team_id = me.team_id and o.role = 'owner' and o.user_id <> p_user)
-      and exists (
-          select 1 from public.team_members m
-          where m.team_id = me.team_id and m.user_id <> p_user);
-    if v_blocking is not null then
-        raise exception 'Make someone else an owner of % first', v_blocking
-            using errcode = 'P0001';
-    end if;
-
-    -- Labs they're alone in go with them. Their posts cascade, and the removal
-    -- trigger turns each into a removed_posts tombstone; those go too, since the
-    -- lab they'd be restored into no longer exists.
-    select coalesce(array_agg(me.team_id), '{}') into v_solo
-    from public.team_members me
-    where me.team_id = any (v_teams)
-      and me.user_id = p_user
-      and not exists (
-          select 1 from public.team_members m
-          where m.team_id = me.team_id and m.user_id <> p_user);
-    delete from public.teams where id = any (v_solo);
-    delete from public.removed_posts where team_id = any (v_solo);
-
-    -- Tombstones in labs that stay: drop the user's id (not a foreign key, so
-    -- nothing else will), which also keeps restore_post working, since it
-    -- copies posted_by back into paper_posts.
-    update public.removed_posts set posted_by = null where posted_by = p_user;
-    update public.removed_posts set removed_by = null where removed_by = p_user;
-
-    -- Private maps are theirs alone; lab maps stay, without their name.
-    delete from public.maps where created_by = p_user and visibility = 'private';
-    -- Private projects too; shared ones stay, without an owner, for the
-    -- people using them (a lab owner can delete them).
-    delete from public.projects where owner_id = p_user and visibility = 'private';
-
-    -- Everything else follows from the auth user: the profile cascades, and with
-    -- it memberships, reactions, reading list, notifications, sessions and Claude
-    -- grants; posts, comments, figures, lab maps and shared projects keep their
-    -- rows with a null author.
-    delete from auth.users where id = p_user;
-
-    return v_solo;
 end;
 $$;

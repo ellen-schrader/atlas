@@ -310,10 +310,11 @@ def test_closeness(world, api, admin):
         assert r.status_code == 200, r.text
         return {row["paper_id"]: row for row in r.json()}
 
-    # No papers yet: the description (axis 0) is all there is, and nothing is close.
+    # No papers yet: the description (axis 0) is all there is, and the line is a
+    # rank (the 20 closest), so in a lab of eight every paper is suggested.
     rows = closeness()
     assert len(rows) == 8
-    assert all(r["nearest_id"] is None and r["suggested"] is None for r in rows.values())
+    assert all(r["nearest_id"] is None and r["suggested"] == "close" for r in rows.values())
 
     for pid in (a, b, c):
         rest(
@@ -344,7 +345,8 @@ def test_closeness(world, api, admin):
     assert rows[near_a]["suggested"] == "close" and rows[near_c]["suggested"] == "close"
     assert rows[far]["suggested"] is None
     assert rows[dismissed]["state"] == "dismissed" and rows[dismissed]["suggested"] is None
-    assert all(r["related"] for r in rows.values())  # a small lab: all in the pool
+    # A small lab: everything is in the pool, except what was dismissed.
+    assert all(r["related"] == (pid != dismissed) for pid, r in rows.items())
 
     # Following a tag or a lab suggests its related papers below the line.
     rest(
@@ -435,3 +437,33 @@ def test_delete_account(world, api, admin):
         .data
     }
     assert list(left) == [shared["id"]] and left[shared["id"]]["owner_id"] is None
+
+
+def test_leaving_the_lab(world, api, admin):
+    boss, _, t_boss = world.user()
+    owner, _, t_owner = world.user()
+    mate, _, t_mate = world.user()
+    team = world.lab(boss, owner, mate)
+    private = create(api, t_owner, team)
+    alone = create(api, t_owner, team, visibility="people")
+    shared = create(api, t_owner, team, visibility="people")
+    rest(t_owner, "POST", "project_people", json={"project_id": shared["id"], "user_id": mate})
+    theirs = create(api, t_mate, team, visibility="people")
+    rest(t_mate, "POST", "project_people", json={"project_id": theirs["id"], "user_id": owner})
+
+    admin.table("team_members").delete().eq("team_id", team).eq("user_id", owner).execute()
+
+    ids = [p["id"] for p in (private, alone, shared, theirs)]
+    left = {
+        p["id"]: p
+        for p in admin.table("projects").select("id, owner_id").in_("id", ids).execute().data
+    }
+    # Private and shared-with-nobody go; the shared one stays, ownerless.
+    assert set(left) == {shared["id"], theirs["id"]}
+    assert left[shared["id"]]["owner_id"] is None
+    people = admin.table("project_people").select("user_id").eq("project_id", theirs["id"])
+    assert people.execute().data == []
+    # The lab's owner sees the ownerless project and can remove it; others can't.
+    assert seen(t_mate, shared["id"]) and seen(t_boss, shared["id"])
+    assert rest(t_mate, "DELETE", f"projects?id=eq.{shared['id']}").json() == []
+    assert len(rest(t_boss, "DELETE", f"projects?id=eq.{shared['id']}").json()) == 1

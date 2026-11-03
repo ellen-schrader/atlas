@@ -94,13 +94,17 @@ search, Follow, the lab focus chips, the t-SNE library map.
   get suggestions from the empty middle.
 - The line adapts to the project: with 3+ papers it is a percentile of the
   project's own leave-one-out similarities (Fewer: median, Balanced: 25th, More:
-  10th); before that, a fixed similarity to the description (0.5 / 0.45 / 0.4).
+  10th); before that, a rank (the 10th / 20th / 40th closest paper), because a
+  description and a paper sit at different similarities to the same papers.
 - RPC `project_summaries(p_team)`: in / suggested / new counts per project, for
   the index.
 - Existing `maps` rows migrate with the same id: seed → description (and its
   embedding), pins → `in`, excludes → `dismissed`, visibility and owner kept.
-- `merge_papers` keeps a merged paper in its projects; `delete_account` removes
-  the person's private projects and leaves shared ones without an owner.
+- `merge_papers` keeps a merged paper in its projects. Leaving a lab (or
+  deleting an account) removes the person's private projects and those shared
+  with nobody else; shared ones stay without an owner, and the lab's owners can
+  see and delete them.
+- `trending_labs` now uses the same `last_person_author` as project lab follows.
 - API: only `POST /projects` and `PATCH /projects/{id}`, which embed the
   description. Everything else goes straight to Supabase under RLS, as trials do.
 
