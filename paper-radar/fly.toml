@@ -2,11 +2,6 @@
 # Deploy from this directory: fly deploy --remote-only
 app = "paper-radar-api"
 primary_region = "lhr"
-# Swap as a cushion for the 512 MB VM below: brief overlapping spikes (a large
-# BibTeX import alongside trial PDF extraction) page out instead of OOM-killing
-# the machine. Free; slower than RAM, so sustained use means scale memory up.
-swap_size_mb = 512
-
 [build]
   dockerfile = "api/Dockerfile"
 
@@ -24,16 +19,13 @@ swap_size_mb = 512
   # mention after an idle period made Teams post "please fix the bot source
   # code" into the channel (issue #93). The idle window is a proxy heuristic,
   # not a guarantee — a background embed killed mid-flight is recovered by
-  # api/backfill_embeddings.py.
+  # api/backfill_embeddings.py. Suspend needs a machine with no swap configured.
   #
-  # TEMPORARY (Oct 2026, issue #104) — revert to 0 by 10 Nov 2026. Suspend still
-  # proved too slow: the first mention after idle times out and Teams posts its
-  # error twice. One always-on machine (~$6/month at 1 GB) buys a month to find
-  # the cheaper fix; the per-request timing in the inbound webhook's logs says
-  # whether the wake-up or the DB reconnect is the slow part.
+  # The always-on machine tried for October (issue #104: the first mention after
+  # idle can still time out) was reverted in Nov 2026 to save its cost.
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [[http_service.checks]]
     interval = "30s"
@@ -44,7 +36,8 @@ swap_size_mb = 512
 
 # 512 MB since topic maps were retired (Nov 2026): the in-process t-SNE + KMeans
 # (scikit-learn/scipy) were the only heavy work. The API idles at ~100 MB RSS with
-# one uvicorn worker. If it ever OOMs, go back to "1gb" before anything else.
+# one uvicorn worker. No swap (it would block suspend), so if it ever OOMs, go
+# back to "1gb" before anything else.
 [[vm]]
   memory = "512mb"
   cpu_kind = "shared"
