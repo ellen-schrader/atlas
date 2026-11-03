@@ -268,6 +268,24 @@ def test_papers_follow_who_can_see(world, api):
         json={"state": "dismissed", "added_by": mate},
     )
     assert r.status_code == 200 and r.json()[0]["state"] == "dismissed"
+    # The web app's upsert: back in the project, as whoever does it.
+    r = rest(
+        t_mate,
+        "POST",
+        "project_papers",
+        json={**row, "state": "in"},
+        headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+    )
+    assert r.status_code in (200, 201), r.text
+    assert r.json()[0]["state"] == "in"
+    r = rest(
+        t_mate,
+        "POST",
+        "project_papers",
+        json={**row, "paper_id": elsewhere},
+        headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+    )
+    assert r.status_code == 403
 
 
 def test_closeness(world, api, admin):

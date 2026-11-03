@@ -224,7 +224,10 @@ create policy project_papers_insert on public.project_papers for insert
 create policy project_papers_update on public.project_papers for update
     to authenticated
     using (public.can_see_project(project_id))
-    with check (public.can_see_project(project_id) and added_by = auth.uid());
+    with check (
+        public.can_see_project(project_id)
+        and public.in_project_lab(project_id, paper_id)
+        and added_by = auth.uid());
 create policy project_papers_delete on public.project_papers for delete
     to authenticated using (public.can_see_project(project_id));
 
@@ -251,7 +254,10 @@ grant update (name, description, description_embedding, visibility, suggest_leve
     on public.projects to authenticated;
 grant select, insert, delete on public.project_people to authenticated;
 grant select, insert, delete on public.project_papers to authenticated;
-grant update (state, added_by, added_at) on public.project_papers to authenticated;
+-- The key columns too, because PostgREST's upsert (add, or move between in and
+-- dismissed) sets every column it was sent; the policies above still decide.
+grant update (project_id, paper_id, state, added_by, added_at)
+    on public.project_papers to authenticated;
 grant select, insert, delete on public.project_follows to authenticated;
 grant select, insert on public.project_views to authenticated;
 grant update (last_viewed_at) on public.project_views to authenticated;
