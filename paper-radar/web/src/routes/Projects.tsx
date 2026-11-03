@@ -13,14 +13,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useMembers } from "@/hooks/useMembers";
-import { usePaperInfo, useProjectList, useRefreshProject } from "@/hooks/useProjects";
+import { usePaperInfo, useProjectCounts, useProjectList, useRefreshProject } from "@/hooks/useProjects";
 import {
   type Closeness,
   PROJECTS_FEATURE,
   type Project,
   VISIBILITY,
   projectCloseness,
-  projectPapers,
+  projectPeople,
   setPapers,
 } from "@/lib/projects";
 import { supabase } from "@/lib/supabase";
@@ -96,7 +96,9 @@ function ProjectsIndex() {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const list = projects ?? [];
-  // One closeness query per project, shared with its page through the cache.
+  // One closeness query per project, shared with its page through the cache:
+  // the cards' charts and "New suggestions" both read it. Each is a pass over
+  // the library in Postgres, fine for a lab's handful of projects.
   const closeness = useQueries({
     queries: list.map((p) => ({
       queryKey: ["project-closeness", p.id],
@@ -104,12 +106,7 @@ function ProjectsIndex() {
       staleTime: 60_000,
     })),
   });
-  const counts = useQueries({
-    queries: list.map((p) => ({
-      queryKey: ["project-papers", p.id],
-      queryFn: () => projectPapers(p.id),
-    })),
-  });
+  const { data: counts } = useProjectCounts(list.map((p) => p.id));
   const { data: views } = useQuery({
     queryKey: ["project-views", team.id, userId],
     queryFn: async (): Promise<Map<string, string>> => {
@@ -226,11 +223,9 @@ function ProjectsIndex() {
                 {shown.map((p) => {
                   const i = list.indexOf(p);
                   const rows = closeness[i]?.data;
-                  const nIn = (counts[i]?.data ?? []).filter((m) => m.state === "in").length;
+                  const nIn = counts?.get(p.id) ?? 0;
                   const nNew = (rows ?? []).filter((r) => isNew(p, r)).length;
-                  const people = [p.owner_id, ...p.project_people.map((x) => x.user_id)].filter(
-                    (u): u is string => !!u,
-                  );
+                  const people = projectPeople(p);
                   return (
                     <Link
                       key={p.id}

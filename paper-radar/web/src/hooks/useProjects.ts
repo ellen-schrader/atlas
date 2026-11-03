@@ -7,7 +7,7 @@ import {
   projectCloseness,
   projectFollows,
   projectPapers,
-  projectSummaries,
+  projectPaperCounts,
 } from "@/lib/projects";
 
 /** Every project the user can see in the lab, most recently changed first. */
@@ -19,12 +19,13 @@ export function useProjectList(teamId: string, enabled = true) {
   });
 }
 
-/** In / suggested / new counts per project, for the index. */
-export function useProjectSummaries(teamId: string, enabled = true) {
+/** How many papers each project holds (embedded or not). */
+export function useProjectCounts(ids: string[]) {
+  const key = [...ids].sort();
   return useQuery({
-    queryKey: ["project-summaries", teamId],
-    queryFn: () => projectSummaries(teamId),
-    enabled,
+    queryKey: ["project-counts", key],
+    queryFn: () => projectPaperCounts(key),
+    enabled: key.length > 0,
   });
 }
 
@@ -85,6 +86,6 @@ export function useRefreshProject() {
       qc.invalidateQueries({ queryKey: ["project-papers", id] }),
       qc.invalidateQueries({ queryKey: ["project-follows", id] }),
       qc.invalidateQueries({ queryKey: ["projects", teamId] }),
-      qc.invalidateQueries({ queryKey: ["project-summaries", teamId] }),
+      qc.invalidateQueries({ queryKey: ["project-counts"] }),
     ]);
 }

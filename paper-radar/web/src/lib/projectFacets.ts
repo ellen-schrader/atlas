@@ -1,4 +1,4 @@
-import type { Closeness, Follow, PaperInfo } from "@/lib/projects";
+import type { Closeness, Follow } from "@/lib/projects";
 
 export type FacetKind = "tag" | "lab";
 export type Range = "all" | "year" | "month";
@@ -34,7 +34,7 @@ const DAY = 86_400_000;
 /** Which bucket of the range a paper falls in, or -1 outside it. Publication
  *  year for all time (the last eight years); the date the lab added it for the
  *  12-month and 30-day ranges. */
-export function bucketOf(range: Range, info: Pick<PaperInfo, "year" | "posted_at">, now: Date): number {
+export function bucketOf(range: Range, info: Pick<Closeness, "year" | "posted_at">, now: Date): number {
   if (range === "all") {
     if (info.year == null) return -1;
     const i = 7 - (now.getFullYear() - info.year);
@@ -55,12 +55,17 @@ export function bucketCount(range: Range): number {
   return range === "all" ? 8 : range === "year" ? 12 : 6;
 }
 
+/** Whether a paper has the tag, or is from the lab. */
+export function hasFacet(row: Pick<Closeness, "tags" | "lab"> | undefined, kind: FacetKind, key: string): boolean {
+  if (!row) return false;
+  return kind === "tag" ? (row.tags ?? []).includes(key) : row.lab === key;
+}
+
 /** Tags or labs over the project's related pool, followed first, then the ones
  *  with most related papers left out of the project. */
 export function facetItems(
   kind: FacetKind,
   rows: Closeness[],
-  info: Map<string, PaperInfo>,
   follows: Follow[],
   range: Range,
   { limit = 6, now = new Date() }: { limit?: number; now?: Date } = {},
@@ -69,10 +74,8 @@ export function facetItems(
   const acc = new Map<string, FacetItem>();
   for (const row of rows) {
     if (!row.related) continue;
-    const p = info.get(row.paper_id);
-    if (!p) continue;
-    const keys = kind === "tag" ? new Set(p.tags) : p.lab ? new Set([p.lab]) : new Set<string>();
-    const b = bucketOf(range, p, now);
+    const keys = kind === "tag" ? new Set(row.tags ?? []) : row.lab ? new Set([row.lab]) : new Set<string>();
+    const b = bucketOf(range, row, now);
     for (const key of keys) {
       let it = acc.get(key);
       if (!it) {

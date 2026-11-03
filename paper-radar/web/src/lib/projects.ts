@@ -53,13 +53,10 @@ export interface Closeness {
   /** The followed tag or lab behind a 'tag' / 'lab' suggestion. */
   via: string | null;
   cutoff: number;
-}
-
-export interface ProjectSummary {
-  project_id: string;
-  n_in: number;
-  n_suggested: number;
-  n_new: number;
+  /** The lab's tags for it, else the paper's own. */
+  tags: string[];
+  /** Its last author who is a person: the paper's "lab" (public.last_person_author). */
+  lab: string | null;
 }
 
 export interface ProjectPaper {
@@ -86,8 +83,6 @@ export interface PaperInfo {
   abstract: string | null;
   /** The lab's tags for it, else the paper's own (post_tags in SQL). */
   tags: string[];
-  /** The last author who is a person: the paper's "lab". */
-  lab: string | null;
   posted_at: string;
 }
 
@@ -95,8 +90,15 @@ export function canEdit(project: Project, userId: string): boolean {
   return project.owner_id === userId;
 }
 
+/** Who is on a project's people list, which only counts while it is shared
+ *  with chosen people (the list is kept when visibility changes). */
 export function sharedWith(project: Project): string[] {
   return project.visibility === "people" ? project.project_people.map((p) => p.user_id) : [];
+}
+
+/** The owner, then the people it is shared with: the avatars it shows. */
+export function projectPeople(project: Project): string[] {
+  return [project.owner_id, ...sharedWith(project)].filter((u): u is string => !!u);
 }
 
 // --- reads ------------------------------------------------------------------
@@ -117,10 +119,18 @@ export async function getProject(id: string): Promise<Project | null> {
   return ((data ?? [])[0] as unknown as Project) ?? null;
 }
 
-export async function projectSummaries(teamId: string): Promise<ProjectSummary[]> {
-  const { data, error } = await supabase.rpc("project_summaries", { p_team: teamId });
+/** How many papers are in each of these projects, in one request. */
+export async function projectPaperCounts(ids: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>(ids.map((id) => [id, 0]));
+  if (ids.length === 0) return counts;
+  const { data, error } = await supabase
+    .from("project_papers")
+    .select("project_id")
+    .eq("state", "in")
+    .in("project_id", ids);
   if (error) throw error;
-  return (data ?? []) as ProjectSummary[];
+  for (const r of data ?? []) counts.set(r.project_id, (counts.get(r.project_id) ?? 0) + 1);
+  return counts;
 }
 
 export async function projectCloseness(id: string): Promise<Closeness[]> {
@@ -148,22 +158,6 @@ export async function projectFollows(id: string): Promise<Follow[]> {
   return (data ?? []) as Follow[];
 }
 
-/** The last author who is a person. Mirrors public.is_group_author in SQL
- *  (20261101120000), so a lab here is the same lab the server follows. */
-export function lastPersonAuthor(authors: string[] | null | undefined): string | null {
-  const group =
-    /\b(investigators?|group|consortium|collaborat\w*|committee|trialists|network|working party|on behalf of)\b/i;
-  for (let i = (authors ?? []).length - 1; i >= 0; i--) {
-    const name = (authors as string[])[i].trim();
-    if (!name) continue;
-    if (group.test(name)) continue;
-    if (/^\(.*\)$/.test(name)) continue;
-    if (name.includes("(") !== name.includes(")")) continue;
-    return name;
-  }
-  return null;
-}
-
 /** Ids per request: an `in` filter rides in the URL, so keep it well short of
  *  any proxy's limit. */
 const CHUNK = 120;
@@ -181,7 +175,7 @@ export async function paperInfo(teamId: string, ids: string[]): Promise<PaperInf
     for (const row of (data ?? []) as unknown as {
       posted_at: string;
       tags: string[];
-      papers: Omit<PaperInfo, "lab" | "posted_at">;
+      papers: Omit<PaperInfo, "posted_at">;
     }[]) {
       if (!row.papers) continue;
       const p = row.papers;
@@ -189,7 +183,6 @@ export async function paperInfo(teamId: string, ids: string[]): Promise<PaperInf
         ...p,
         authors: p.authors ?? [],
         tags: row.tags?.length ? row.tags : (p.tags ?? []),
-        lab: lastPersonAuthor(p.authors),
         posted_at: row.posted_at,
       });
     }

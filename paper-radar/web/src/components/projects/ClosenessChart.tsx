@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { memo, useMemo, useRef } from "react";
 
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { cn } from "@/lib/utils";
@@ -15,6 +15,7 @@ export interface Dot {
 }
 
 const PAD = { top: 12, right: 14, bottom: 24, left: 36 };
+const ORDER: Record<DotKind, number> = { other: 0, suggested: 1, new: 2, in: 3 };
 
 /** A stable sideways nudge in (-0.38, 0.38) years, so a year's papers spread
  *  into a column instead of stacking on one x. */
@@ -78,8 +79,8 @@ export function ClosenessChart({
   }, [dots, cutoff, width, height, pad.left, pad.right, pad.top, pad.bottom]);
 
   // Faint ones first, so the project's own and the suggestions draw on top.
-  const order: Record<DotKind, number> = { other: 0, suggested: 1, new: 2, in: 3 };
-  const sorted = [...dots].sort((a, b) => order[a.kind] - order[b.kind]);
+  const sorted = useMemo(() => [...dots].sort((a, b) => ORDER[a.kind] - ORDER[b.kind]), [dots]);
+  const byId = useMemo(() => new Map(dots.map((d) => [d.id, d])), [dots]);
   const yearTicks: number[] = [];
   const step = Math.max(1, Math.ceil((scale.x1 - scale.x0 + 1) / 7));
   for (let yr = scale.x1; yr >= scale.x0; yr -= step) yearTicks.unshift(yr);
@@ -164,32 +165,29 @@ export function ClosenessChart({
               )}
             </g>
           )}
-          {sorted.map((d) => {
-            const cx = scale.x(d.year + jitter(d.id));
-            const cy = scale.y(d.similarity);
-            const dim = lit != null && !lit.has(d.id);
-            const focus = d.id === hovered || d.id === selected;
-            const r = mini ? (d.kind === "other" ? 1.6 : 2.6) : d.kind === "other" ? 2.6 : 4.2;
-            const common = {
-              cx,
-              cy,
-              r: focus ? r + 2 : r,
-              opacity: dim ? 0.18 : 1,
-              style: { cursor: mini || !onSelect ? undefined : "pointer" },
-              onMouseEnter: mini ? undefined : () => onHover?.(d.id),
-              onClick: mini ? undefined : () => onSelect?.(d.id),
-            };
-            if (d.kind === "in")
-              return <circle key={d.id} {...common} fill="var(--accent)" stroke="var(--surface)" />;
-            if (d.kind === "other")
-              return <circle key={d.id} {...common} fill="var(--ch-off)" opacity={dim ? 0.12 : 0.55} />;
+          <DotLayer
+            dots={sorted}
+            x={scale.x}
+            y={scale.y}
+            lit={lit ?? null}
+            mini={mini}
+            onHover={onHover}
+            onSelect={onSelect}
+          />
+          {/* The hovered or picked paper, drawn on top: only this redraws on hover. */}
+          {[hovered, selected].map((id) => {
+            const d = id ? byId.get(id) : undefined;
+            if (!d || mini) return null;
             return (
               <circle
-                key={d.id}
-                {...common}
-                fill="var(--surface)"
-                stroke="var(--accent)"
-                strokeWidth={d.kind === "new" ? 2.4 : 1.4}
+                key={`focus-${id}`}
+                cx={scale.x(d.year + jitter(d.id))}
+                cy={scale.y(d.similarity)}
+                r={7}
+                fill="none"
+                stroke="var(--fg)"
+                strokeWidth={1.4}
+                pointerEvents="none"
               />
             );
           })}
@@ -198,6 +196,57 @@ export function ClosenessChart({
     </div>
   );
 }
+
+/** Every dot. Memoised apart from hover and selection, so moving the pointer
+ *  over a library of thousands redraws one ring, not every circle. */
+const DotLayer = memo(function DotLayer({
+  dots,
+  x,
+  y,
+  lit,
+  mini,
+  onHover,
+  onSelect,
+}: {
+  dots: Dot[];
+  x: (year: number) => number;
+  y: (sim: number) => number;
+  lit: ReadonlySet<string> | null;
+  mini: boolean;
+  onHover?: (id: string | null) => void;
+  onSelect?: (id: string) => void;
+}) {
+  return (
+    <g>
+      {dots.map((d) => {
+        const dim = lit != null && !lit.has(d.id);
+        const r = mini ? (d.kind === "other" ? 1.6 : 2.6) : d.kind === "other" ? 2.6 : 4.2;
+        const common = {
+          cx: x(d.year + jitter(d.id)),
+          cy: y(d.similarity),
+          r,
+          opacity: dim ? 0.18 : 1,
+          style: { cursor: mini || !onSelect ? undefined : "pointer" },
+          onMouseEnter: mini ? undefined : () => onHover?.(d.id),
+          onClick: mini ? undefined : () => onSelect?.(d.id),
+        };
+        if (d.kind === "in")
+          return <circle key={d.id} {...common} fill="var(--accent)" stroke="var(--surface)" />;
+        if (d.kind === "other")
+          return <circle key={d.id} {...common} fill="var(--ch-off)" opacity={dim ? 0.12 : 0.55} />;
+        return (
+          <circle
+            key={d.id}
+            {...common}
+            fill="var(--surface)"
+            stroke="var(--accent)"
+            strokeWidth={d.kind === "new" ? 2.4 : 1.4}
+          />
+        );
+      })}
+    </g>
+  );
+});
 
 /** The legend under the full chart. */
 export function ChartLegend({ className }: { className?: string }) {

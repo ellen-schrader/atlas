@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
   Lock,
@@ -29,6 +29,7 @@ import { Modal } from "@/components/ui/modal";
 import { useDismissable } from "@/hooks/useDismissable";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useMembers } from "@/hooks/useMembers";
+import { useMyRole } from "@/hooks/useMyRole";
 import {
   useCloseness,
   usePaperInfo,
@@ -42,7 +43,7 @@ import { useReadPapers } from "@/hooks/useReadPapers";
 import { updateProject } from "@/lib/api";
 import { downloadText, exportFilename, formatPapers, FORMAT_META } from "@/lib/paperExport";
 import { isPreprintVenue } from "@/lib/preprint";
-import { facetItems, type Range } from "@/lib/projectFacets";
+import { facetItems, hasFacet, type Range } from "@/lib/projectFacets";
 import {
   type Closeness,
   LEVELS,
@@ -53,6 +54,7 @@ import {
   clearPapers,
   deleteProject,
   markViewed,
+  projectPeople,
   setFollow,
   setPapers,
 } from "@/lib/projects";
@@ -118,6 +120,18 @@ export default function ProjectPage() {
         </p>
       </div>
     );
+  // Everything on the page (the library, members, the reading list) is the
+  // project's lab's, so it only opens from that lab.
+  if (project.team_id !== team.id)
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-3 p-8">
+        <h1 className="text-display font-bold tracking-tight">{project.name}</h1>
+        <p className="text-sm text-muted">
+          This project belongs to another of your labs. Switch to that lab from your profile menu to
+          open it.
+        </p>
+      </div>
+    );
   return <ProjectView key={project.id} project={project} teamId={team.id} teamName={team.name} userId={userId} />;
 }
 
@@ -133,11 +147,15 @@ function ProjectView({
   userId: string;
 }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const toast = useToast();
   const [confirm, confirmDialog] = useConfirm();
   const refresh = useRefreshProject();
   const { openPaper } = usePaperModal();
   const owner = project.owner_id === userId;
+  const { data: myRole } = useMyRole(teamId, userId);
+  // A lab owner may delete a project whose owner has left (projects_delete_orphan).
+  const canDelete = owner || (project.owner_id === null && myRole === "owner");
 
   const { data: closeness, isLoading: loadingCloseness } = useCloseness(project.id);
   const { data: members } = useProjectPapers(project.id);
@@ -147,25 +165,15 @@ function ProjectView({
   const { data: read } = useReadPapers(userId, teamId);
   const lastViewed = useLastViewed(project.id, userId);
 
-  const rows = closeness ?? [];
+  const rows = useMemo(() => closeness ?? [], [closeness]);
   const byId = useMemo(() => new Map(rows.map((r) => [r.paper_id, r])), [rows]);
-  const memberRows = members ?? [];
-  const inIds = memberRows.filter((m) => m.state === "in").map((m) => m.paper_id);
+  const memberRows = useMemo(() => members ?? [], [members]);
+  const inIds = useMemo(
+    () => memberRows.filter((m) => m.state === "in").map((m) => m.paper_id),
+    [memberRows],
+  );
   const dismissedIds = memberRows.filter((m) => m.state === "dismissed").map((m) => m.paper_id);
   const memberOf = useMemo(() => new Map(memberRows.map((m) => [m.paper_id, m])), [memberRows]);
-
-  // Details for what the lists, cards and facets show; the rest of the library
-  // is only dots.
-  const infoIds = useMemo(() => {
-    const s = new Set<string>(memberRows.map((m) => m.paper_id));
-    for (const r of rows) if (r.related || r.suggested) s.add(r.paper_id);
-    return [...s];
-  }, [rows, memberRows]);
-  const { data: infoList, isLoading: loadingInfo } = usePaperInfo(teamId, infoIds);
-  const info = useMemo(() => new Map((infoList ?? []).map((p) => [p.id, p])), [infoList]);
-
-  const isNew = (r: Closeness) =>
-    r.suggested !== null && lastViewed !== undefined && (lastViewed === null || r.posted_at > lastViewed);
 
   // --- view state ---
   const [tab, setTab] = useState<Tab>("in");
@@ -185,91 +193,132 @@ function ProjectView({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const hasFacet = (pid: string, f: Facet) => {
-    const p = info.get(pid);
-    if (!p) return false;
-    return f.kind === "tag" ? p.tags.includes(f.key) : p.lab === f.key;
-  };
+  // A selection only ever covers papers on screen: changing what is shown clears it.
+  useEffect(() => setChecked(new Set()), [tab, wide, picked, q]);
+
+  // Details for what the lists show, plus the paper picked on the chart (any
+  // dot can be); the rest of the library is only dots.
+  const infoIds = useMemo(() => {
+    const s = new Set<string>(memberRows.map((m) => m.paper_id));
+    for (const r of rows) if (r.related || r.suggested) s.add(r.paper_id);
+    return [...s];
+  }, [rows, memberRows]);
+  const { data: infoList, isLoading: loadingInfo } = usePaperInfo(teamId, infoIds);
+  const { data: pickedInfo } = usePaperInfo(
+    teamId,
+    selected && !infoIds.includes(selected) ? [selected] : [],
+  );
+  const info = useMemo(
+    () => new Map([...(infoList ?? []), ...(pickedInfo ?? [])].map((p) => [p.id, p])),
+    [infoList, pickedInfo],
+  );
+
+  const isNew = useCallback(
+    (r: Closeness) =>
+      r.suggested !== null && lastViewed !== undefined && (lastViewed === null || r.posted_at > lastViewed),
+    [lastViewed],
+  );
+
   const litFacet = hoverFacet ?? picked;
-  const lit = useMemo(() => {
-    if (!litFacet) return null;
-    return new Set(infoIds.filter((pid) => hasFacet(pid, litFacet)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [litFacet, infoIds, info]);
+  const lit = useMemo(
+    () =>
+      litFacet
+        ? new Set(rows.filter((r) => hasFacet(r, litFacet.kind, litFacet.key)).map((r) => r.paper_id))
+        : null,
+    [litFacet, rows],
+  );
 
-  const suggestedRows = rows.filter((r) => r.suggested !== null);
-  const above = rows.filter((r) => r.suggested === "close");
+  const suggestedRows = useMemo(() => rows.filter((r) => r.suggested !== null), [rows]);
+  const above = useMemo(() => rows.filter((r) => r.suggested === "close"), [rows]);
 
-  const dots: Dot[] = rows
-    .filter((r) => r.similarity !== null && r.year !== null && r.state !== "dismissed")
-    .map((r) => ({
-      id: r.paper_id,
-      year: r.year as number,
-      similarity: r.similarity as number,
-      kind: r.state === "in" ? "in" : r.suggested ? (isNew(r) ? "new" : "suggested") : "other",
-    }));
+  const dots: Dot[] = useMemo(
+    () =>
+      rows
+        .filter((r) => r.similarity !== null && r.year !== null && r.state !== "dismissed")
+        .map((r) => ({
+          id: r.paper_id,
+          year: r.year as number,
+          similarity: r.similarity as number,
+          kind: r.state === "in" ? "in" : r.suggested ? (isNew(r) ? "new" : "suggested") : "other",
+        })),
+    [rows, isNew],
+  );
   const cutoff = rows[0]?.cutoff ?? null;
 
   // --- the list ---
-  const listIds: string[] = wide && picked
-    ? rows.filter((r) => r.related && r.state === null && hasFacet(r.paper_id, picked)).map((r) => r.paper_id)
-    : tab === "in"
-      ? inIds
-      : suggestedRows.map((r) => r.paper_id);
+  const listIds: string[] = useMemo(
+    () =>
+      wide && picked
+        ? rows
+            .filter((r) => r.related && r.state === null && hasFacet(r, picked.kind, picked.key))
+            .map((r) => r.paper_id)
+        : tab === "in"
+          ? inIds
+          : suggestedRows.map((r) => r.paper_id),
+    [wide, picked, rows, tab, inIds, suggestedRows],
+  );
   const needle = q.trim().toLowerCase();
-  const shown = listIds
-    .filter((pid) => !picked || wide || hasFacet(pid, picked))
-    .filter((pid) => {
-      if (!needle) return true;
-      const p = info.get(pid);
-      return !!p && `${p.title ?? ""} ${p.authors.join(" ")}`.toLowerCase().includes(needle);
-    })
-    .sort((a, b) => {
-      const pa = info.get(a);
-      const pb = info.get(b);
-      if (sort === "close") return (byId.get(b)?.similarity ?? -2) - (byId.get(a)?.similarity ?? -2);
-      if (sort === "year") return (pb?.year ?? 0) - (pa?.year ?? 0);
-      if (sort === "title") return (pa?.title ?? "").localeCompare(pb?.title ?? "");
-      const ta = memberOf.get(a)?.added_at ?? pa?.posted_at ?? "";
-      const tb = memberOf.get(b)?.added_at ?? pb?.posted_at ?? "";
-      return tb.localeCompare(ta);
-    });
+  const shown = useMemo(
+    () =>
+      listIds
+        .filter((pid) => !picked || wide || hasFacet(byId.get(pid), picked.kind, picked.key))
+        .filter((pid) => {
+          if (!needle) return true;
+          const p = info.get(pid);
+          return !!p && `${p.title ?? ""} ${p.authors.join(" ")}`.toLowerCase().includes(needle);
+        })
+        .sort((a, b) => {
+          const pa = info.get(a);
+          const pb = info.get(b);
+          if (sort === "close") return (byId.get(b)?.similarity ?? -2) - (byId.get(a)?.similarity ?? -2);
+          if (sort === "year") return (pb?.year ?? 0) - (pa?.year ?? 0);
+          if (sort === "title") return (pa?.title ?? "").localeCompare(pb?.title ?? "");
+          const ta = memberOf.get(a)?.added_at ?? pa?.posted_at ?? "";
+          const tb = memberOf.get(b)?.added_at ?? pb?.posted_at ?? "";
+          return tb.localeCompare(ta);
+        }),
+    [listIds, picked, wide, byId, needle, info, sort, memberOf],
+  );
 
   const saved = useMemo(() => new Set((reading ?? []).map((r) => r.paper_id)), [reading]);
   const unread = inIds.filter((pid) => !read?.has(pid)).length;
 
-  const tags = useMemo(
-    () => facetItems("tag", rows, info, follows ?? [], range),
-    [rows, info, follows, range],
-  );
-  const labs = useMemo(
-    () => facetItems("lab", rows, info, follows ?? [], range),
-    [rows, info, follows, range],
-  );
+  const tags = useMemo(() => facetItems("tag", rows, follows ?? [], range), [rows, follows, range]);
+  const labs = useMemo(() => facetItems("lab", rows, follows ?? [], range), [rows, follows, range]);
   const nRelated = rows.filter((r) => r.related).length;
 
+  const onSelectDot = useCallback((pid: string) => setSelected((cur) => (cur === pid ? null : pid)), []);
+
   // --- actions ---
-  async function act(fn: () => Promise<void>, done?: { message: string; undo?: () => Promise<void> }) {
+  /** Runs a write, refreshes, and offers Undo. Resolves true only if it saved,
+   *  so callers chain follow-ups (clearing a selection) on success alone. */
+  async function act(
+    fn: () => Promise<void>,
+    done?: { message: string; undo?: () => Promise<void> },
+  ): Promise<boolean> {
     setBusy(true);
     try {
       await fn();
-      await refresh(project.id, teamId);
-      if (done)
-        toast({
-          message: done.message,
-          actionLabel: done.undo ? "Undo" : undefined,
-          onAction: done.undo
-            ? async () => {
-                await done.undo!();
-                await refresh(project.id, teamId);
-              }
-            : undefined,
-        });
     } catch (err) {
       toast({ message: err instanceof Error ? err.message : "Couldn’t save that. Try again." });
-    } finally {
       setBusy(false);
+      return false;
     }
+    await refresh(project.id, teamId);
+    setBusy(false);
+    if (done)
+      toast({
+        message: done.message,
+        actionLabel: done.undo ? "Undo" : undefined,
+        // A failed undo throws: the toast stays and says so (components/Toast).
+        onAction: done.undo
+          ? async () => {
+              await done.undo!();
+              await refresh(project.id, teamId);
+            }
+          : undefined,
+      });
+    return true;
   }
   const papersWord = (n: number) => (n === 1 ? "1 paper" : `${n} papers`);
   const add = (ids: string[]) => {
@@ -292,9 +341,13 @@ function ProjectView({
       message: `Removed ${papersWord(ids.length)} from the project`,
       undo: () => setPapers(project.id, userId, ids, "in"),
     });
+  const bulk = (fn: (ids: string[]) => Promise<boolean>) => async () => {
+    if (await fn([...checked])) setChecked(new Set());
+  };
   const follow = (f: Facet, on: boolean) =>
     act(() => setFollow(project.id, { kind: f.kind, value: f.key }, on));
-  const setLevel = (level: SuggestLevel) => act(async () => void (await updateProject(project.id, { suggest_level: level })));
+  const setLevel = (level: SuggestLevel) =>
+    act(async () => void (await updateProject(project.id, { suggest_level: level })));
 
   async function onDelete() {
     const ok = await confirm({
@@ -306,11 +359,16 @@ function ProjectView({
     if (!ok) return;
     try {
       await deleteProject(project.id);
-      await refresh(project.id, teamId);
-      navigate("/projects");
     } catch (err) {
       toast({ message: err instanceof Error ? err.message : "Couldn’t delete the project." });
+      return;
     }
+    // Leave first, so the page doesn't refetch a project that is gone.
+    navigate("/projects");
+    for (const key of ["project", "project-closeness", "project-papers", "project-follows"])
+      qc.removeQueries({ queryKey: [key, project.id] });
+    void qc.invalidateQueries({ queryKey: ["projects", teamId] });
+    toast({ message: `Deleted “${project.name}”` });
   }
 
   function exportBib() {
@@ -323,9 +381,7 @@ function ProjectView({
   const nameOf = (uid: string | null) =>
     !uid ? null : (lab?.find((m) => m.user_id === uid)?.profiles?.display_name ?? null);
   const label = (uid: string | null) => (uid === userId ? "You" : nameOf(uid));
-  const people = [project.owner_id, ...project.project_people.map((p) => p.user_id)].filter(
-    (u): u is string => !!u,
-  );
+  const people = projectPeople(project);
   const sel = selected ? byId.get(selected) : undefined;
   const selInfo = selected ? info.get(selected) : undefined;
   const hov = hovered && hovered !== selected ? byId.get(hovered) : undefined;
@@ -412,7 +468,7 @@ function ProjectView({
             <Plus size={14} aria-hidden />
             Add papers
           </Button>
-          {owner && <MoreMenu onEdit={() => setEditing(true)} onDelete={onDelete} />}
+          {canDelete && <MoreMenu canEdit={owner} onEdit={() => setEditing(true)} onDelete={onDelete} />}
         </div>
       </header>
 
@@ -480,7 +536,7 @@ function ProjectView({
                 hovered={hovered}
                 selected={selected}
                 onHover={setHovered}
-                onSelect={(pid) => setSelected(pid === selected ? null : pid)}
+                onSelect={onSelectDot}
                 label={`Library papers by year and closeness to ${project.name}. ${inIds.length} in the project, ${suggestedRows.length} suggested. The lists beside it hold the same papers.`}
               />
               {hov && (
@@ -564,17 +620,17 @@ function ProjectView({
             <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
               <span className="text-sm tabular-nums">{checked.size} selected</span>
               {(tab === "suggested" || wide) && (
-                <Button size="sm" disabled={busy} onClick={() => add([...checked]).then(() => setChecked(new Set()))}>
+                <Button size="sm" disabled={busy} onClick={bulk(add)}>
                   Add to project
                 </Button>
               )}
               {(tab === "suggested" || wide) && (
-                <Button variant="secondary" size="sm" disabled={busy} onClick={() => dismiss([...checked]).then(() => setChecked(new Set()))}>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={bulk(dismiss)}>
                   Not relevant
                 </Button>
               )}
               {tab === "in" && !wide && (
-                <Button variant="secondary" size="sm" disabled={busy} onClick={() => remove([...checked]).then(() => setChecked(new Set()))}>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={bulk(remove)}>
                   Remove
                 </Button>
               )}
@@ -604,7 +660,6 @@ function ProjectView({
                     onClick={() => {
                       setTab(value);
                       setWide(false);
-                      setChecked(new Set());
                     }}
                     className={cn(
                       "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition",
@@ -785,7 +840,6 @@ function ProjectView({
         onGap={(f) => {
           setPicked(f);
           setWide(true);
-          setChecked(new Set());
         }}
         loading={loadingCloseness || loadingInfo}
       />
@@ -843,7 +897,15 @@ function IconButton({
   );
 }
 
-function MoreMenu({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+function MoreMenu({
+  canEdit,
+  onEdit,
+  onDelete,
+}: {
+  canEdit: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -866,17 +928,19 @@ function MoreMenu({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => vo
       </button>
       {open && (
         <div role="menu" className="absolute right-0 top-9 z-20 flex w-52 flex-col rounded-control border border-border bg-surface p-1 shadow-lg">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onEdit();
-            }}
-            className="rounded-control px-3 py-2 text-left text-sm hover:bg-surface-2"
-          >
-            Edit name and description
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onEdit();
+              }}
+              className="rounded-control px-3 py-2 text-left text-sm hover:bg-surface-2"
+            >
+              Edit name and description
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -907,7 +971,8 @@ function AddPapersDialog({
   teamId: string;
   teamName: string;
   exclude: string[];
-  onAdd: (p: PickedPaper) => Promise<void>;
+  /** Resolves true once the paper is saved in the project. */
+  onAdd: (p: PickedPaper) => Promise<boolean>;
 }) {
   const [busy, setBusy] = useState(false);
   const [added, setAdded] = useState<string[]>([]);
@@ -931,8 +996,7 @@ function AddPapersDialog({
             if (!p) return;
             setBusy(true);
             try {
-              await onAdd(p);
-              setAdded((a) => [...a, p.id]);
+              if (await onAdd(p)) setAdded((a) => [...a, p.id]);
             } finally {
               setBusy(false);
             }
