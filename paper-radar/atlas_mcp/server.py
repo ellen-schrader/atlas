@@ -1,7 +1,6 @@
 """Atlas MCP server over stdio — every tool, acting as the user in ``api/.env``.
 
-Mostly read; ``post_paper`` and ``add_plot_to_moodboard`` write (both preview
-unless confirmed).
+Mostly read; ``post_paper`` writes (it previews unless confirmed).
 
 Run over stdio (the transport Claude Code / Claude for Life Sciences use):
 
@@ -22,7 +21,6 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from . import lab
-from .figures import FIGURE_TOOLS
 from .papers import READ_TOOLS, WRITE_TOOLS
 from .tools import SERVER_INSTRUCTIONS
 
@@ -31,7 +29,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 log = logging.getLogger("atlas_mcp")
 
 mcp = FastMCP("atlas", instructions=SERVER_INSTRUCTIONS)
-for _tool in READ_TOOLS + WRITE_TOOLS + FIGURE_TOOLS:
+for _tool in READ_TOOLS + WRITE_TOOLS:
     mcp.add_tool(_tool)
 
 

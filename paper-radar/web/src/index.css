@@ -67,7 +67,7 @@
   --success: #2a8a4c;
 
   /* Data channels — the fluorophore set from a multiplexed panel. These colour
-     DATA ONLY (map clusters, venues, themes), never chrome, so a colour on
+     DATA ONLY (chart series, venues, themes), never chrome, so a colour on
      screen always means something. Never use them for UI surfaces. */
   --ch-1: #0f8f8b;
   --ch-2: #c23c86;
@@ -83,20 +83,12 @@
   --cmp-3: #6a5cd8;
   --cmp-4: #2f8f52;
 
-  /* Sequential ramps for the map: publication year and topic relevance. */
+  /* Sequential ramp for publication year. */
   --year-1: #bdd8d7;
   --year-2: #8ec6c3;
   --year-3: #57ada9;
   --year-4: #28938f;
   --year-5: #0e7773;
-
-  --rel-1: #dfe4e4;
-  --rel-2: #bdd8d7;
-  --rel-3: #8ec6c3;
-  --rel-4: #57ada9;
-  --rel-5: #28938f;
-  --rel-6: #0e7773;
-  --rel-7: #075451;
 
   color-scheme: light;
 }
@@ -140,14 +132,6 @@
   --year-4: #2fbdb6;
   --year-5: #7ee6e1;
 
-  --rel-1: #1a222b;
-  --rel-2: #1d4a4c;
-  --rel-3: #22706f;
-  --rel-4: #289690;
-  --rel-5: #2fbdb6;
-  --rel-6: #5fdcd6;
-  --rel-7: #a8f0ec;
-
   color-scheme: dark;
 }
 
@@ -169,7 +153,7 @@
   --color-danger-fg: var(--danger-fg);
   --color-success: var(--success);
 
-  /* data channels — charts and the map only, never chrome */
+  /* data channels — charts only, never chrome */
   --color-ch-1: var(--ch-1);
   --color-ch-2: var(--ch-2);
   --color-ch-3: var(--ch-3);

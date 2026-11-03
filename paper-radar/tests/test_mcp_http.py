@@ -199,7 +199,7 @@ def test_the_read_only_paper_and_saved_searches_tools_are_served(server):
     assert r.status_code == 200, r.text
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert names == {t.__name__ for t in READ_TOOLS} | searches.SEARCH_TOOL_NAMES
-    assert "post_paper" not in names and "get_figure_image" not in names
+    assert "post_paper" not in names
 
 
 def test_each_call_runs_as_the_tokens_user(server, monkeypatch):

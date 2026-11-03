@@ -1,11 +1,11 @@
 """Shared plumbing for the Atlas MCP tools: the audit decorator, the elicitation
 gate, untrusted-content framing, and citation formatting.
 
-Tool functions live in `papers` (the paper tools), `figures` (the beta mood
-board), `trials` (clinical trials) and `searches` (saved searches). They are
-plain functions here; each server entry point registers the set it serves
-(`server` for stdio: papers and figures; the hosted server: read-only papers
-and saved searches, plus the trial tools for those who have them).
+Tool functions live in `papers` (the paper tools), `trials` (clinical trials)
+and `searches` (saved searches). They are plain functions here; each server
+entry point registers the set it serves (`server` for stdio: the paper tools;
+the hosted server: read-only papers and saved searches, plus the trial tools
+for those who have them).
 """
 
 from __future__ import annotations
@@ -60,13 +60,7 @@ def _succeeded(result: object) -> bool:
     raising, so an exception check alone would record a refused call as a success —
     including the one the lab most wants to see: someone using Claude on a lab whose
     access is switched off.
-
-    Image tools return a LIST (``[text, Image]``) and put the same "Error: …"
-    string in its first element, so the list case has to be unwrapped too, or a
-    refused image/preview call is logged as a success.
     """
-    if isinstance(result, list):
-        result = result[0] if result else None
     return not (isinstance(result, str) and result.startswith("Error:"))
 
 

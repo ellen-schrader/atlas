@@ -1,6 +1,6 @@
 """Shared FastAPI dependencies.
 
-Kept out of ``app.py`` so routers (e.g. ``maps.py``) can depend on the same token
+Kept out of ``app.py`` so routers (e.g. ``trials.py``) can depend on the same token
 extraction without importing the app module and creating a cycle.
 """
 

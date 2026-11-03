@@ -2,10 +2,9 @@ import {
   Bookmark,
   Layers,
   FlaskConical,
-  Image,
+  FolderLock,
   LayoutGrid,
   LibraryBig,
-  Map as MapIcon,
   ScanSearch,
   type LucideIcon,
 } from "lucide-react";
@@ -21,6 +20,8 @@ export interface NavItem {
   /** Shows a Beta pill (or "(Beta)" in the collapsed bar). Drop the flag to
    *  graduate a page — nothing else needs to change. */
   beta?: boolean;
+  /** Shows a Soon pill: the page is a placeholder for something being built. */
+  soon?: boolean;
   /** Only shown when this feature is on for the user in the lab
    *  (public.my_features). Dark features stay out of the nav entirely. */
   feature?: string;
@@ -67,21 +68,14 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Explore",
+    label: "Projects",
     items: [
       {
-        to: "/gallery",
-        label: "Figure gallery",
-        icon: Image,
-        beta: true,
-        description: () => "Figures and diagrams your lab has shared",
-      },
-      {
-        to: "/maps",
-        label: "Topic maps",
-        icon: MapIcon,
-        beta: true,
-        description: () => "See how the lab’s papers connect by subject",
+        to: "/projects",
+        label: "Projects",
+        icon: FolderLock,
+        soon: true,
+        description: () => "Coming soon: the papers for one piece of work, together",
       },
     ],
   },
@@ -114,9 +108,15 @@ export function visible(items: NavItem[], features: readonly string[]): NavItem[
   return items.filter((item) => !item.feature || features.includes(item.feature));
 }
 
-/** The label an icon-only control carries: "Topic maps (Beta)". */
+/** The pill beside an item, if any. */
+export function navPill(item: NavItem): string | null {
+  return item.beta ? "Beta" : item.soon ? "Soon" : null;
+}
+
+/** The label an icon-only control carries: "Suggested papers (Beta)". */
 export function navTitle(item: NavItem): string {
-  return item.beta ? `${item.label} (Beta)` : item.label;
+  const pill = navPill(item);
+  return pill ? `${item.label} (${pill})` : item.label;
 }
 
 /** Visible focus ring for every sidebar control. */

@@ -144,16 +144,6 @@ def test_semantic_search_requires_bearer_token():
     assert resp.status_code == 401
 
 
-def test_overview_requires_bearer_token():
-    resp = client.get("/overview", params={"team_id": "t"})
-    assert resp.status_code == 401
-
-
-def test_similarity_requires_bearer_token():
-    resp = client.post("/similarity", json={"query": "x", "team_id": "t"})
-    assert resp.status_code == 401
-
-
 def test_profile_requires_bearer_token():
     resp = client.post("/profile", json={"profile_md": "I study spatial biology"})
     assert resp.status_code == 401
@@ -205,47 +195,6 @@ def test_parse_ts_handles_iso_and_z():
     assert _parse_ts("2026-07-01T12:00:00Z") is not None  # Z offset
     assert _parse_ts(None) is None
     assert _parse_ts("not-a-date") is None
-
-
-def test_compute_stats_aggregates_posts():
-    from api.app import _compute_stats
-
-    rows = [
-        {
-            "posted_at": "2026-03-09T12:00:00Z",
-            "papers": {"venue": "Nature", "year": 2025, "authors": ["A. One", "B. Last"]},
-        },
-        {
-            "posted_at": "2026-03-20T12:00:00Z",
-            "papers": {"venue": "Nature", "year": 2026, "authors": ["C. Only"]},
-        },
-        {
-            "posted_at": "2026-04-01T12:00:00Z",
-            "papers": {"venue": "bioRxiv", "year": 2026, "authors": []},
-        },
-    ]
-    stats = _compute_stats(rows)
-    assert stats.over_time == [{"month": "2026-03", "count": 2}, {"month": "2026-04", "count": 1}]
-    assert stats.by_venue[0] == {"venue": "Nature", "count": 2}
-    assert {"year": 2026, "count": 2} in stats.by_year
-    # last author is the lab proxy; the empty-author row contributes nothing
-    labs = {d["lab"]: d["count"] for d in stats.by_lab}
-    assert labs == {"B. Last": 1, "C. Only": 1}
-
-
-def test_lab_skips_trial_groups():
-    from api.app import _last_author_lab
-
-    trial = ["Peter Schmid", "Joyce O'Shaughnessy", "KEYNOTE-522 Investigators"]
-    assert _last_author_lab(trial) == "Joyce O'Shaughnessy"
-    assert _last_author_lab(["Sandra Swain", "(CLEOPATRA Study Group)"]) == "Sandra Swain"
-    assert _last_author_lab(["E. Mittendorf", "(IMpassion031 Trial", "Investigators)"]) == (
-        "E. Mittendorf"
-    )
-    assert _last_author_lab(["TCGA Research Network"]) is None
-    assert _last_author_lab(["Raza Ali"]) == "Raza Ali"
-    # a person with a parenthetical is still a person
-    assert _last_author_lab(["A Author", "Wei Chen (陈伟)"]) == "Wei Chen (陈伟)"
 
 
 def test_resolve_dedup_key_strips_tracking_params(signed_in):
@@ -1114,7 +1063,7 @@ WEB = _jwt({"sub": "user-1", "role": "authenticated"})
     [
         ("post", "/resolve", {"url": "https://arxiv.org/abs/2401.01234"}),
         ("post", "/posts", {"url": "https://arxiv.org/abs/2401.01234", "team_id": "x"}),
-        ("get", "/overview?team_id=x", None),
+        ("get", "/recommendations?team_id=x", None),
         ("post", "/search/semantic", {"team_id": "x", "q": "tumour"}),
     ],
 )
