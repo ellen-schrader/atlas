@@ -88,7 +88,8 @@ search, Follow, the lab focus chips, the t-SNE library map.
 - RPC `project_closeness(p_project)`: every library paper with its highest
   cosine similarity to any project paper (and which one), the leave-one-out value
   for project papers, whether it is in the related pool (the 120 closest), and
-  whether it is suggested (`close`, or `tag`/`lab` with `via` for a followed one).
+  whether it is suggested (`close`, or `tag`/`lab` with `via` for a followed one),
+  and its tags and lab (last author), so the web app never re-derives them.
   Falls back to the description embedding while the project has fewer than 3
   papers. Nearest-paper rather than centroid, so projects with two strands don't
   get suggestions from the empty middle.
@@ -96,8 +97,7 @@ search, Follow, the lab focus chips, the t-SNE library map.
   project's own leave-one-out similarities (Fewer: median, Balanced: 25th, More:
   10th); before that, a rank (the 10th / 20th / 40th closest paper), because a
   description and a paper sit at different similarities to the same papers.
-- RPC `project_summaries(p_team)`: in / suggested / new counts per project, for
-  the index.
+- Adding or removing papers and follows bumps the project's `updated_at`.
 - Existing `maps` rows migrate with the same id: seed → description (and its
   embedding), pins → `in`, excludes → `dismissed`, visibility and owner kept.
 - `merge_papers` keeps a merged paper in its projects. Leaving a lab (or

@@ -365,14 +365,29 @@ def test_closeness(world, api, admin):
     assert (rows[far]["suggested"], rows[far]["via"]) == ("tag", "b-cells")
     assert (rows[by_lab]["suggested"], rows[by_lab]["via"]) == ("lab", "Bruno TC")
 
-    r = rest(t_owner, "POST", "rpc/project_summaries", json={"p_team": team})
-    (summary,) = r.json()
-    assert (summary["n_in"], summary["n_suggested"], summary["n_new"]) == (3, 4, 4)
+    # The lab and tags behind those, as the web app counts them.
+    assert rows[by_lab]["lab"] == "Bruno TC" and rows[far]["tags"] == ["b-cells"]
+
     for _ in range(2):  # opening it again only moves the time
         r = rest(t_owner, "POST", "rpc/mark_project_viewed", json={"p": pj["id"]})
         assert r.status_code in (200, 204), r.text
-    (summary,) = rest(t_owner, "POST", "rpc/project_summaries", json={"p_team": team}).json()
-    assert summary["n_new"] == 0
+    views = rest(t_owner, "GET", f"project_views?project_id=eq.{pj['id']}").json()
+    assert len(views) == 1
+
+
+def test_changes_to_papers_update_the_project(world, api, admin):
+    owner, _, t_owner = world.user()
+    mate, _, t_mate = world.user()
+    team = world.lab(owner, mate)
+    paper = world.paper(team, vec((1, 1.0)))
+    pj = create(api, t_owner, team, visibility="lab")
+    admin.table("projects").update({"updated_at": "2026-01-01T00:00:00+00:00"}).eq(
+        "id", pj["id"]
+    ).execute()
+    row = {"project_id": pj["id"], "paper_id": paper, "added_by": mate}
+    assert rest(t_mate, "POST", "project_papers", json=row).status_code == 201
+    (after,) = admin.table("projects").select("updated_at").eq("id", pj["id"]).execute().data
+    assert not after["updated_at"].startswith("2026-01-01")
 
 
 def test_merge_keeps_projects(world, api, admin):
@@ -448,6 +463,13 @@ def test_leaving_the_lab(world, api, admin):
     alone = create(api, t_owner, team, visibility="people")
     shared = create(api, t_owner, team, visibility="people")
     rest(t_owner, "POST", "project_people", json={"project_id": shared["id"], "user_id": mate})
+    paper = world.paper(team, vec((1, 1.0)))
+    rest(
+        t_owner,
+        "POST",
+        "project_papers",
+        json={"project_id": shared["id"], "paper_id": paper, "added_by": owner},
+    )
     theirs = create(api, t_mate, team, visibility="people")
     rest(t_mate, "POST", "project_people", json={"project_id": theirs["id"], "user_id": owner})
 
@@ -465,5 +487,7 @@ def test_leaving_the_lab(world, api, admin):
     assert people.execute().data == []
     # The lab's owner sees the ownerless project and can remove it; others can't.
     assert seen(t_mate, shared["id"]) and seen(t_boss, shared["id"])
+    papers = rest(t_boss, "GET", f"project_papers?project_id=eq.{shared['id']}").json()
+    assert [p["paper_id"] for p in papers] == [paper]  # what they'd be deleting
     assert rest(t_mate, "DELETE", f"projects?id=eq.{shared['id']}").json() == []
     assert len(rest(t_boss, "DELETE", f"projects?id=eq.{shared['id']}").json()) == 1
