@@ -6,7 +6,7 @@ import type { Team } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { ClaudeButton, ClaudeRow } from "./ClaudeEntry";
-import { FOCUS_RING, HOME_NAV, NAV_GROUPS, type NavItem, navTitle, visible } from "./nav";
+import { FOCUS_RING, HOME_NAV, NAV_GROUPS, type NavItem, navPill, navTitle, visible } from "./nav";
 import { ProfileMenu } from "./ProfileMenu";
 
 export interface SidebarProps {
@@ -50,9 +50,9 @@ function NavRow({
       <Icon size={16} strokeWidth={2} aria-hidden className="shrink-0" />
       <span className="min-w-0 truncate">{item.label}</span>
       {/* Grey on purpose: cyan in the sidebar means "you are here" and nothing else. */}
-      {item.beta && (
+      {navPill(item) && (
         <span className="ml-auto shrink-0 rounded-full border border-border-strong px-1.5 py-[3px] text-[10px] font-semibold uppercase leading-none tracking-[0.04em] text-muted">
-          Beta
+          {navPill(item)}
         </span>
       )}
     </NavLink>
@@ -114,7 +114,7 @@ export function Sidebar({
 }
 
 /** The 68px icon bar between phone and wide-desktop widths. Same items, same
- *  order; labels (and Beta) move into tooltips and aria-labels. */
+ *  order; labels (and their Beta or Soon pills) move into tooltips and aria-labels. */
 export function CollapsedBar(p: SidebarProps) {
   const icon = (item: NavItem) => {
     const Icon = item.icon;

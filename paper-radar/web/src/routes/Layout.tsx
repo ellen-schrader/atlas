@@ -4,7 +4,6 @@ import { Outlet, useLocation, useOutletContext } from "react-router-dom";
 import { Menu } from "lucide-react";
 
 import { Brand } from "@/components/Brand";
-import { FigureModalProvider } from "@/components/FigureModal";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import { PaperModalProvider } from "@/components/PaperModal";
 import { CollapsedBar, Sidebar } from "@/components/sidebar/Sidebar";
@@ -108,9 +107,7 @@ export default function Layout({
       <main className="min-w-0 flex-1 overflow-auto">
         <ToastProvider>
           <PaperModalProvider teamId={team.id} teamName={team.name} userId={session.user.id}>
-            <FigureModalProvider teamId={team.id} userId={session.user.id}>
-              <Outlet context={ctx} />
-            </FigureModalProvider>
+            <Outlet context={ctx} />
           </PaperModalProvider>
         </ToastProvider>
       </main>

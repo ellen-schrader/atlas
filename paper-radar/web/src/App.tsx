@@ -13,18 +13,15 @@ import Landing from "@/routes/Landing";
 import { About, Privacy, Terms } from "@/routes/PublicPages";
 import Login from "@/routes/Login";
 import Connect from "@/routes/Connect";
-import MapView from "@/routes/Map";
-import MapDashboard from "@/routes/MapDashboard";
-import MapsLibrary from "@/routes/MapsLibrary";
 import TrialCollection from "@/routes/TrialCollection";
 import TrialCollections from "@/routes/TrialCollections";
 import TrialPage from "@/routes/TrialPage";
 import Trials from "@/routes/Trials";
-import MoodBoard from "@/routes/MoodBoard";
 import OAuthConsent from "@/routes/OAuthConsent";
 import Onboarding from "@/routes/Onboarding";
 import PaperPage from "@/routes/PaperPage";
 import Papers from "@/routes/Papers";
+import Projects from "@/routes/Projects";
 import ReadingList from "@/routes/ReadingList";
 import Settings from "@/routes/Settings";
 import Suggestions from "@/routes/Suggestions";
@@ -228,14 +225,14 @@ function AuthedApp({ session }: { session: Session }) {
             Kept as a redirect so an old bookmark lands somewhere sensible. */}
         <Route path="/import" element={<Navigate to="/papers" replace />} />
         <Route path="/reading-list" element={<ReadingList />} />
-        <Route path="/gallery" element={<MoodBoard />} />
-        {/* Old names for the two pages above, kept so bookmarks still land. */}
+        {/* Old name for the reading list, kept so bookmarks still land. */}
         <Route path="/reading" element={<Navigate to="/reading-list" replace />} />
-        <Route path="/board" element={<Navigate to="/gallery" replace />} />
-        <Route path="/map" element={<MapView />} />
-        <Route path="/maps" element={<MapsLibrary />} />
-        <Route path="/maps/overview" element={<MapView />} />
-        <Route path="/maps/:mapId" element={<MapDashboard />} />
+        {/* Projects replace topic maps (docs/PROJECTS_PLAN.md); locked until built. */}
+        <Route path="/projects" element={<Projects />} />
+        {/* Retired: topic maps and the figure gallery. Old links land on Projects. */}
+        {["/map", "/maps", "/maps/*", "/gallery", "/board"].map((path) => (
+          <Route key={path} path={path} element={<Navigate to="/projects" replace />} />
+        ))}
         {/* Saved searches (issue #164). */}
         <Route path="/suggestions" element={<Suggestions />} />
         {/* Clinical trials: dark unless the feature is on (RequireTrials). */}

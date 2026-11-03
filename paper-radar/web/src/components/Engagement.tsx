@@ -35,11 +35,10 @@ function authorName(c: CommentRow): string {
   return c.author_id ? (c.profiles?.display_name ?? "Someone") : "Former member";
 }
 
-/** What differs between engaging with a paper and engaging with a figure: the
- *  backing tables, the foreign-key column, whether @-mentions apply, and which
- *  card/list count query to refresh. Everything else is identical, so the two
- *  public entry points below are thin wrappers over one `Engagement`. */
-type SubjectKind = "paper" | "figure";
+/** The backing tables, foreign-key column, @-mention support and count query
+ *  for each kind of subject. Papers are the only kind since the figure gallery
+ *  was retired; the table keeps the queries below free of hard-coded names. */
+type SubjectKind = "paper";
 interface SubjectConfig {
   commentsTable: string;
   reactionsTable: string;
@@ -54,13 +53,6 @@ const SUBJECTS: Record<SubjectKind, SubjectConfig> = {
     fk: "paper_id",
     supportsMentions: true,
     countsKey: "engagement-counts",
-  },
-  figure: {
-    commentsTable: "figure_comments",
-    reactionsTable: "figure_reactions",
-    fk: "figure_id",
-    supportsMentions: false,
-    countsKey: "figure-engagement-counts",
   },
 };
 
@@ -165,19 +157,6 @@ export function PaperEngagement({
   userId: string;
 }) {
   return <Engagement kind="paper" subjectId={paperId} teamId={teamId} userId={userId} />;
-}
-
-/** Reactions + comments on a mood-board figure (no @-mentions in v1). */
-export function FigureEngagement({
-  figureId,
-  teamId,
-  userId,
-}: {
-  figureId: string;
-  teamId: string;
-  userId: string;
-}) {
-  return <Engagement kind="figure" subjectId={figureId} teamId={teamId} userId={userId} />;
 }
 
 function Engagement(ctx: Ctx) {

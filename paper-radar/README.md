@@ -2,7 +2,7 @@
 
 **Every lab has a taste. Atlas gives yours to Claude.**
 
-The papers you save, the figures you admire, the ones you argue about — Atlas learns your lab's judgment from how you already work, then hands it to Claude Code and Claude for Life Sciences.
+The papers you save, the ones you argue about, the ones you keep coming back to — Atlas learns your lab's judgment from how you already work, then hands it to Claude Code and Claude for Life Sciences.
 
 ---
 
@@ -10,7 +10,7 @@ The papers you save, the figures you admire, the ones you argue about — Atlas 
 
 **Attrition.** A lab's judgment about what's worth reading lives in one postdoc's head. Five years of it walks out the door when she graduates. The next person inherits the Dropbox, not the mind.
 
-**Averaging.** The standing critique of AI in science is that it homogenises it. Every lab asks the same model the same question, gets the same consensus answer, and plots it in the same default palette. The thing that actually drives science — a specific group's specific judgment about what matters — gets averaged away.
+**Averaging.** The standing critique of AI in science is that it homogenises it. Every lab asks the same model the same question, gets the same consensus answer, The thing that actually drives science — a specific group's specific judgment about what matters — gets averaged away.
 
 **Atlas is the bet against both.** It doesn't try to make Claude smarter. It makes Claude *yours* — grounded in what *this* lab reads, argues about, and admires.
 
@@ -19,25 +19,22 @@ The papers you save, the figures you admire, the ones you argue about — Atlas 
 | **Recommendations** | what the field cites | what **this lab** judged worth its time |
 | **"What's new" in a topic** | the consensus summary | **this lab's** view of what's moving |
 | **Related work** | plausible citations, some invented | **this lab's** actual papers, links that resolve |
-| **Figures** | the default palette | **this lab's** look |
 
-These aren't four features. They're four instances of one move.
+These aren't three features. They're three instances of one move.
 
 ---
 
 ## What it does
 
-Atlas has three surfaces.
+Atlas has two surfaces, with a third on the way.
 
 ### 1. Papers — the lab's corpus, with judgment attached
 
-A deduped, enriched, shared corpus: full-text **and** semantic search, an interactive t-SNE map of the lab's reading by meaning, LLM-named clusters, reactions, comments, reading lists.
+A deduped, enriched, shared corpus: full-text **and** semantic search, reactions, comments, reading lists, and weekly suggestions from saved searches.
 
-**Topic maps** are the part that matters. *A map is not a saved filter — it's a topic the lab watches, and Atlas keeps it current.* Each topic map scopes the corpus to a semantic seed ("ovarian cancer, HGSOC, platinum resistance"), clusters it into named sub-themes, ranks the labs driving it, and generates a **"What's new" summary in which every claim is grounded in a paper the lab actually posted** — with source chips that resolve to the paper.
+### 2. Projects (coming)
 
-### 2. Your lab's look — the figures, as an asset
-
-A mood board of figures the lab admires. Atlas derives the lab's **palette** from them and emits a **real matplotlib style sheet**, so plots come out in the lab's colours rather than the field's default. It also holds **style cards**: synthetic figures rendered from a style spec, which capture *how a figure looks* without ever copying the figure itself.
+The papers for one piece of work, kept together and shared with the lab, a few people or nobody, with the library papers closest to it ranked by similarity. See [docs/PROJECTS_PLAN.md](docs/PROJECTS_PLAN.md). Topic maps and the figure mood board were retired to make room.
 
 ### 3. Connect Claude — the corpus and the taste, over MCP
 
@@ -61,8 +58,6 @@ Atlas weights the lab's **existing behaviour** — there's no profile to fill in
 
 **Not all engagement is endorsement** — an argument is not an endorsement, and a 🤔 is closer to a doubt than a vote. Signals **half-life every quarter**, so the model tracks where the lab is *going*, not where it's been.
 
-Figures teach the **palette**, not the taste — the two are learned from different evidence and kept separate on purpose.
-
 **Cold start:** a new lab or a new member has no history to learn from, so the free-text *research profile* in Settings seeds the model on day one and behavioural signal takes over as it accumulates. It's per-user, so recommendations get personal without fragmenting the lab's shared taste.
 
 > **Honesty note.** Those weights are a hand-chosen prior, not a fitted model. See [Roadmap](#roadmap).
@@ -71,24 +66,23 @@ Figures teach the **palette**, not the taste — the two are learned from differ
 
 ## Claude over MCP
 
-`atlas_mcp/` is a local stdio MCP server exposing **18 tools**:
+`atlas_mcp/` is a local stdio MCP server exposing **10 tools**:
 
 **Find & cite** — `search_lab_papers` (keyword | semantic), `list_recent_papers`, `get_paper`, `similar_papers`, `list_labs`
 **Decide what to read** — `recommend_reading`, `lab_digest`
 **Write & get unstuck** — `novelty_check` (*is this idea new **to us**?*), `draft_related_work` (sourced **only** from the lab's own papers), `post_paper` ⚠️
-**Plot in the lab's style** — `get_moodboard_style` (palette + matplotlib style sheet), `list_moodboard`, `moodboard_categories`, `get_figure_image`, `get_figure_palette`, `check_colorblind_safety`, `preview_plot_spec`, `add_plot_to_moodboard` ⚠️
 
-The two ⚠️ tools write to the shared lab. Everything else is read-only.
+The ⚠️ tool writes to the shared lab. Everything else is read-only.
 
 ### The security model
 
 This is a tool-using model reading third-party text on behalf of a whole lab, so the boundaries are explicit:
 
 - **Owner-gated.** Claude access is a **lab-wide** setting an *owner* must switch on. Until then every tool call is refused — it isn't one member's call to make, because the server can read the lab's papers and post into it.
-- **Read-only by default.** The only two writes (`post_paper`, `add_plot_to_moodboard`) preview by default and require explicit confirmation.
+- **Read-only by default.** The only write (`post_paper`) previews by default and requires explicit confirmation.
 - **Scoped to you.** Your own login scopes access. Claude sees exactly what you see, nothing more.
 - **Audited.** Every tool call is logged to an activity log the lab can read.
-- **Prompt-injection hardened.** All paper text, abstracts and figure captions are wrapped and labelled as *untrusted data*, so an abstract cannot instruct the agent.
+- **Prompt-injection hardened.** All paper text and abstracts are wrapped and labelled as *untrusted data*, so an abstract cannot instruct the agent.
 - **Credentials never leave the server.** Lab credentials live in `api/.env` (gitignored), never in a Claude config. `list_labs` deliberately omits the lab join code.
 
 ### Connecting
@@ -100,7 +94,6 @@ Then ask it things like:
 > *"What has our lab posted on immunosuppressive myeloid cells?"*
 > *"Is this novel for us — TREM2+ TAMs drive anti-PD1 resistance?"*
 > *"Draft the related-work paragraph, citing only our papers."*
-> *"Plot these phenotypes as a forest plot in our lab's style."*
 
 ---
 
@@ -108,24 +101,23 @@ Then ask it things like:
 
 ```
 web/          Vite + React + TypeScript          → localhost:5173
-              Landing · Dashboard · Papers · ReadingList · MoodBoard
-              MapsLibrary · Map · MapDashboard · Connect · Settings
+              Landing · Dashboard · Papers · ReadingList · Suggestions
+              Projects (placeholder) · Trials · Connect · Settings
                     │  REST
                     ▼
 api/          FastAPI (uvicorn)                  → localhost:8010
-              app.py · maps.py · overview.py · map_summary.py
+              app.py · trials.py · saved_searches.py
               embeddings.py (Voyage) · enrichment.py (Claude)
                     │
                     ▼
 supabase/     Postgres + Auth + Storage (RLS)    → localhost:54321
                     ▲
                     │  same DB, same auth, user-scoped
-atlas_mcp/    stdio MCP server (18 tools)  ──────┘
-              server.py · lab.py · moodboard.py
-              spec.py / composite.py / render.py  (style-card renderer)
+atlas_mcp/    stdio MCP server (10 tools)  ──────┘
+              server.py · lab.py · papers.py · http.py (hosted connector)
 ```
 
-**Embeddings** are Voyage; **enrichment, cluster names and topic summaries** are Claude. The 2-D map is a t-SNE computed API-side.
+**Embeddings** are Voyage; **enrichment** (summaries and tags) is Claude.
 
 <details>
 <summary><b>Prototype history</b> — <code>paper_radar/</code> and <code>app/</code></summary>
@@ -163,7 +155,7 @@ uv run --extra mcp python -m atlas_mcp
 
 **Demo data.** `.claude/skills/run-atlas/` seeds a lab ("TME Lab") with papers, posts and reactions, and creates a signed-in user.
 
-> ⚠️ **The seed has no embeddings.** Without a `VOYAGE_API_KEY` and an embedding backfill, semantic search is off, the map is empty, and recommendations return `cold_start`. Backfill with `api/backfill_embeddings.py` before demoing Maps.
+> ⚠️ **The seed has no embeddings.** Without a `VOYAGE_API_KEY` and an embedding backfill, semantic search is off and recommendations return `cold_start`. Backfill with `api/backfill_embeddings.py` before a demo.
 
 ```bash
 uv run pytest
@@ -192,7 +184,7 @@ Homogenisation across the field and an echo chamber inside one lab are both fail
 
 ## Privacy & third-party data
 
-Paper **metadata and abstracts** are sent to third parties for processing: **Voyage AI** (embeddings) and **Anthropic / Claude** (summaries, tags, cluster names, topic digests), plus public metadata APIs (arXiv, Crossref, PubMed, Europe PMC) when resolving a paper. Mood-board images are stored in Supabase Storage and are **not** sent to third parties except when *you* ask Claude to look at one (`get_figure_image`).
+Paper **metadata and abstracts** are sent to third parties for processing: **Voyage AI** (embeddings) and **Anthropic / Claude** (summaries and tags), plus public metadata APIs (arXiv, Crossref, PubMed, Europe PMC) when resolving a paper. Mood-board images are stored in Supabase Storage and are **not** sent to third parties except when *you* ask Claude to look at one (`get_figure_image`).
 
 Don't paste confidential or unpublished text you don't want leaving your infrastructure. User identities and email addresses are **not** sent to these services.
 

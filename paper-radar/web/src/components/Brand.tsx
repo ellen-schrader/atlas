@@ -1,7 +1,7 @@
 /**
  * The Atlas mark: a field of points inside a map hull. It reads as a cluster of
- * papers and as a cluster of cells at once — which is the product — and it's what
- * the app literally draws on the Overview. Replaces the stock lucide compass.
+ * papers and as a cluster of cells at once, which is the product. Replaces the
+ * stock lucide compass.
  */
 export function AtlasMark({ size = 20, className }: { size?: number; className?: string }) {
   return (

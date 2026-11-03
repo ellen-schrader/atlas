@@ -1,8 +1,4 @@
-"""The paper tools: search, read and (``post_paper``) share papers in your lab.
-
-Deliberately imports nothing from the mood board, so the hosted server — which serves
-only these — never pulls in Pillow or matplotlib.
-"""
+"""The paper tools: search, read and (``post_paper``) share papers in your lab."""
 
 from __future__ import annotations
 

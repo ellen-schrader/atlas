@@ -1,8 +1,8 @@
 """The hosted Atlas MCP server: the Claude connector, over Streamable HTTP + OAuth.
 
 Served by the API process for one host (``mcp_public_url``, e.g.
-https://mcp.labatlas.app), so it costs nothing extra to run. Read-only paper tools,
-no mood board (docs/CLAUDE_CONNECTOR_PLAN.md); the saved searches tools
+https://mcp.labatlas.app), so it costs nothing extra to run. Read-only paper tools
+(docs/CLAUDE_CONNECTOR_PLAN.md); the saved searches tools
 (atlas_mcp/searches.py); and, for people with them switched on, the clinical
 trials tools (atlas_mcp/trials.py). Some of the last two write.
 

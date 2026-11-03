@@ -249,103 +249,6 @@ def test_post_paper_degrades_when_elicit_unsupported(monkeypatch):
     assert n == 1
 
 
-# --- mood-board style extraction (the black-and-white fix) ------------------
-
-
-def _chroma(hexv: str) -> int:
-    r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)
-    return max(r, g, b) - min(r, g, b)
-
-
-def _scientific_figure(colors):
-    """A plot-like PNG: white bg, black axes, gray gridlines, hairline colour lines."""
-    pytest.importorskip("PIL")
-    import io
-
-    from PIL import Image, ImageDraw
-
-    im = Image.new("RGB", (320, 220), (255, 255, 255))
-    d = ImageDraw.Draw(im)
-    d.rectangle([20, 10, 300, 200], outline=(15, 15, 15), width=2)  # black axes
-    for gy in range(40, 200, 28):
-        d.line([20, gy, 300, gy], fill=(221, 221, 221))  # gray gridlines
-    for k, c in enumerate(colors):
-        d.line([20, 180 - k * 20, 300, 40 - k * 20], fill=c, width=1)  # HAIRLINE data lines
-    buf = io.BytesIO()
-    im.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def test_palette_recovers_data_colours_not_background():
-    from atlas_mcp import moodboard
-
-    png = _scientific_figure([(31, 119, 180), (214, 39, 40), (44, 160, 44)])  # blue/red/green
-    pal = moodboard.palette(png, n=6)
-    assert pal, "should recover the data-series colours, not white/gray"
-    assert all(_chroma(h) > 40 for h in pal), f"every colour should be chromatic, got {pal}"
-    assert len(pal) >= 2  # found multiple distinct hues
-
-
-def test_palette_empty_for_monochrome_figure():
-    from atlas_mcp import moodboard
-
-    bw = _scientific_figure([(0, 0, 0), (30, 30, 30)])  # only black/gray "data"
-    assert moodboard.palette(bw) == []  # nothing chromatic → empty, not gray
-
-
-def test_mplstyle_falls_back_and_ships_thin_lines():
-    from atlas_mcp import moodboard
-
-    s = moodboard.mplstyle([], "Lab X")  # monochrome mood board → default cycle
-    assert "lines.linewidth" in s and "axes.linewidth" in s  # scientific line defaults
-    cycle = s.split("prop_cycle")[1].lower()
-    assert "ffffff" not in cycle  # never an all-white cycle
-    assert "4477aa" in cycle  # the CVD-safe fallback palette
-
-
-# --- colourblind-safety check ----------------------------------------------
-
-
-def test_normalize_hexes_parses_and_dedupes():
-    from atlas_mcp import moodboard
-
-    assert moodboard.normalize_hexes("#4477AA, EE6677 228833") == [
-        "#4477aa",
-        "#ee6677",
-        "#228833",
-    ]
-    assert moodboard.normalize_hexes(["#4477AA", "#4477aa", "nothex"]) == ["#4477aa"]
-    assert moodboard.normalize_hexes("") == []
-
-
-def test_cvd_report_flags_red_green_confusion():
-    from atlas_mcp import moodboard
-
-    # matplotlib's default red/green — the textbook deuteranopia collision (a
-    # protanope separates them by lightness, so we assert on the deutan case).
-    report = moodboard.cvd_report(["#d62728", "#2ca02c"])
-    assert not report["deuteranopia"]["safe"]
-    # the collision is reported as the actual pair
-    a, b, de = report["deuteranopia"]["pairs"][0]
-    assert {a, b} == {"#d62728", "#2ca02c"}
-
-
-def test_cvd_report_passes_paul_tol_bright():
-    from atlas_mcp import moodboard
-
-    report = moodboard.cvd_report(moodboard.SAFE_CYCLE)
-    assert all(res["safe"] for res in report.values()), report
-
-
-def test_cvd_simulation_leaves_gray_unchanged():
-    from atlas_mcp import moodboard
-
-    # A neutral gray carries no chromatic signal to lose, so simulation is ~identity.
-    for kind in ("deuteranopia", "protanopia", "tritanopia"):
-        r, g, b = moodboard._simulate_cvd((128, 128, 128), kind)
-        assert abs(r - 128) <= 3 and abs(g - 128) <= 3 and abs(b - 128) <= 3
-
-
 # --- vectors -----------------------------------------------------------------
 
 
@@ -621,15 +524,10 @@ def test_results_are_data_only(monkeypatch):
 
 def test_paper_tools_carry_the_link_note_in_their_descriptions():
     pytest.importorskip("mcp")
-    from atlas_mcp import figures, papers, tools
+    from atlas_mcp import papers, tools
 
     linking = [t for t in papers.READ_TOOLS if t.__name__ != "list_labs"]
-    linking += [
-        papers.post_paper,
-        figures.list_moodboard,
-        figures.get_figure_image,
-        figures.add_plot_to_moodboard,
-    ]
+    linking += [papers.post_paper]
     for t in linking:
         doc = " ".join((t.__doc__ or "").split())
         assert tools.LINK_NOTE in doc, t.__name__

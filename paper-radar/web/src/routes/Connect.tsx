@@ -314,13 +314,6 @@ const CAPABILITIES: {
       { ask: "Add this arXiv paper and tag Maya to read it", write: true, local: true },
     ],
   },
-  {
-    group: "Plot in your lab’s style",
-    items: [
-      { ask: "Give me a matplotlib style that matches our lab’s figures", local: true },
-      { ask: "Is this figure’s colour palette safe for colourblind readers?", local: true },
-    ],
-  },
 ];
 
 function Capabilities() {

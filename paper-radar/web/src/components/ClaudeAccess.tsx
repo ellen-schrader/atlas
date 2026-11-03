@@ -109,10 +109,6 @@ export function ClaudeScope({ teamName }: { teamName: string }) {
         Check whether an idea is new to the lab, and draft a cited related-work section from its
         papers
       </Line>
-      <Line kind="allow">
-        Read the figure gallery, match your lab’s plotting style, and check colours for colourblind
-        readers. <em>Local setup only.</em>
-      </Line>
       <Line kind="write">
         <strong className="font-semibold text-fg">Add a paper</strong> to {teamName}, optionally
         tagging a teammate. This <strong className="font-semibold text-fg">writes to the shared

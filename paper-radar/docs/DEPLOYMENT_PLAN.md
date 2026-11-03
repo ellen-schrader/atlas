@@ -24,8 +24,8 @@ wire the three tiers together with env vars. No data migration is needed.
 - **API → Fly.io** (or Railway/Render). A container host, per MIGRATION_PLAN
   §12. The API is light — it never touches sentence-transformers/torch,
   faiss, or numba (embeddings are Voyage API calls; the heavy deps are legacy
-  Streamlit-era code, and the map layout is numba-free sklearn t-SNE) — so a
-  small instance (512 MB–1 GB) should do.
+  Streamlit-era code; the t-SNE map was retired in Nov 2026) — so a small
+  instance (512 MB) does.
 - **DB stays on Supabase** as-is.
 
 ## Phases

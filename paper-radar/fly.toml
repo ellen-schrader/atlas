@@ -38,7 +38,10 @@ primary_region = "lhr"
     method = "GET"
     path = "/health"
 
+# 512 MB since topic maps were retired (Nov 2026): the in-process t-SNE + KMeans
+# (scikit-learn/scipy) were the only heavy work. The API idles at ~100 MB RSS with
+# one uvicorn worker. If it ever OOMs, go back to "1gb" before anything else.
 [[vm]]
-  memory = "1gb"
+  memory = "512mb"
   cpu_kind = "shared"
   cpus = 1

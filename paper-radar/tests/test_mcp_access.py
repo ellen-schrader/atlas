@@ -23,7 +23,6 @@ def test_error_returns_are_not_counted_as_success():
     alone would record a refused call as a success."""
     assert tools._succeeded("**A paper**\nsome authors") is True
     assert tools._succeeded("Error: Claude access is off for TME Lab.") is False
-    assert tools._succeeded(["image", "parts"]) is True  # get_figure_image returns a list
 
 
 def test_audited_logs_the_resolved_lab(monkeypatch):
