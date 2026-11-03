@@ -1065,6 +1065,8 @@ WEB = _jwt({"sub": "user-1", "role": "authenticated"})
         ("post", "/posts", {"url": "https://arxiv.org/abs/2401.01234", "team_id": "x"}),
         ("get", "/recommendations?team_id=x", None),
         ("post", "/search/semantic", {"team_id": "x", "q": "tumour"}),
+        ("post", "/projects", {"team_id": "x", "name": "TLS"}),
+        ("patch", "/projects/x", {"name": "TLS"}),
     ],
 )
 def test_connector_tokens_are_refused_even_when_valid(signed_in, method, path, body):
