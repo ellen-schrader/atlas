@@ -59,18 +59,23 @@ export const NAV_GROUPS: NavGroup[] = [
         description: () => "Papers you have saved to read",
       },
       {
-        to: "/projects",
-        label: "Projects",
-        icon: FolderLock,
-        soon: true,
-        description: () => "Coming soon: the papers for one piece of work, together",
-      },
-      {
         to: "/suggestions",
         label: "Suggested papers",
         icon: ScanSearch,
         beta: true,
         description: () => "New papers from your saved searches, every week",
+      },
+    ],
+  },
+  {
+    label: "Projects",
+    items: [
+      {
+        to: "/projects",
+        label: "All projects",
+        icon: FolderLock,
+        soon: true,
+        description: () => "Coming soon: the papers for one piece of work, together",
       },
     ],
   },
