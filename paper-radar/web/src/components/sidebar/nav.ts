@@ -72,7 +72,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       {
         to: "/projects",
-        label: "All projects",
+        label: "My projects",
         icon: FolderLock,
         soon: true,
         description: () => "Coming soon: the papers for one piece of work, together",
