@@ -3,13 +3,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BookMarked, Check, CheckSquare, Loader2, Search, X } from "lucide-react";
 
 import { ExportBar, SelectCheckbox } from "@/components/ExportBar";
+import { AddToProject } from "@/components/projects/AddToProject";
 import { usePaperModal } from "@/components/PaperModal";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useProjectList, useProjectsByPaper } from "@/hooks/useProjects";
 import { useReadingList, useReadThisWeek } from "@/hooks/useReadingList";
 import { isWakingRecommendations, useRecommendations } from "@/hooks/useRecommendations";
 import { type Selection, useSelection } from "@/hooks/useSelection";
 import type { ExportPaper } from "@/lib/paperExport";
 import type { Progress } from "@/lib/paperStatus";
+import { PROJECTS_FEATURE } from "@/lib/projects";
 import { supabase } from "@/lib/supabase";
 import { cn, formatAuthors, formatRelative } from "@/lib/utils";
 import { useAppContext } from "@/routes/Layout";
@@ -82,8 +85,13 @@ const BANDS: { key: "today" | "week" | "earlier"; label: string }[] = [
  *  the list grows. "Date added" is a pure Supabase read (works offline);
  *  "Recommended" ranks the same papers via the API. */
 export default function ReadingList() {
-  const { team, userId } = useAppContext();
+  const { team, userId, features } = useAppContext();
   useDocumentTitle("Reading list");
+  const projectsOn = features.includes(PROJECTS_FEATURE);
+  const { data: projects } = useProjectList(team.id, projectsOn);
+  const { data: byPaper } = useProjectsByPaper(team.id, projectsOn);
+  /** A project chip: only its papers. Empty = every saved paper. */
+  const [project, setProject] = useState("");
   const { openPaper } = usePaperModal();
   const qc = useQueryClient();
   const [view, setView] = useState<View>("queue");
@@ -139,7 +147,16 @@ export default function ReadingList() {
   ).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
   const q = query.trim().toLowerCase();
-  const filtering = Boolean(q || venue);
+  const filtering = Boolean(q || venue || project);
+  const inProject = (it: Item) => !project || (byPaper?.get(it.paperId) ?? []).includes(project);
+  // Chips for the projects holding at least one saved paper, with how many.
+  const chips = (projects ?? [])
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      n: (byDate.data ?? []).filter((r) => (byPaper?.get(r.paper_id) ?? []).includes(p.id)).length,
+    }))
+    .filter((c) => c.n > 0);
   // "Recommended" ranks the whole saved set through the API and carries no
   // progress, so the view split only applies to the date-ordered read.
   const inView = (it: Item) =>
@@ -151,6 +168,7 @@ export default function ReadingList() {
   const shown = items.filter(
     (it) =>
       inView(it) &&
+      inProject(it) &&
       (!venue || it.venue === venue) &&
       (!q ||
         (it.title ?? "").toLowerCase().includes(q) ||
@@ -192,6 +210,7 @@ export default function ReadingList() {
   function clearFilters() {
     setQuery("");
     setVenue("");
+    setProject("");
   }
 
   // Progress only. The paper stays saved, so it moves from "To read" into
@@ -329,6 +348,30 @@ export default function ReadingList() {
             ))}
           </div>
           <p className="text-xs text-faint">{VIEWS.find((v) => v.key === view)?.blurb}</p>
+        </div>
+      )}
+
+      {chips.length > 0 && (
+        <div role="group" aria-label="Show papers from a project" className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-muted">Projects</span>
+          {[{ id: "", name: "All", n: total }, ...chips].map((c) => (
+            <button
+              key={c.id || "all"}
+              type="button"
+              aria-pressed={project === c.id}
+              onClick={() => setProject(c.id)}
+              className={cn(
+                "inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                project === c.id
+                  ? "border-accent bg-accent-weak text-accent"
+                  : "border-border text-muted hover:border-border-strong hover:text-fg",
+              )}
+            >
+              <span className="max-w-[14rem] truncate">{c.name}</span>
+              <span className="tabular-nums text-faint">{c.n}</span>
+            </button>
+          ))}
         </div>
       )}
 
@@ -516,7 +559,9 @@ function ListCard({
   selection: Selection;
 }) {
   return (
-    <ul className="divide-y divide-border overflow-hidden rounded-card border border-border shadow-sm">
+    // Not overflow-hidden: a row's project menu opens past the card's edge. The
+    // end rows round their own corners instead.
+    <ul className="divide-y divide-border rounded-card border border-border shadow-sm [&>li:first-child]:rounded-t-card [&>li:last-child]:rounded-b-card">
       {items.map((it) => (
         <Row
           key={it.paperId}
@@ -553,6 +598,7 @@ function Row({
     .filter(Boolean)
     .join(" · ");
 
+  const { team, userId } = useAppContext();
   const { selecting } = selection;
   const checked = selection.isSelected(item.paperId);
 
@@ -589,6 +635,12 @@ function Row({
           actions so a tap can't accidentally mark-read or remove. */}
       {!selecting && (
         <div className="flex shrink-0 items-center gap-0.5 pt-0.5">
+          <AddToProject
+            paperId={item.paperId}
+            teamId={team.id}
+            userId={userId}
+            className="grid h-7 w-7 place-items-center rounded-md hover:bg-surface-3"
+          />
           <button
             onClick={() => onMarkRead(item.paperId, item.status !== "read")}
             title={item.status === "read" ? "Move back to “to read”" : "Mark as read"}

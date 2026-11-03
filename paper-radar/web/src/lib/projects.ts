@@ -119,6 +119,21 @@ export async function getProject(id: string): Promise<Project | null> {
   return ((data ?? [])[0] as unknown as Project) ?? null;
 }
 
+/** Which of the lab's projects (that the user can see) each paper is in. */
+export async function projectsByPaper(teamId: string): Promise<Map<string, string[]>> {
+  const { data, error } = await supabase
+    .from("project_papers")
+    .select("project_id, paper_id, projects!inner(team_id)")
+    .eq("state", "in")
+    .eq("projects.team_id", teamId);
+  if (error) throw error;
+  const out = new Map<string, string[]>();
+  for (const r of (data ?? []) as { project_id: string; paper_id: string }[]) {
+    out.set(r.paper_id, [...(out.get(r.paper_id) ?? []), r.project_id]);
+  }
+  return out;
+}
+
 /** How many papers are in each of these projects, in one request. */
 export async function projectPaperCounts(ids: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>(ids.map((id) => [id, 0]));

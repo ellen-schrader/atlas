@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { FolderOpen, Lock, Plus, Radar, Search, Users, X } from "lucide-react";
 
@@ -92,7 +92,9 @@ function ProjectsIndex() {
   const { data: members } = useMembers(team.id);
   const [scope, setScope] = useState<Scope>("all");
   const [q, setQ] = useState("");
-  const [creating, setCreating] = useState(false);
+  // "New project…" from a paper's project menu lands here with ?new=1.
+  const [params, setParams] = useSearchParams();
+  const [creating, setCreating] = useState(params.get("new") === "1");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const list = projects ?? [];
@@ -359,7 +361,10 @@ function ProjectsIndex() {
 
       <ProjectDialog
         open={creating}
-        onClose={() => setCreating(false)}
+        onClose={() => {
+          setCreating(false);
+          if (params.has("new")) setParams({}, { replace: true });
+        }}
         teamId={team.id}
         onSaved={(p) => {
           void refresh(p.id, team.id);
