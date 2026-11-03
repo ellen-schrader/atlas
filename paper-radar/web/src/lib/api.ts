@@ -7,6 +7,7 @@ import type {
   SourceResult,
   Suggestion,
 } from "@/lib/savedSearches";
+import type { Project, SuggestLevel, Visibility } from "@/lib/projects";
 import type { Recommendation, SemanticHit } from "@/lib/types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -609,4 +610,35 @@ export async function decideSuggestions(
     }
   }
   return { count, failed: false };
+}
+
+// --- Projects (docs/PROJECTS_PLAN.md) -------------------------------------------
+// Only create and edit go through the API, which embeds the description; the
+// rest is Supabase under RLS (lib/projects.ts).
+
+export type ProjectRow = Omit<Project, "project_people">;
+
+export async function createProject(
+  teamId: string,
+  fields: { name: string; description: string; visibility: Visibility },
+): Promise<ProjectRow> {
+  return authedRequest("/projects", {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, ...fields }),
+  });
+}
+
+export async function updateProject(
+  id: string,
+  fields: Partial<{
+    name: string;
+    description: string;
+    visibility: Visibility;
+    suggest_level: SuggestLevel;
+  }>,
+): Promise<ProjectRow> {
+  return authedRequest(`/projects/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
 }

@@ -1,5 +1,6 @@
 import {
   Bookmark,
+  FolderOpen,
   Layers,
   FlaskConical,
   FolderLock,
@@ -9,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { PROJECTS_FEATURE } from "@/lib/projects";
 import { TRIALS_FEATURE } from "@/lib/trials";
 
 export interface NavItem {
@@ -22,6 +24,9 @@ export interface NavItem {
   beta?: boolean;
   /** Shows a Soon pill: the page is a placeholder for something being built. */
   soon?: boolean;
+  /** The feature that turns a Soon placeholder into the real page: with it on,
+   *  the item shows `live` instead (no pill, its own icon and hover text). */
+  live?: { feature: string; icon: LucideIcon; description: (labName: string) => string };
   /** Only shown when this feature is on for the user in the lab
    *  (public.my_features). Dark features stay out of the nav entirely. */
   feature?: string;
@@ -76,6 +81,11 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: FolderLock,
         soon: true,
         description: () => "Coming soon: the papers for one piece of work, together",
+        live: {
+          feature: PROJECTS_FEATURE,
+          icon: FolderOpen,
+          description: () => "The papers for each piece of work, and what’s close to them",
+        },
       },
     ],
   },
@@ -103,9 +113,16 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-/** The items of `items` the user has the features for. */
+/** The items of `items` the user has the features for, placeholders swapped
+ *  for the real page where its feature is on. */
 export function visible(items: NavItem[], features: readonly string[]): NavItem[] {
-  return items.filter((item) => !item.feature || features.includes(item.feature));
+  return items
+    .filter((item) => !item.feature || features.includes(item.feature))
+    .map((item) =>
+      item.live && features.includes(item.live.feature)
+        ? { ...item, soon: false, icon: item.live.icon, description: item.live.description }
+        : item,
+    );
 }
 
 /** The pill beside an item, if any. */
