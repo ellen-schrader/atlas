@@ -104,6 +104,8 @@ as $$
               or (pj.visibility = 'people' and exists (
                      select 1 from public.project_people pe
                      where pe.project_id = pj.id and pe.user_id = auth.uid()))
+              -- An ownerless project, to the lab's owners (as projects_select).
+              or (pj.owner_id is null and public.is_team_owner(pj.team_id))
           )
     );
 $$;
@@ -276,6 +278,33 @@ select public.close_to_connectors('public.project_papers');
 select public.close_to_connectors('public.project_views');
 select public.close_to_connectors('public.project_follows');
 
+-- === "updated" =============================================================
+
+-- A project changes when its papers or follows do, not only its settings: the
+-- header's "Updated …" and the index's order follow this. SECURITY DEFINER,
+-- because whoever adds a paper may not own the project.
+create function public.touch_project()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    update public.projects set updated_at = now()
+     where id = coalesce(new.project_id, old.project_id);
+    return null;
+end;
+$$;
+
+revoke execute on function public.touch_project() from public, anon, authenticated;
+
+create trigger project_papers_touch
+    after insert or update or delete on public.project_papers
+    for each row execute function public.touch_project();
+create trigger project_follows_touch
+    after insert or delete on public.project_follows
+    for each row execute function public.touch_project();
+
 -- === someone leaves the lab ==================================================
 
 -- Leaving a lab (or Atlas: deleting an account removes its memberships) takes
@@ -377,6 +406,8 @@ $$;
 --   suggested   'close' above the line; 'tag' or 'lab' for a related paper
 --               from a tag or lab the project follows (`via` names it); null
 --               for papers in the project or dismissed from it.
+--   tags, lab   the lab's tags for the paper (else its own) and its last author
+--               who is a person: what "Around this project" and follows count.
 --   cutoff      the line. With three or more papers it is a percentile of the
 --               project's own similarities (Fewer: the median, Balanced: the
 --               25th, More: the 10th), so it adapts to how tight the project
@@ -404,7 +435,9 @@ returns table(
     related    boolean,
     suggested  text,
     via        text,
-    cutoff     real
+    cutoff     real,
+    tags       jsonb,
+    lab        text
 )
 language sql
 stable
@@ -499,7 +532,9 @@ as $$
                when r.state is not null or r.similarity is null or r.similarity >= c.cutoff then null
                when r.rank <= 120 then coalesce(ft.value, fl.value)
            end as via,
-           c.cutoff
+           c.cutoff,
+           r.tags,
+           r.lab
     from ranked r
     cross join cut c
     left join lateral (
@@ -513,30 +548,6 @@ as $$
         limit 1
     ) fl on true
     order by r.similarity desc nulls last, r.paper_id;
-$$;
-
--- One row per project the caller can see in a lab, for the projects index:
--- how many papers are in it (all of them, embedded or not), how many are
--- suggested, and how many of those the lab posted since the caller last opened
--- it (all of them, if never). It runs project_closeness once per project: fine
--- for a lab's handful of projects; cache the counts if that ever grows.
-create function public.project_summaries(p_team uuid)
-returns table(project_id uuid, n_in int, n_suggested int, n_new int)
-language sql
-stable
-set search_path = public, extensions
-as $$
-    select pj.id,
-           (select count(*) from public.project_papers pp
-             where pp.project_id = pj.id and pp.state = 'in')::int,
-           count(c.suggested)::int,
-           count(c.suggested) filter (
-               where c.posted_at > coalesce(v.last_viewed_at, '-infinity'))::int
-    from public.projects pj
-    left join public.project_views v on v.project_id = pj.id and v.user_id = auth.uid()
-    left join lateral public.project_closeness(pj.id) c on true
-    where pj.team_id = p_team
-    group by pj.id, v.last_viewed_at;
 $$;
 
 -- The caller has opened project `p` now: what the index's "N new" counts from.
@@ -553,10 +564,8 @@ $$;
 
 revoke execute on function public.project_closeness(uuid) from public, anon;
 revoke execute on function public.mark_project_viewed(uuid) from public, anon;
-revoke execute on function public.project_summaries(uuid) from public, anon;
 grant execute on function public.last_person_author(jsonb) to authenticated, service_role;
 grant execute on function public.project_closeness(uuid) to authenticated, service_role;
-grant execute on function public.project_summaries(uuid) to authenticated, service_role;
 grant execute on function public.mark_project_viewed(uuid) to authenticated;
 
 -- === maps become projects ===================================================
@@ -586,6 +595,11 @@ cross join lateral jsonb_array_elements_text(
 ) x(pid)
 join public.papers p on p.id::text = x.pid
 on conflict do nothing;  -- pinned and excluded both: pinned wins
+
+-- Adding the papers touched each project; keep the map's own date.
+update public.projects pj set updated_at = m.updated_at
+from public.maps m
+where m.id = pj.id;
 
 -- === papers merged ==========================================================
 
