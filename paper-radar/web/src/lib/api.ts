@@ -542,8 +542,9 @@ export async function updateSearch(
   });
 }
 
-/** Run the search now rather than with the daily job; it runs in the background. */
-export async function runSearch(teamId: string, id: string): Promise<SavedSearch> {
+/** Run the search now rather than with the daily job; it runs in the background
+ *  and shows as done when its last run, error or failure count changes. */
+export async function runSearch(teamId: string, id: string): Promise<void> {
   return authedRequest(`/saved-searches/${encodeURIComponent(id)}/run`, {
     method: "POST",
     body: JSON.stringify({ team_id: teamId }),

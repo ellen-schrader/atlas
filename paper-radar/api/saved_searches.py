@@ -928,6 +928,7 @@ class SavedSearch(BaseModel):
     active: bool
     last_run_at: str | None
     last_error: str | None
+    failed_runs: int = 0
     pending: int = 0
 
 
@@ -1010,7 +1011,12 @@ def run_now(search: dict) -> None:
     would). Never raises."""
     svc = service_client()
     try:
-        since, _ = window(search.get("last_run_at"), date.today())
+        # The shared week-long copy unless this run reaches further back: the
+        # feed cache holds one window, and previews use the week.
+        since = min(
+            window(search.get("last_run_at"), date.today())[0],
+            window(None, date.today())[0],
+        )
         new, error = run_saved_search(svc, search, date.today(), rxiv_feed(svc, since))
         log.info(
             "saved search %s: %d new suggestions; errors: %s", search["id"], new, error or "none"
@@ -1092,34 +1098,25 @@ def update_search(
     return _search_out(row)
 
 
-@router.post("/{search_id}/run", response_model=SavedSearch)
+@router.post("/{search_id}/run", status_code=202)
 def run_search(
     search_id: UUID,
     req: TeamIn,
     background: BackgroundTasks,
     token: str = Depends(require_token),
-) -> SavedSearch:
-    """Run the caller's search now rather than on the daily job. Its last run
-    and error are cleared while it runs (the page waits for them to come back);
-    it still searches from that last run, so nothing is fetched twice."""
+) -> None:
+    """Run the caller's search now rather than with the daily job, in the
+    background and exactly as that job would: from its last run, counting a
+    failure towards its retries. Nothing changes until it has run, so the page
+    waits for last_run_at, last_error or failed_runs to change."""
     team = str(req.team_id)
     user_id = require_member(token, team)
-    svc = service_client()
-    current = _own_search(svc, str(search_id), user_id, team)
+    current = _own_search(service_client(), str(search_id), user_id, team)
     if not current["active"]:
         raise HTTPException(status_code=409, detail="Resume the search to run it.")
     with _as_http():
         run_limiter.check(user_id)
-    row = (
-        svc.table("saved_searches")
-        .update({"last_run_at": None, "last_error": None, "failed_runs": 0})
-        .eq("id", str(search_id))
-        .eq("user_id", user_id)
-        .execute()
-        .data[0]
-    )
-    background.add_task(run_now, {**row, "last_run_at": current["last_run_at"]})
-    return _search_out(row)
+    background.add_task(run_now, current)
 
 
 @router.get("/ideas", response_model=list[SearchIdea])
