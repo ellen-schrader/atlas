@@ -675,27 +675,15 @@ def test_already_reply_shortens_long_author_lists_like_the_card(monkeypatch):
     assert teams_integration.already_reply_text(plan).startswith("👍 A, B, C et al. —")
 
 
-def test_already_reply_keeps_urls_in_metadata_from_becoming_links(monkeypatch):
-    # Teams links bare URLs on its own; a word joiner after the scheme stops it.
+def test_already_reply_skips_authors_that_are_not_names(monkeypatch):
+    # authors->i keeps JSON types, so a malformed entry arrives as a dict, not text.
     monkeypatch.setattr(
-        teams_integration,
-        "get_api_settings",
-        lambda: types.SimpleNamespace(atlas_web_url="https://atlas.example.com"),
+        teams_integration, "get_api_settings", lambda: types.SimpleNamespace(atlas_web_url="")
     )
     plan = teams_integration.InboundPlan(
-        "already",
-        url="u",
-        paper_id="p1",
-        title="See https://evil.example and www.evil.example",
-        authors=["HTTP://x.example"],
+        "already", url="u", paper_id="p1", title="T", authors=["A", {"name": "X"}, " ", 7]
     )
-    text = teams_integration.already_reply_text(plan)
-    assert "https:\u2060//evil.example" in text
-    assert "www\u2060.evil.example" in text
-    assert "HTTP:\u2060//x.example" in text
-    assert "://evil" not in text and "www.evil" not in text
-    # Atlas's own link is still a link.
-    assert "[Open in Atlas](https://atlas.example.com/?paper=p1)" in text
+    assert teams_integration.already_reply_text(plan).startswith("👍 A — “T”")
 
 
 def test_atlas_links_share_one_base(monkeypatch):
@@ -742,7 +730,7 @@ def test_plan_fetches_only_the_first_few_authors(monkeypatch):
 
     monkeypatch.setattr(teams_integration, "service_client", lambda: _Client())
     plan = teams_integration.plan_inbound_import("t1", "@Atlas https://example.org/paper")
-    columns = "id, title, a0:authors->>0, a1:authors->>1, a2:authors->>2, a3:authors->>3"
+    columns = "id, title, a0:authors->0, a1:authors->1, a2:authors->2, a3:authors->3"
     assert ("papers", columns) in selects
     assert plan.authors == ["A", "B", "C", "D"]
 

@@ -21,6 +21,7 @@ Usage (from paper-radar/, with api/.env configured):
 from __future__ import annotations
 
 import argparse
+import logging
 import time
 from collections import Counter
 from urllib.parse import urlsplit
@@ -65,6 +66,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--limit", type=int, help="stop after this many rows")
     parser.add_argument("--delay", type=float, default=0.5, help="seconds between retries")
     args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     svc = service_client()
     rows = fetch_open(svc, args.reason)

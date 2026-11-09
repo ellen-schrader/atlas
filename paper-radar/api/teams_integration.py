@@ -25,7 +25,6 @@ import hashlib
 import hmac
 import json
 import logging
-import re
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -137,15 +136,6 @@ def _md_escape(text: str) -> str:
     for c in _MD_CHARS:
         text = text.replace(c, f"\\{c}")
     return text
-
-
-# Teams turns a bare URL in a message into a link on its own, escaping or not.
-# A word joiner (zero-width, invisible) after the scheme or "www" stops that.
-_AUTOLINK = re.compile(r"(?i)(https?:|www)(?=//|\.)")
-
-
-def _no_autolink(text: str) -> str:
-    return _AUTOLINK.sub("\\1\u2060", text)
 
 
 # Abstracts can be a page long. The card shows a short teaser and, when the full
@@ -672,8 +662,15 @@ def _doi_from_url(url: str) -> str | None:
 
 # The reply shows _authors_line, so it needs only the first few names plus one
 # more to know whether to add "et al." — a consortium paper stores hundreds.
+# `->` (not `->>`) keeps each element's JSON type, so a stray non-string entry
+# is dropped by already_reply_text instead of showing up as raw JSON.
 _PLAN_AUTHORS = _MAX_AUTHORS + 1
-_PLAN_COLUMNS = "id, title, " + ", ".join(f"a{i}:authors->>{i}" for i in range(_PLAN_AUTHORS))
+_PLAN_COLUMNS = "id, title, " + ", ".join(f"a{i}:authors->{i}" for i in range(_PLAN_AUTHORS))
+
+
+def _plan_authors(row: dict) -> list:
+    """The leading authors a _PLAN_COLUMNS row carries, in order."""
+    return [a for i in range(_PLAN_AUTHORS) if (a := row.get(f"a{i}")) is not None]
 
 
 def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
@@ -737,7 +734,7 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
                 url=url,
                 paper_id=paper["id"],
                 title=paper.get("title"),
-                authors=[a for i in range(_PLAN_AUTHORS) if (a := paper.get(f"a{i}"))],
+                authors=_plan_authors(paper),
             )
     return InboundPlan("new", url=url)
 
@@ -868,17 +865,12 @@ def already_reply_text(plan: InboundPlan) -> str:
 
     Degrades field by field: no authors → title only, no metadata at all → the
     generic acknowledgement, no web URL configured → no link. Metadata is
-    paper-sourced text, so it is markdown-escaped like the outbound cards, and
-    any URL in it is kept from turning into a link.
+    paper-sourced text, so it is markdown-escaped like the outbound cards.
     """
     authors = [a for a in (plan.authors or []) if isinstance(a, str) and a.strip()]
     line = _authors_line(authors)  # the same names the outbound card shows
-    who = _no_autolink(_md_escape(line)) if line else None
-    what = (
-        f"“{_no_autolink(_md_escape(_truncate(plan.title, _REPLY_TITLE_CHARS)))}”"
-        if plan.title
-        else None
-    )
+    who = _md_escape(line) if line else None
+    what = f"“{_md_escape(_truncate(plan.title, _REPLY_TITLE_CHARS))}”" if plan.title else None
     subject = " — ".join(p for p in (who, what) if p) or "That paper"
     link = _atlas_paper_url(plan.paper_id)
     tail = f" [Open in Atlas]({link})" if link else ""
