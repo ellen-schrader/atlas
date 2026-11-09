@@ -599,7 +599,7 @@ def test_plan_matches_existing_paper_by_doi(monkeypatch):
     # A doi.org mention of a paper originally added via its publisher URL must
     # be answered "already in the lab", not "adding" (url_norm alone can't see
     # they're the same paper; the DOI can). Casefolded: mention is uppercase.
-    paper = {"id": "p1", "title": "TLS harbour T cells", "authors": ["Jane Smith", "Bob Lee"]}
+    paper = {"id": "p1", "title": "TLS harbour T cells", "a0": "Jane Smith", "a1": "Bob Lee"}
 
     class _Query:
         def __init__(self, table):
@@ -659,9 +659,92 @@ def test_already_reply_names_the_paper_and_links_it(monkeypatch):
         "already", url="u", paper_id="p1", title="A Paper", authors=["Jane Smith", "Bob Lee"]
     )
     text = teams_integration.already_reply_text(plan)
-    assert "Jane Smith et al." in text
+    # The same author line as the outbound card: two authors are both named.
+    assert "Jane Smith, Bob Lee —" in text
     assert "A Paper" in text
     assert "[Open in Atlas](https://atlas.example.com/?paper=p1)" in text
+
+
+def test_already_reply_shortens_long_author_lists_like_the_card(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration, "get_api_settings", lambda: types.SimpleNamespace(atlas_web_url="")
+    )
+    plan = teams_integration.InboundPlan(
+        "already", url="u", paper_id="p1", title="T", authors=["A", "B", "C", "D"]
+    )
+    assert teams_integration.already_reply_text(plan).startswith("👍 A, B, C et al. —")
+
+
+def test_already_reply_keeps_urls_in_metadata_from_becoming_links(monkeypatch):
+    # Teams links bare URLs on its own; a word joiner after the scheme stops it.
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: types.SimpleNamespace(atlas_web_url="https://atlas.example.com"),
+    )
+    plan = teams_integration.InboundPlan(
+        "already",
+        url="u",
+        paper_id="p1",
+        title="See https://evil.example and www.evil.example",
+        authors=["HTTP://x.example"],
+    )
+    text = teams_integration.already_reply_text(plan)
+    assert "https:\u2060//evil.example" in text
+    assert "www\u2060.evil.example" in text
+    assert "HTTP:\u2060//x.example" in text
+    assert "://evil" not in text and "www.evil" not in text
+    # Atlas's own link is still a link.
+    assert "[Open in Atlas](https://atlas.example.com/?paper=p1)" in text
+
+
+def test_atlas_links_share_one_base(monkeypatch):
+    monkeypatch.setattr(
+        teams_integration,
+        "get_api_settings",
+        lambda: types.SimpleNamespace(atlas_web_url="  https://atlas.example.com//  "),
+    )
+    assert teams_integration._atlas_paper_url("p1") == "https://atlas.example.com/?paper=p1"
+    assert teams_integration._atlas_papers_url() == "https://atlas.example.com/papers"
+    monkeypatch.setattr(
+        teams_integration, "get_api_settings", lambda: types.SimpleNamespace(atlas_web_url=" ")
+    )
+    assert teams_integration._atlas_papers_url() is None
+
+
+def test_plan_fetches_only_the_first_few_authors(monkeypatch):
+    # A consortium paper stores hundreds of names; the reply needs four at most.
+    selects = []
+
+    class _Query:
+        def __init__(self, table):
+            self.table = table
+
+        def select(self, columns, *a, **k):
+            selects.append((self.table, columns))
+            return self
+
+        def eq(self, *a):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            if self.table == "papers":
+                row = {"id": "p1", "title": "T", "a0": "A", "a1": "B", "a2": "C", "a3": "D"}
+                return types.SimpleNamespace(data=[row])
+            return types.SimpleNamespace(data=[{"id": "pp1"}])
+
+    class _Client:
+        def table(self, name):
+            return _Query(name)
+
+    monkeypatch.setattr(teams_integration, "service_client", lambda: _Client())
+    plan = teams_integration.plan_inbound_import("t1", "@Atlas https://example.org/paper")
+    columns = "id, title, a0:authors->>0, a1:authors->>1, a2:authors->>2, a3:authors->>3"
+    assert ("papers", columns) in selects
+    assert plan.authors == ["A", "B", "C", "D"]
 
 
 def test_already_reply_degrades_without_metadata_or_web_url(monkeypatch):
