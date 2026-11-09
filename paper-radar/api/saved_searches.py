@@ -914,6 +914,10 @@ class SearchOrder(BaseModel):
     ids: list[UUID] = Field(min_length=1, max_length=MAX_SEARCHES)
 
 
+class TeamIn(BaseModel):
+    team_id: UUID
+
+
 class SavedSearch(BaseModel):
     id: str
     name: str
@@ -924,6 +928,7 @@ class SavedSearch(BaseModel):
     active: bool
     last_run_at: str | None
     last_error: str | None
+    failed_runs: int = 0
     pending: int = 0
 
 
@@ -1001,11 +1006,17 @@ def _own_search(svc, search_id: str, user_id: str, team_id: str) -> dict:
 
 
 def run_now(search: dict) -> None:
-    """Background: a new or changed search runs at once rather than next week.
-    Never raises."""
+    """Background: a new or changed search runs at once rather than next week,
+    and so does one its owner asks to run (from its last run, as the daily job
+    would). Never raises."""
     svc = service_client()
     try:
-        since, _ = window(None, date.today())
+        # The shared week-long copy unless this run reaches further back: the
+        # feed cache holds one window, and previews use the week.
+        since = min(
+            window(search.get("last_run_at"), date.today())[0],
+            window(None, date.today())[0],
+        )
         new, error = run_saved_search(svc, search, date.today(), rxiv_feed(svc, since))
         log.info(
             "saved search %s: %d new suggestions; errors: %s", search["id"], new, error or "none"
@@ -1085,6 +1096,27 @@ def update_search(
     if rerun and row["active"]:
         background.add_task(run_now, row)
     return _search_out(row)
+
+
+@router.post("/{search_id}/run", status_code=202)
+def run_search(
+    search_id: UUID,
+    req: TeamIn,
+    background: BackgroundTasks,
+    token: str = Depends(require_token),
+) -> None:
+    """Run the caller's search now rather than with the daily job, in the
+    background and exactly as that job would: from its last run, counting a
+    failure towards its retries. Nothing changes until it has run, so the page
+    waits for last_run_at, last_error or failed_runs to change."""
+    team = str(req.team_id)
+    user_id = require_member(token, team)
+    current = _own_search(service_client(), str(search_id), user_id, team)
+    if not current["active"]:
+        raise HTTPException(status_code=409, detail="Resume the search to run it.")
+    with _as_http():
+        run_limiter.check(user_id)
+    background.add_task(run_now, current)
 
 
 @router.get("/ideas", response_model=list[SearchIdea])

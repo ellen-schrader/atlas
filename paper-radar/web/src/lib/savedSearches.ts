@@ -35,6 +35,8 @@ export interface SavedSearch {
   active: boolean;
   last_run_at: string | null;
   last_error: string | null;
+  /** Runs in a row that had a problem; 0 after one without. */
+  failed_runs: number;
   /** Suggestions from this search still waiting for an answer. */
   pending: number;
 }

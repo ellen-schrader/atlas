@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   ScanSearch,
   Sparkles,
   Trash2,
@@ -28,6 +29,7 @@ import {
   listSearchIdeas,
   listSearches,
   listSuggestions,
+  runSearch,
   reorderSearches,
   updateSearch,
 } from "@/lib/api";
@@ -78,10 +80,12 @@ export default function Suggestions() {
   const [order, setOrder] = useState<Order>(savedOrder);
   // What a new search starts from (a suggested search), if anything.
   const [initial, setInitial] = useState<Partial<SearchFields>>();
-  // The search running in the background since it was saved, if any.
+  // The search running in the background since it was saved or run, if any;
+  // for a run, how it stood before (it is done when that changes).
   const [watching, setWatching] = useState<{
     id: string;
     until: number;
+    before?: string;
   } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -119,7 +123,11 @@ export default function Suggestions() {
   // Stop polling when the search has run (or failed), or when time is up --
   // a timer, since nothing else re-renders the page when the clock passes it.
   const watched = watching && searches.data?.find((x) => x.id === watching.id);
-  const finished = !!watched && !!(watched.last_run_at || watched.last_error);
+  const finished =
+    !!watched &&
+    (watching.before !== undefined
+      ? runState(watched) !== watching.before
+      : !!(watched.last_run_at || watched.last_error));
   useEffect(() => {
     if (!watching) return;
     if (finished) {
@@ -244,6 +252,19 @@ export default function Suggestions() {
       void qc.invalidateQueries({ queryKey: ["saved-searches", team.id] }),
     onError: () =>
       toast({ message: "Couldn’t change that search. Try again." }),
+  });
+  const runNow = useMutation({
+    mutationFn: (x: SavedSearch) => runSearch(team.id, x.id),
+    onSuccess: (_, x) =>
+      setWatching({
+        id: x.id,
+        until: Date.now() + FIRST_RUN_MS,
+        before: runState(x),
+      }),
+    onError: (e) =>
+      toast({
+        message: e instanceof Error ? e.message : "Couldn’t run that search. Try again.",
+      }),
   });
   const reorder = useMutation({
     mutationFn: (ids: string[]) => reorderSearches(team.id, ids),
@@ -407,6 +428,11 @@ export default function Suggestions() {
                 onUp={i > 0 ? () => move(i, -1) : undefined}
                 onDown={i < list.length - 1 ? () => move(i, 1) : undefined}
                 onEdit={() => setEditing(s)}
+                onRun={
+                  s.active && !watching && !runNow.isPending
+                    ? () => runNow.mutate(s)
+                    : undefined
+                }
                 onToggle={() => setActive.mutate(s)}
                 onDelete={() => void askDelete(s)}
               />
@@ -733,6 +759,12 @@ function arxivLabel(codes: string[]): string {
   return codes.join(", ");
 }
 
+/** What a run always changes: a new last_run_at when it went well, one more
+ *  failed run when it did not. */
+function runState(s: SavedSearch): string {
+  return JSON.stringify([s.last_run_at, s.last_error, s.failed_runs]);
+}
+
 function searchStatus(s: SavedSearch): { text: string; warn: boolean } {
   if (!s.active) return { text: "Paused", warn: false };
   if (s.last_error)
@@ -746,6 +778,7 @@ function SearchRow({
   onUp,
   onDown,
   onEdit,
+  onRun,
   onToggle,
   onDelete,
 }: {
@@ -754,6 +787,8 @@ function SearchRow({
   onUp?: () => void;
   onDown?: () => void;
   onEdit: () => void;
+  /** Run it now; absent while paused or while a search is running. */
+  onRun?: () => void;
   onToggle: () => void;
   onDelete: () => void;
 }) {
@@ -811,6 +846,13 @@ function SearchRow({
           disabled={!onDown}
         >
           <ArrowDown size={14} />
+        </IconButton>
+        <IconButton
+          label={`Run “${search.name}” now`}
+          onClick={() => onRun?.()}
+          disabled={!onRun}
+        >
+          <RefreshCw size={14} />
         </IconButton>
         <IconButton label={`Edit “${search.name}”`} onClick={onEdit}>
           <Pencil size={14} />
