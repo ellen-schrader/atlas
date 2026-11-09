@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   ScanSearch,
   Sparkles,
   Trash2,
@@ -28,6 +29,7 @@ import {
   listSearchIdeas,
   listSearches,
   listSuggestions,
+  runSearch,
   reorderSearches,
   updateSearch,
 } from "@/lib/api";
@@ -245,6 +247,19 @@ export default function Suggestions() {
     onError: () =>
       toast({ message: "Couldn’t change that search. Try again." }),
   });
+  const runNow = useMutation({
+    mutationFn: (x: SavedSearch) => runSearch(team.id, x.id),
+    onSuccess: (s) => {
+      qc.setQueryData<SavedSearch[]>(["saved-searches", team.id], (cur) =>
+        cur?.map((x) => (x.id === s.id ? { ...s, pending: x.pending } : x)),
+      );
+      setWatching({ id: s.id, until: Date.now() + FIRST_RUN_MS });
+    },
+    onError: (e) =>
+      toast({
+        message: e instanceof Error ? e.message : "Couldn’t run that search. Try again.",
+      }),
+  });
   const reorder = useMutation({
     mutationFn: (ids: string[]) => reorderSearches(team.id, ids),
     onMutate: async (ids) => {
@@ -407,6 +422,11 @@ export default function Suggestions() {
                 onUp={i > 0 ? () => move(i, -1) : undefined}
                 onDown={i < list.length - 1 ? () => move(i, 1) : undefined}
                 onEdit={() => setEditing(s)}
+                onRun={
+                  s.active && !watching && !runNow.isPending
+                    ? () => runNow.mutate(s)
+                    : undefined
+                }
                 onToggle={() => setActive.mutate(s)}
                 onDelete={() => void askDelete(s)}
               />
@@ -746,6 +766,7 @@ function SearchRow({
   onUp,
   onDown,
   onEdit,
+  onRun,
   onToggle,
   onDelete,
 }: {
@@ -754,6 +775,8 @@ function SearchRow({
   onUp?: () => void;
   onDown?: () => void;
   onEdit: () => void;
+  /** Run it now; absent while paused or while a search is running. */
+  onRun?: () => void;
   onToggle: () => void;
   onDelete: () => void;
 }) {
@@ -811,6 +834,13 @@ function SearchRow({
           disabled={!onDown}
         >
           <ArrowDown size={14} />
+        </IconButton>
+        <IconButton
+          label={`Run “${search.name}” now`}
+          onClick={() => onRun?.()}
+          disabled={!onRun}
+        >
+          <RefreshCw size={14} />
         </IconButton>
         <IconButton label={`Edit “${search.name}”`} onClick={onEdit}>
           <Pencil size={14} />

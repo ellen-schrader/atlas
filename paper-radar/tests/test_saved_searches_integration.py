@@ -286,6 +286,39 @@ def test_renaming_a_search_saved_before_cleaning_does_not_rerun_it(world, monkey
     assert asked == []  # same search once cleaned: no rerun
 
 
+def test_run_now_runs_from_the_last_run_and_only_for_the_owner(world, monkeypatch):
+    a, a_auth = world.user()
+    b, b_auth = world.user()
+    lab = world.lab(a, b)
+    windows: list[date] = []
+    monkeypatch.setattr(
+        sources, "search_pubmed", lambda query, since, *a, **k: windows.append(since) or []
+    )
+    client = TestClient(app)
+    body = {"team_id": lab, "name": "TLS", "query": "tls", "sources": ["pubmed"]}
+    sid = client.post("/saved-searches", json=body, headers=a_auth).json()["id"]
+    last = "2026-11-01T05:30:00+00:00"
+    world.admin.table("saved_searches").update(
+        {"last_run_at": last, "last_error": "arxiv: down", "failed_runs": 2}
+    ).eq("id", sid).execute()
+    windows.clear()
+
+    out = client.post(f"/saved-searches/{sid}/run", json={"team_id": lab}, headers=a_auth)
+    assert out.status_code == 200, out.text
+    # Cleared while it runs, so the page can wait for the run to finish.
+    assert out.json()["last_run_at"] is None and out.json()["last_error"] is None
+    # It ran (TestClient runs background tasks before returning), from the last run.
+    assert windows == [ss.window(last, date.today())[0]]
+    row = client.get("/saved-searches", params={"team_id": lab}, headers=a_auth).json()[0]
+    assert row["last_run_at"] and row["last_error"] is None
+
+    other = client.post(f"/saved-searches/{sid}/run", json={"team_id": lab}, headers=b_auth)
+    assert other.status_code == 404
+    client.patch(f"/saved-searches/{sid}", json={"team_id": lab, "active": False}, headers=a_auth)
+    paused = client.post(f"/saved-searches/{sid}/run", json={"team_id": lab}, headers=a_auth)
+    assert paused.status_code == 409 and "Resume" in paused.json()["detail"]
+
+
 def test_bad_query_and_limits(world, monkeypatch):
     a, a_auth = world.user()
     lab = world.lab(a)

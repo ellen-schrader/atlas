@@ -542,6 +542,14 @@ export async function updateSearch(
   });
 }
 
+/** Run the search now rather than with the daily job; it runs in the background. */
+export async function runSearch(teamId: string, id: string): Promise<SavedSearch> {
+  return authedRequest(`/saved-searches/${encodeURIComponent(id)}/run`, {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId }),
+  });
+}
+
 export async function deleteSearch(teamId: string, id: string): Promise<void> {
   return authedRequest(
     `/saved-searches/${encodeURIComponent(id)}?${new URLSearchParams({ team_id: teamId })}`,

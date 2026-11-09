@@ -914,6 +914,10 @@ class SearchOrder(BaseModel):
     ids: list[UUID] = Field(min_length=1, max_length=MAX_SEARCHES)
 
 
+class TeamIn(BaseModel):
+    team_id: UUID
+
+
 class SavedSearch(BaseModel):
     id: str
     name: str
@@ -1001,11 +1005,12 @@ def _own_search(svc, search_id: str, user_id: str, team_id: str) -> dict:
 
 
 def run_now(search: dict) -> None:
-    """Background: a new or changed search runs at once rather than next week.
-    Never raises."""
+    """Background: a new or changed search runs at once rather than next week,
+    and so does one its owner asks to run (from its last run, as the daily job
+    would). Never raises."""
     svc = service_client()
     try:
-        since, _ = window(None, date.today())
+        since, _ = window(search.get("last_run_at"), date.today())
         new, error = run_saved_search(svc, search, date.today(), rxiv_feed(svc, since))
         log.info(
             "saved search %s: %d new suggestions; errors: %s", search["id"], new, error or "none"
@@ -1084,6 +1089,36 @@ def update_search(
     )
     if rerun and row["active"]:
         background.add_task(run_now, row)
+    return _search_out(row)
+
+
+@router.post("/{search_id}/run", response_model=SavedSearch)
+def run_search(
+    search_id: UUID,
+    req: TeamIn,
+    background: BackgroundTasks,
+    token: str = Depends(require_token),
+) -> SavedSearch:
+    """Run the caller's search now rather than on the daily job. Its last run
+    and error are cleared while it runs (the page waits for them to come back);
+    it still searches from that last run, so nothing is fetched twice."""
+    team = str(req.team_id)
+    user_id = require_member(token, team)
+    svc = service_client()
+    current = _own_search(svc, str(search_id), user_id, team)
+    if not current["active"]:
+        raise HTTPException(status_code=409, detail="Resume the search to run it.")
+    with _as_http():
+        run_limiter.check(user_id)
+    row = (
+        svc.table("saved_searches")
+        .update({"last_run_at": None, "last_error": None, "failed_runs": 0})
+        .eq("id", str(search_id))
+        .eq("user_id", user_id)
+        .execute()
+        .data[0]
+    )
+    background.add_task(run_now, {**row, "last_run_at": current["last_run_at"]})
     return _search_out(row)
 
 
