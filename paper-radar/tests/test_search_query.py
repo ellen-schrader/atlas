@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from paper_radar.search.query import Doc, QueryError, matches, parse, to_arxiv, without_filters
+from paper_radar.search.query import (
+    Doc,
+    QueryError,
+    clean,
+    matches,
+    parse,
+    to_arxiv,
+    without_filters,
+)
 
 
 def _arxiv(query: str) -> str | None:
@@ -105,3 +113,40 @@ def test_not_and_or():
     q = "(B cell OR T cell) NOT mouse"
     assert _hits(q, "T cell exhaustion in human tumours")
     assert not _hits(q, "T cell exhaustion in mouse tumours")
+
+
+def test_clean_turns_pasted_characters_into_plain_text():
+    # A PDF left U+0002 where the hyphen was: arXiv answered 500 to it.
+    assert clean('("R\x02loop"[TitleAbstract])') == '("R-loop"[title/abstract])'
+    assert clean("R\x02loop[tiab] OR x\x02 y") == "R-loop[tiab] OR x y"  # one term, not two
+    assert clean("\u201cdeep\u00a0learning\u201d[tiab]\u200b") == '"deep learning"[tiab]'
+    assert clean("deep\u200blearning") == "deep learning"  # a zero-width space still parts words
+    assert (
+        clean("RNA\u2013DNA  hybrid\u00adization \ufb01brosis") == "RNA-DNA hybridization fibrosis"
+    )
+    assert clean("tumour\t\nimmunity  ") == "tumour immunity"
+
+
+def test_clean_respells_tags_pubmed_would_misread():
+    # PubMed reads [TitleAbstract] as [All Fields] without saying so.
+    assert clean("x[Title Abstract] y[Publication-Type]") == "x[title/abstract] y[publication type]"
+    # Tags PubMed knows, and ones nobody knows, stay as typed.
+    assert clean("x[Title/Abstract] y[TIAB] z[mh] w[nonsense]") == (
+        "x[Title/Abstract] y[TIAB] z[mh] w[nonsense]"
+    )
+    # Brackets inside a phrase are words, and a stray "[" does not swallow the tag.
+    assert clean('"a [TitleAbstract] b" c') == '"a [TitleAbstract] b" c'
+    assert clean("a [b x[TitleAbstract]") == "a [b x[title/abstract]"
+
+
+def test_pasted_queries_parse_as_meant():
+    assert _arxiv(clean('"R\x02loop"[TitleAbstract] OR \u201cRNA\u2011DNA hybrid\u201d')) == (
+        '((ti:"r-loop" OR abs:"r-loop") OR all:"rna-dna hybrid")'
+    )
+    assert _arxiv(clean("cancer AND review[Publication Type]")) == "all:cancer"
+
+
+def test_a_hyphen_matches_any_dash_or_space():
+    for title in ("R-loops in cancer", "R\u2010loops in cancer", "R loops in cancer"):
+        assert _hits('"r-loop"[tiab]', title)
+    assert _hits("RNA-DNA", "RNA\u2013DNA hybrids") and not _hits("r-loop", "Rloops")

@@ -81,6 +81,19 @@ def test_a_filter_only_query_runs_on_pubmed_alone(monkeypatch):
     assert [h.doi for h in found["pubmed"]] == ["p"]
 
 
+def test_every_source_gets_the_cleaned_query(monkeypatch):
+    # Searches saved before query.clean existed still hold what was pasted.
+    seen: list[str] = []
+    monkeypatch.setattr(sources, "search_pubmed", lambda query, *a, **k: seen.append(query) or [])
+    monkeypatch.setattr(sources, "search_arxiv", lambda query, *a, **k: seen.append(query) or [])
+    ss.run_query('"R\x02loop"[TitleAbstract]', ["pubmed", "arxiv"], TODAY, TODAY, feed=None)
+    assert seen == ['"R-loop"[title/abstract]', '(ti:"r-loop" OR abs:"r-loop")']
+
+
+def test_saved_queries_are_cleaned():
+    assert ss.checked_query(" \u201cR\x02loop\u201d[TitleAbstract] ") == '"R-loop"[title/abstract]'
+
+
 def test_bad_query_raises():
     with pytest.raises(q.QueryError):
         ss.run_query("(tls", ["pubmed"], TODAY, TODAY, feed=None)
