@@ -18,11 +18,16 @@ MeSH and other text tags search everything (preprints have no MeSH terms).
 PubMed's filters -- publication type, language, date, journal, subset -- have
 no counterpart on a preprint, so those clauses are left out there rather than
 read as words ("NOT review[pt]" must not drop preprints that say "review").
+
+Queries are pasted from emails, PDFs and Word, so :func:`clean` first turns what
+those bring along (curly quotes, odd dashes and spaces, invisible control
+characters) into plain text, and spells field tags the way PubMed knows them.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
@@ -70,6 +75,65 @@ _FILTER_TAGS = {
     "majr:noexp",
     "ptyp",
 }
+
+
+def _tag_key(tag: str) -> str:
+    """A tag with case, spaces and punctuation ignored: "Title/Abstract",
+    "TitleAbstract" and "title abstract" are one tag."""
+    return re.sub(r"[^a-z0-9:]", "", tag.lower())
+
+
+# Tag key → the tag as PubMed spells it. PubMed reads a tag it does not know,
+# such as [TitleAbstract], as [All Fields] without saying so (checked 2026-11-09).
+_PUBMED_TAGS = {_tag_key(t): t for t in (*_FIELD_TAGS, *_FILTER_TAGS)}
+
+_PUBMED_SPELLINGS = frozenset(_PUBMED_TAGS.values())
+
+_PUNCT = str.maketrans(
+    {
+        **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212", "-"),  # dashes, minus
+        **dict.fromkeys("\u201c\u201d\u201e\u201f\u00ab\u00bb", '"'),  # curly and angle quotes
+        **dict.fromkeys("\u2018\u2019\u201a\u201b", "'"),
+        **dict.fromkeys("\u200b\u2060\ufeff", " "),  # zero-width spaces still part words
+    }
+)
+
+# A control character that is not whitespace, between two letters: a PDF's
+# hyphen, as in "R\x02loop". Elsewhere a control character is a space.
+_IN_WORD_CONTROL = re.compile(r"(?<=\w)[\x00-\x08\x0e-\x1b\x7f-\x84\x86-\x9f](?=\w)")
+
+# Phrases are left alone; a tag is what sits in brackets outside them.
+_PHRASE_OR_TAG = re.compile(r'"[^"]*"|\[([^\[\]"]*)\]')
+
+
+def _pubmed_tag(m: re.Match[str]) -> str:
+    tag = m.group(1)
+    if tag is None or " ".join(tag.lower().split()) in _PUBMED_SPELLINGS:
+        return m.group(0)
+    known = _PUBMED_TAGS.get(_tag_key(tag))
+    return f"[{known}]" if known else m.group(0)
+
+
+def clean(query: str) -> str:
+    """The query as plain text, for every source including PubMed: compatibility
+    forms folded (NFKC: ligatures, full-width letters, no-break spaces), curly
+    quotes and dashes made straight, control characters made hyphens inside a
+    word and spaces elsewhere, odd spaces made spaces, other invisible characters
+    (soft hyphen, joiners, private use) dropped, runs of spaces made one, and
+    field tags respelled as PubMed knows them. A PDF left U+0002 for a hyphen in
+    one lab's query; sent on as it was, arXiv answered 500 and the preprints
+    never matched. Callers clean once at the edge (saving, running) and
+    :func:`parse` the result."""
+    text = unicodedata.normalize("NFKC", query).translate(_PUNCT)
+    text = _IN_WORD_CONTROL.sub("-", text)
+    chars = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cc" or cat[0] == "Z":
+            chars.append(" ")
+        elif cat[0] != "C":
+            chars.append(ch)
+    return _PHRASE_OR_TAG.sub(_pubmed_tag, " ".join("".join(chars).split()))
 
 
 class QueryError(ValueError):
@@ -255,7 +319,9 @@ def to_arxiv(node: Node) -> str:
 
 @lru_cache(maxsize=4096)
 def _pattern(t: Term) -> re.Pattern[str]:
-    words = [re.escape(w) for w in t.text.split()]
+    # A hyphen in the query matches any dash or space in the text, as the
+    # space between phrase words does: "r-loop" finds "R\u2010loops" and "R loop".
+    words = [re.escape(p) for w in t.text.split() for p in w.split("-") if p]
     body = r"\W+".join(words)
     # PubMed matches plurals of a plain word; a light s/es keeps "structure"
     # finding "structures" without a stemmer.

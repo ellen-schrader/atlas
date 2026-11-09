@@ -158,7 +158,9 @@ def run_query(
 
     A source failing does not stop the others. ``feed`` is the bioRxiv/medRxiv
     copy (:func:`rxiv_feed`); None skips those servers. ``arxiv_categories``
-    keeps arXiv to those subjects (:func:`arxiv_query`)."""
+    keeps arXiv to those subjects (:func:`arxiv_query`). Searches saved before
+    :func:`query.clean` existed are cleaned here, PubMed's copy too."""
+    query = q.clean(query)
     node = q.without_filters(q.parse(query))
     found: dict[str, list[Hit]] = {}
     errors: dict[str, str] = {}
@@ -671,9 +673,10 @@ def _as_http():
 
 
 def checked_query(query: str) -> str:
-    """The query, stripped, or Refused saying what is wrong with it in words (a
-    pydantic validator would answer with a list the web app cannot show)."""
-    query = query.strip()
+    """The query, cleaned (:func:`query.clean`), or Refused saying what is wrong
+    with it in words (a pydantic validator would answer with a list the web app
+    cannot show)."""
+    query = q.clean(query)
     if not query:
         raise Refused("The query is empty.")
     if len(query) > 2000:
@@ -1061,8 +1064,10 @@ def update_search(
     if req.active is not None:
         changes["active"] = req.active
     # A changed query, source list or arXiv subjects starts again from a week back.
+    # Compared cleaned, so renaming a search saved before query.clean is no rerun.
+    before = {**current, "query": q.clean(current["query"])}
     rerun = any(
-        changes.get(k, current[k]) != current[k] for k in ("query", "sources", "arxiv_categories")
+        changes.get(k, before[k]) != before[k] for k in ("query", "sources", "arxiv_categories")
     )
     if rerun:
         with _as_http():

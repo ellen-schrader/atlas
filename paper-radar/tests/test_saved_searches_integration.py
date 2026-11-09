@@ -263,6 +263,29 @@ def test_searches_are_owned(world, monkeypatch):
     )
 
 
+def test_renaming_a_search_saved_before_cleaning_does_not_rerun_it(world, monkeypatch):
+    a, a_auth = world.user()
+    lab = world.lab(a)
+    asked: list[str] = []
+    monkeypatch.setattr(sources, "search_pubmed", lambda query, *a, **k: asked.append(query) or [])
+    raw = '"R\x02loop"[TitleAbstract]'  # as pasted, before query.clean existed
+    row = (
+        world.admin.table("saved_searches")
+        .insert({"user_id": a, "team_id": lab, "name": "R", "query": raw, "sources": ["pubmed"]})
+        .execute()
+        .data[0]
+    )
+    client = TestClient(app)
+    out = client.patch(
+        f"/saved-searches/{row['id']}",
+        json={"team_id": lab, "name": "R-loops", "query": raw},  # the dialog sends both
+        headers=a_auth,
+    )
+    assert out.status_code == 200, out.text
+    assert out.json()["query"] == '"R-loop"[title/abstract]'
+    assert asked == []  # same search once cleaned: no rerun
+
+
 def test_bad_query_and_limits(world, monkeypatch):
     a, a_auth = world.user()
     lab = world.lab(a)
