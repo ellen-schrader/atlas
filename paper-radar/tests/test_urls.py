@@ -87,7 +87,9 @@ def test_doi_inside_a_url_path_is_not_pulled_out_separately():
     # The full publisher URL is the single candidate; its embedded DOI isn't
     # emitted as a second doi.org link.
     text = '<a href="https://link.springer.com/article/10.1007/s00018-024-05">t</a>'
-    assert extract_urls_from_text(text) == ["https://link.springer.com/article/10.1007/s00018-024-05"]
+    assert extract_urls_from_text(text) == [
+        "https://link.springer.com/article/10.1007/s00018-024-05"
+    ]
 
 
 def test_version_like_number_is_not_a_doi():

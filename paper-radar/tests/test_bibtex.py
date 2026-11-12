@@ -102,7 +102,7 @@ def test_brace_protected_person_parts_are_still_reordered():
 
 def test_month_macro_and_numeric_month_both_resolve():
     a, b = parse_bibtex(ZOTERO).entries[0], parse_bibtex(ZOTERO).entries[1]
-    assert a.published_at == date(2025, 3, 1)   # `month = mar` (a bare macro, not a string)
+    assert a.published_at == date(2025, 3, 1)  # `month = mar` (a bare macro, not a string)
     assert b.published_at == date(2024, 11, 3)  # numeric month + day
 
 

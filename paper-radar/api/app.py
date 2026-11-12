@@ -38,6 +38,7 @@ from . import (
     enrichment,
     integrations,
     merge_suggestions,
+    projects,
     saved_searches,
     taste,
     teams_integration,
@@ -117,6 +118,7 @@ if _mcp is not None:
 app.include_router(integrations.router)
 app.include_router(trials.router)
 app.include_router(saved_searches.router)
+app.include_router(projects.router)
 
 
 # --- schemas ---------------------------------------------------------------

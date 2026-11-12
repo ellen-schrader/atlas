@@ -70,23 +70,43 @@ cards, a "New suggestions" list across all your projects with + / ✕. No librar
 Claude-named sub-themes, tag growth, who's publishing, KPI tiles, outside-library
 search, Follow, the lab focus chips, the t-SNE library map.
 
-## Data model (one migration)
+## Data model (one migration, `20261103120000_projects.sql`)
 
 - `projects`: id, team_id, owner_id, name, description, description_embedding
-  (nullable), visibility (`private` | `lab` | `people`), created_at, updated_at.
+  (nullable), visibility (`private` | `lab` | `people`), suggest_level (`fewer` |
+  `balanced` | `more`), created_at, updated_at.
 - `project_people`: project_id, user_id. Used only when visibility = `people`.
 - `project_papers`: project_id, paper_id, state (`in` | `dismissed`), added_by,
   added_at. Primary key (project_id, paper_id).
-- `project_views`: project_id, user_id, last_viewed_at. Drives "N new suggested".
-- RLS: read if owner, or `lab` and same team, or listed in `project_people`.
-  Paper writes for anyone who can read; settings for the owner only.
-- RPC `project_closeness(p_project, p_limit)`: for each library paper, its
-  highest cosine similarity to any project paper (and which one), plus the same
-  leave-one-out value for project papers. Falls back to the description embedding
-  while the project has fewer than 3 papers. Nearest-paper rather than centroid,
-  so projects with two strands don't get suggestions from the empty middle.
-- Existing `maps` rows migrate: seed → description, pins → `in`, excludes →
-  `dismissed`, visibility kept. `/maps/:id` redirects to `/projects/:id`.
+- `project_views`: project_id, user_id, last_viewed_at. Drives "N new suggested";
+  written by `mark_project_viewed(p)`.
+- `project_follows`: project_id, kind (`tag` | `lab`), value.
+- RLS, all behind the `projects` feature: read if owner, or `lab` and same team,
+  or listed in `project_people`. Papers and follows writable by anyone who can
+  read (only the lab's own papers); settings and the people list by the owner;
+  a lab owner may delete a shared project whose owner deleted their account.
+- RPC `project_closeness(p_project)`: every library paper with its highest
+  cosine similarity to any project paper (and which one), the leave-one-out value
+  for project papers, whether it is in the related pool (the 120 closest), and
+  whether it is suggested (`close`, or `tag`/`lab` with `via` for a followed one),
+  and its tags and lab (last author), so the web app never re-derives them.
+  Falls back to the description embedding while the project has fewer than 3
+  papers. Nearest-paper rather than centroid, so projects with two strands don't
+  get suggestions from the empty middle.
+- The line adapts to the project: with 3+ papers it is a percentile of the
+  project's own leave-one-out similarities (Fewer: median, Balanced: 25th, More:
+  10th); before that, a rank (the 10th / 20th / 40th closest paper), because a
+  description and a paper sit at different similarities to the same papers.
+- Adding or removing papers and follows bumps the project's `updated_at`.
+- Existing `maps` rows migrate with the same id: seed → description (and its
+  embedding), pins → `in`, excludes → `dismissed`, visibility and owner kept.
+- `merge_papers` keeps a merged paper in its projects. Leaving a lab (or
+  deleting an account) removes the person's private projects and those shared
+  with nobody else; shared ones stay without an owner, and the lab's owners can
+  see and delete them.
+- `trending_labs` now uses the same `last_person_author` as project lab follows.
+- API: only `POST /projects` and `PATCH /projects/{id}`, which embed the
+  description. Everything else goes straight to Supabase under RLS, as trials do.
 
 ## Cost
 
@@ -107,6 +127,7 @@ Claude calls the maps pages make today.
    `figures` bucket) stay, so step 1 can migrate maps and nothing is lost.
 1. Data model, RLS, RPC, API, maps → projects migration, behind a `projects`
    feature (public.my_features), on for one person first. Replaces #181 PR 2.
+   Merges dark; the switch for one person is a line of SQL run by hand.
 2. Project page and index (closeness chart, tabs, tags and labs, sharing dialog).
 3. Reading list chips and the "Add to project" picker (#181 PR 3).
 4. Open it to the lab; later, drop the unused `trends` table and the figure tables
