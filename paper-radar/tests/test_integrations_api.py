@@ -652,3 +652,17 @@ def test_inbound_webhook_rejects_oversized_body(monkeypatch):
         "/integrations/teams/inbound/t1", content=huge, headers={"Authorization": "HMAC x"}
     )
     assert resp.status_code == 413
+
+
+def test_importing_the_app_leaves_logging_alone():
+    # The local MCP server imports helpers from api.app; that import must not
+    # reconfigure its logging (issue #98). The server sets it up at startup.
+    import subprocess
+    import sys
+
+    code = (
+        "import logging, api.app; "
+        "assert not logging.getLogger().handlers, 'root handler added'; "
+        "assert logging.getLogger('httpx').level == logging.NOTSET, 'httpx level changed'"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

@@ -429,6 +429,11 @@ def _display_name(user_id: str | None) -> str | None:
         return None
 
 
+def _atlas_base() -> str | None:
+    """The Atlas web app's base URL without a trailing slash, or None if unconfigured."""
+    return get_api_settings().atlas_web_url.strip().rstrip("/") or None
+
+
 def _atlas_paper_url(paper_id: str | None) -> str | None:
     """Deep link to the paper in the Atlas web app, or None if unconfigured.
 
@@ -437,10 +442,8 @@ def _atlas_paper_url(paper_id: str | None) -> str | None:
     """
     if not paper_id:
         return None
-    base = get_api_settings().atlas_web_url.strip()
-    if not base:
-        return None
-    return f"{base.rstrip('/')}/?paper={paper_id}"
+    base = _atlas_base()
+    return f"{base}/?paper={paper_id}" if base else None
 
 
 def notify_paper_posted(
@@ -657,6 +660,19 @@ def _doi_from_url(url: str) -> str | None:
     return norm_doi(unquote(parts.path))
 
 
+# The reply shows _authors_line, so it needs only the first few names plus one
+# more to know whether to add "et al." — a consortium paper stores hundreds.
+# `->` (not `->>`) keeps each element's JSON type, so a stray non-string entry
+# is dropped by already_reply_text instead of showing up as raw JSON.
+_PLAN_AUTHORS = _MAX_AUTHORS + 1
+_PLAN_COLUMNS = "id, title, " + ", ".join(f"a{i}:authors->{i}" for i in range(_PLAN_AUTHORS))
+
+
+def _plan_authors(row: dict) -> list:
+    """The leading authors a _PLAN_COLUMNS row carries, in order."""
+    return [a for i in range(_PLAN_AUTHORS) if (a := row.get(f"a{i}")) is not None]
+
+
 def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
     """Decide the reply without a metadata fetch: is there a link, and is it new?
 
@@ -676,13 +692,7 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
 
     def _paper_by(column: str, value: str) -> dict | None:
         rows = _retry_stale_connection(
-            lambda: (
-                svc.table("papers")
-                .select("id, title, authors")
-                .eq(column, value)
-                .limit(1)
-                .execute()
-            )
+            lambda: svc.table("papers").select(_PLAN_COLUMNS).eq(column, value).limit(1).execute()
         ).data
         return rows[0] if rows else None
 
@@ -724,7 +734,7 @@ def plan_inbound_import(team_id: str, text: str) -> InboundPlan:
                 url=url,
                 paper_id=paper["id"],
                 title=paper.get("title"),
-                authors=paper.get("authors"),
+                authors=_plan_authors(paper),
             )
     return InboundPlan("new", url=url)
 
@@ -841,8 +851,8 @@ def import_paper_background(team_id: str, url: str, sender_name: str | None) -> 
 
 def _atlas_papers_url() -> str | None:
     """Link to the lab's papers feed in the web app, or None if unconfigured."""
-    base = get_api_settings().atlas_web_url.strip()
-    return f"{base.rstrip('/')}/papers" if base else None
+    base = _atlas_base()
+    return f"{base}/papers" if base else None
 
 
 # Paper titles can be a full sentence; keep the one-line reply scannable.
@@ -858,9 +868,8 @@ def already_reply_text(plan: InboundPlan) -> str:
     paper-sourced text, so it is markdown-escaped like the outbound cards.
     """
     authors = [a for a in (plan.authors or []) if isinstance(a, str) and a.strip()]
-    who = None
-    if authors:
-        who = _md_escape(authors[0]) + (" et al." if len(authors) > 1 else "")
+    line = _authors_line(authors)  # the same names the outbound card shows
+    who = _md_escape(line) if line else None
     what = f"“{_md_escape(_truncate(plan.title, _REPLY_TITLE_CHARS))}”" if plan.title else None
     subject = " — ".join(p for p in (who, what) if p) or "That paper"
     link = _atlas_paper_url(plan.paper_id)

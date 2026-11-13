@@ -58,16 +58,23 @@ from .paper_identity import (
 from .ratelimit import PerUserRateLimiter
 from .supa import get_user_id, service_client, user_client
 
-# Uvicorn configures only its own loggers, so without a root handler the app's
-# INFO-level diagnostics (inbound webhook traces, import skips) never reach the
-# container logs — Python's last-resort handler emits WARNING and above only.
-# basicConfig is a no-op when a root handler already exists (e.g. under pytest).
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
-# One line per Supabase round-trip is noise, not signal, at INFO.
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-
 log = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Logging for the API server process, run at startup rather than on import:
+    the local MCP server imports helpers from this module, and importing them
+    must not rewrite that process's logging (issue #98).
+
+    Uvicorn configures only its own loggers, so without a root handler the app's
+    INFO-level diagnostics (inbound webhook traces, import skips) never reach the
+    container logs — Python's last-resort handler emits WARNING and above only.
+    basicConfig is a no-op when a root handler already exists (e.g. under pytest).
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+    # One line per Supabase round-trip is noise, not signal, at INFO.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _connector():
@@ -86,6 +93,8 @@ _mcp = _connector()
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    # First: the connector's FastMCP calls basicConfig too, and the first one wins.
+    _configure_logging()
     if _mcp is None:
         yield
         return
