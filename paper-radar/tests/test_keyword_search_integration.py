@@ -72,6 +72,15 @@ def _found(world, q: str) -> bool:
     return world["paper"] in ids
 
 
+def test_the_stopwords_have_longer_listed_words(world):
+    # The precondition for the bug: without the VarCon load (a local stack built
+    # from another branch), "the" brings no alternatives and the tests below
+    # would pass with or without the fix.
+    for word, alt in (("the", "theatre"), ("for", "formalise")):
+        alts = world["admin"].rpc("spelling_matches", {"p_word": word}).execute().data
+        assert alt in {a["alt"] for a in alts}
+
+
 @pytest.mark.parametrize(
     "q",
     [
@@ -82,6 +91,12 @@ def _found(world, q: str) -> bool:
     ],
 )
 def test_stopwords_do_not_hide_the_paper(world, q):
+    assert _found(world, q)
+
+
+@pytest.mark.parametrize("q", ["the", "for", "of the"])
+def test_a_query_of_only_stopwords_filters_nothing(world, q):
+    # Typing "for" on the way to "formalin" shows the lab's papers, not "No papers".
     assert _found(world, q)
 
 
