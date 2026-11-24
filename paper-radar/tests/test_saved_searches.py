@@ -6,12 +6,13 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from postgrest.exceptions import APIError
 
 from api import saved_searches as ss
 from api import saved_searches_run as run
 from paper_radar.search import query as q
 from paper_radar.search import sources
-from paper_radar.search.sources import Hit, SourceError
+from paper_radar.search.sources import Hit, RxivPaper, SourceError
 
 TODAY = date(2026, 10, 24)
 
@@ -291,7 +292,9 @@ def test_import_keeps_the_source_doi_and_abstract_when_the_lookup_lacks_them(mon
 def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
     copied: list[date] = []
     monkeypatch.setattr(run, "service_client", lambda: None)
-    monkeypatch.setattr(run, "refresh_feed", lambda svc, today, dry_run: copied.append(today) or 0)
+    monkeypatch.setattr(
+        run, "refresh_feed", lambda svc, today, dry_run: copied.append(today) or (0, 0)
+    )
     monkeypatch.setattr(ss, "retry_stuck_imports", lambda svc, now: 0)
     monkeypatch.setattr(run, "due_searches", lambda svc, now: [])
     embedded: list[float] = []
@@ -300,6 +303,65 @@ def test_the_feed_is_copied_daily_even_when_no_search_is_due(monkeypatch):
     assert len(copied) == 1
     # Yesterday's leftovers are embedded on a day with nothing due, too.
     assert embedded == [run.EMBED_BUDGET]
+
+
+class _FeedTable:
+    """Just enough of svc.table("rxiv_feed") for refresh_feed."""
+
+    def __init__(self, fail_on: set[str]):
+        self.fail_on, self.saved = fail_on, []
+
+    def select(self, *a):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a):
+        return self
+
+    def delete(self):
+        return self
+
+    def lt(self, *a):
+        return self
+
+    def upsert(self, rows, on_conflict):
+        self.pending = rows
+        return self
+
+    def execute(self):
+        rows, self.pending = getattr(self, "pending", None), None
+        if rows is not None:
+            if {r["doi"] for r in rows} & self.fail_on:
+                raise APIError({"message": "ON CONFLICT DO UPDATE ...", "code": "21000"})
+            self.saved += rows
+        return type("R", (), {"data": []})()
+
+
+def test_a_page_that_fails_to_save_is_skipped_and_reported(monkeypatch):
+    def paper(doi, posted_on="2026-11-15"):
+        return RxivPaper(doi, "biorxiv", "t", None, [], None, posted_on)
+
+    pages = {"biorxiv": [[paper("10.1/a")], [paper("10.1/bad")]], "medrxiv": [[paper("10.1/m")]]}
+    monkeypatch.setattr(sources, "rxiv_posted", lambda server, since, until: pages[server])
+    table = _FeedTable(fail_on={"10.1/bad"})
+    svc = type("Svc", (), {"table": lambda self, name: table})()
+    assert run.refresh_feed(svc, date(2026, 11, 24), dry_run=False) == (2, 1)
+    # The page after the bad one, and medRxiv, still saved.
+    assert [r["doi"] for r in table.saved] == ["10.1/a", "10.1/m"]
+
+
+def test_the_searches_run_before_a_feed_failure_turns_the_run_red(monkeypatch):
+    monkeypatch.setattr(run, "service_client", lambda: None)
+    monkeypatch.setattr(run, "refresh_feed", lambda svc, today, dry_run: (5, 1))
+    monkeypatch.setattr(ss, "retry_stuck_imports", lambda svc, now: 0)
+    ran: list[bool] = []
+    monkeypatch.setattr(run, "_run_due", lambda svc, now, dry_run: ran.append(True) or (1, 0, 0))
+    monkeypatch.setattr(ss, "embed_candidates", lambda svc, budget: 0)
+    with pytest.raises(run.FeedWriteError, match="1 pages"):
+        run.run()
+    assert ran == [True]
 
 
 def test_sources_are_checked_and_named_by_key():

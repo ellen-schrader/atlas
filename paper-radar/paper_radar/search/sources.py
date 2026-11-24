@@ -288,16 +288,30 @@ def parse_rxiv_page(payload: bytes) -> tuple[list[RxivPaper], int, int]:
         raise SourceError("bioRxiv sent a malformed reply.") from exc
     total = int(status.get("total") or 0)
     papers = []
+    seen: set[str] = set()
     for r in rows:
         # A revision is not new; its first version was offered when it was posted.
-        if str(r.get("version")) != "1" or not r.get("doi") or not r.get("title"):
+        # Undated rows can't be placed in the feed; skipping them here also
+        # keeps an undated copy of a DOI from hiding a dated one below.
+        if (
+            str(r.get("version")) != "1"
+            or not r.get("doi")
+            or not r.get("title")
+            or not r.get("date")
+        ):
             continue
         server = str(r.get("server") or "").lower()
         if server not in ("biorxiv", "medrxiv"):
             continue
+        # bioRxiv sometimes lists a first version twice on one page (it did on
+        # 15 Nov 2026), and one upsert can't write the same DOI twice.
+        doi = norm_doi(r["doi"]) or r["doi"]
+        if doi in seen:
+            continue
+        seen.add(doi)
         papers.append(
             RxivPaper(
-                doi=norm_doi(r["doi"]) or r["doi"],
+                doi=doi,
                 server=server,
                 title=" ".join(str(r["title"]).split()),
                 abstract=" ".join(str(r.get("abstract") or "").split()) or None,

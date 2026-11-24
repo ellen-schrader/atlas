@@ -28,6 +28,9 @@ import logging
 import time
 from datetime import UTC, date, datetime, timedelta
 
+import httpx
+from postgrest.exceptions import APIError
+
 from paper_radar.search import sources
 from paper_radar.search.sources import SourceError
 
@@ -90,8 +93,17 @@ def due_searches(svc, now: datetime) -> list[dict]:
     return [r for r in rows if (r["team_id"], r["user_id"]) in still_in]
 
 
-def refresh_feed(svc, today: date, *, dry_run: bool) -> int:
-    """Copy new bioRxiv/medRxiv first versions into rxiv_feed. Returns how many."""
+class FeedWriteError(RuntimeError):
+    """Pages of preprints failed to save to rxiv_feed (raised after the searches ran)."""
+
+
+def refresh_feed(svc, today: date, *, dry_run: bool) -> tuple[int, int]:
+    """Copy new bioRxiv/medRxiv first versions into rxiv_feed.
+
+    Returns (preprints written, pages that failed to save). A page that fails
+    to save is logged and skipped, not raised: one bad page stopped every
+    saved search from 16 to 23 Nov 2026 (a DOI bioRxiv listed twice).
+    """
     latest = (
         svc.table("rxiv_feed").select("posted_on").order("posted_on", desc=True).limit(1).execute()
     ).data
@@ -99,50 +111,63 @@ def refresh_feed(svc, today: date, *, dry_run: bool) -> int:
     if latest:
         # Two days back: bioRxiv posts a day's papers over the following day.
         since = max(since, date.fromisoformat(latest[0]["posted_on"]) - timedelta(days=2))
-    copied = 0
+    written = failed = 0
     for server in ("biorxiv", "medrxiv"):
         try:
             for page in sources.rxiv_posted(server, since, today):
-                if page and not dry_run:
-                    svc.table("rxiv_feed").upsert(
-                        [
-                            {
-                                "doi": p.doi,
-                                "server": p.server,
-                                "title": p.title,
-                                "abstract": p.abstract,
-                                "authors": p.authors[:100],
-                                "category": p.category,
-                                "posted_on": p.posted_on,
-                            }
-                            for p in page
-                            if p.posted_on
-                        ],
-                        on_conflict="doi",
-                    ).execute()
-                copied += len(page)
+                rows = [
+                    {
+                        "doi": p.doi,
+                        "server": p.server,
+                        "title": p.title,
+                        "abstract": p.abstract,
+                        "authors": p.authors[:100],
+                        "category": p.category,
+                        "posted_on": p.posted_on,
+                    }
+                    for p in page
+                    if p.posted_on
+                ]
+                if not rows:
+                    continue
+                if not dry_run:
+                    try:
+                        svc.table("rxiv_feed").upsert(rows, on_conflict="doi").execute()
+                    except (APIError, httpx.HTTPError) as exc:
+                        failed += 1
+                        log.error("saving a page of %s to rxiv_feed failed: %s", server, exc)
+                        continue
+                written += len(rows)
         except SourceError as exc:
             # Searches still run on what was copied before; tomorrow catches up.
             log.warning("copying %s failed: %s", server, exc)
     if not dry_run:
         old = (today - timedelta(days=FEED_KEEP_DAYS)).isoformat()
         svc.table("rxiv_feed").delete().lt("posted_on", old).execute()
-    return copied
+    return written, failed
 
 
 def run(*, dry_run: bool = False) -> tuple[int, int, int]:
-    """(searches run, new suggestions, searches with an error)."""
+    """(searches run, new suggestions, searches with an error).
+
+    Raises FeedWriteError at the end, after the searches have run, if pages of
+    the preprint feed failed to save: that is a bug of ours, not a source being
+    down, so the workflow should go red.
+    """
     svc = service_client()
     now = datetime.now(UTC)
     # Every day, not only when a search is due: a search saved today, and the
     # preview, match against this copy.
-    copied = refresh_feed(svc, now.date(), dry_run=dry_run)
-    print(f"bioRxiv/medRxiv: {copied} new preprints copied")
+    written, feed_failed = refresh_feed(svc, now.date(), dry_run=dry_run)
+    # Includes preprints already in the feed: each run re-reads two days.
+    print(f"bioRxiv/medRxiv: {written} preprints written to the feed")
     if not dry_run and (retried := ss.retry_stuck_imports(svc, now)):
         print(f"  {retried} interrupted imports retried")
     ran, new, failed = _run_due(svc, now, dry_run=dry_run)
     if not dry_run:
         print(f"  {ss.embed_candidates(svc, EMBED_BUDGET)} suggested papers embedded")
+    if feed_failed:
+        raise FeedWriteError(f"{feed_failed} pages of preprints failed to save to rxiv_feed")
     return ran, new, failed
 
 
