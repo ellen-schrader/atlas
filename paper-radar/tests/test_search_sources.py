@@ -122,6 +122,39 @@ def test_rxiv_page_keeps_first_versions_only():
     assert p.authors == ["Chapman, K. B.", "Hell, S. W."] and p.posted_on == "2026-10-16"
 
 
+def test_rxiv_page_lists_a_doi_once():
+    # bioRxiv listed 10.64898/2026.11.10.765400 twice on one page; the copy into
+    # rxiv_feed is one upsert per page, which fails on a repeated DOI.
+    row = {
+        "doi": "10.64898/2026.11.10.765400",
+        "title": "Monkfish",
+        "version": "1",
+        "server": "bioRxiv",
+        "date": "2026-11-15",
+    }
+    page = json.dumps(
+        {
+            "messages": [{"status": "ok", "total": "2", "count": 2}],
+            "collection": [row, {**row, "doi": row["doi"].upper()}],
+        }
+    ).encode()
+    papers, count, total = sources.parse_rxiv_page(page)
+    assert (count, total) == (2, 2)  # paging still counts every record
+    assert [p.doi for p in papers] == ["10.64898/2026.11.10.765400"]
+
+
+def test_rxiv_page_an_undated_copy_does_not_hide_a_dated_one():
+    row = {"doi": "10.1101/z", "title": "t", "version": "1", "server": "bioRxiv"}
+    page = json.dumps(
+        {
+            "messages": [{"status": "ok", "total": "2", "count": 2}],
+            "collection": [{**row, "date": ""}, {**row, "date": "2026-11-15"}],
+        }
+    ).encode()
+    papers, _, _ = sources.parse_rxiv_page(page)
+    assert [(p.doi, p.posted_on) for p in papers] == [("10.1101/z", "2026-11-15")]
+
+
 def test_rxiv_pages_until_the_total(monkeypatch):
     seen: list[str] = []
 
